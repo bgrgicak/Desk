@@ -57,7 +57,7 @@ interface TodayPanelProps {
 }
 
 export function TodayPanel({ onClose, onSelectItem, selectedItemId }: TodayPanelProps) {
-  const { data: awaiting } = useGetMessagesQuery({ awaitingUser: true })
+  const { data: awaiting } = useGetMessagesQuery({ unread: true })
   const { data: agents } = useGetAgentsQuery()
   const inbox: InboxItem[] = (awaiting?.items ?? []).map((m) =>
     toInboxItem(m, agents ?? []),

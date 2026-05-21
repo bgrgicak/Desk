@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
 import {
-  CornerDownLeft, Paperclip, X,
+  ArrowRight, Paperclip, X,
 } from 'lucide-react'
+import { cn } from '@agent-desk/ui'
 import { type GoalKey as SharedGoalKey } from '@agent-desk/shared'
 import {
   ComposerPickers,
@@ -9,41 +10,53 @@ import {
   type ComposerPickersHandle,
 } from './ComposerPickers'
 import { attachmentChipIcon, type ComposerAttachment } from './composer-pickers-utils'
+import type { SchedulePickerValue } from '@/components/tasks/SchedulePicker'
 import { replaceTextareaRangePreservingUndo } from './textareaUndo'
 
 type GoalKey = SharedGoalKey | null
 
 /**
- * Map a picker selection to the kind/title/executeAt fields the
- * `postChatMessage` mutation accepts. Only `task` and `scheduled` need
- * server-side wiring today — the content-output goals (app, doc, …)
- * still flow as ordinary chat messages.
+ * Derive the `kind`/`title`/`executeAt`/`cron`/`goal` fields the
+ * `postChatMessage` mutation accepts from the composer's two pieces of
+ * state:
+ *
+ *   - `goalOverride` — what the Tools popover currently shows
+ *   - `scheduleOverride` — schedule picked in the Schedule popover
+ *
+ * Schedule wins: any picked schedule implicitly flips the message into a
+ * scheduled task regardless of what Tools shows. When no Schedule is set
+ * but Tools = `task`, we still send `kind: 'task'` so it lands on the
+ * tasks board. Plain goals (`app`, `document`, …) flow as ordinary chat
+ * messages with the goal recorded server-side.
  */
-function optionsForGoal(goal: GoalKey, message: string): SendOptions | undefined {
-  if (goal !== 'task' && goal !== 'scheduled') return undefined
-  const firstLine = message.split('\n')[0].trim()
-  const title = firstLine.length > 80 ? firstLine.slice(0, 80) + '…' : firstLine || undefined
-  if (goal === 'task') return { kind: 'task', title }
-  // 'scheduled' default: same time tomorrow. The user can refine via the
-  // task detail panel; this matches the default in App.tsx's onTaskCreate
-  // when status === 'scheduled' but no scheduledFor was picked.
-  return {
-    kind: 'task',
-    title,
-    executeAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-  }
-}
-
 export function buildSendOptions(
   _persistedGoalKey: GoalKey,
   goalOverride: GoalKey | undefined,
   message: string,
+  scheduleOverride?: SchedulePickerValue | null,
 ): SendOptions | undefined {
-  const explicitGoal = goalOverride
-  const taskOptions = optionsForGoal(explicitGoal ?? null, message)
-  return explicitGoal !== undefined || taskOptions
-    ? { ...taskOptions, ...(explicitGoal !== undefined ? { goal: explicitGoal } : {}) }
-    : undefined
+  const firstLine = message.split('\n')[0].trim()
+  const title = firstLine.length > 80 ? firstLine.slice(0, 80) + '…' : firstLine || undefined
+
+  // A scheduled run is a task with executeAt/cron — and forces the
+  // goal to 'scheduled' so the chat list groups it correctly.
+  if (scheduleOverride && (scheduleOverride.executeAt || scheduleOverride.cron)) {
+    return {
+      kind: 'task',
+      title,
+      executeAt: scheduleOverride.executeAt ?? undefined,
+      cron:      scheduleOverride.cron ?? undefined,
+      goal:      'scheduled',
+    }
+  }
+
+  if (goalOverride === undefined) return undefined
+
+  if (goalOverride === 'task') {
+    return { kind: 'task', title, goal: 'task' }
+  }
+
+  return { goal: goalOverride }
 }
 
 
@@ -71,6 +84,8 @@ export interface SendOptions {
   kind?: 'task'
   title?: string
   executeAt?: string
+  /** Cron expression for recurring schedules. */
+  cron?: string
   /** Goal the user explicitly selected in the chat composer. */
   goal?: GoalKey
 }
@@ -87,17 +102,18 @@ interface ChatInputProps {
   prefillValue?: string   // when set, populates and focuses the textarea
   focusRef?: React.MutableRefObject<(() => void) | null>  // call to imperatively focus the textarea
   /**
-   * Optional chat context. When chatAgentId is set the agent picker
-   * hydrates from it (one-agent-per-chat contract). workspaceId scopes
-   * the attach picker to that workspace's library.
+   * Optional chat context. `workspaceId` scopes the Files picker to
+   * that workspace's library. `chatAgentId` is currently accepted for
+   * backward compatibility only — the composer no longer surfaces an
+   * agent picker. The chat's bound agent stays in the parent.
    */
   chatAgentId?: string
   chatWorkspaceId?: string
   /**
-   * Fired when the user picks a different agent from the bottom toggle.
-   * Parent decides what to do — for an existing chat, patch the chat
-   * (re-binds chat.agentId server-side); for a new chat, seed the id
-   * into the pending createChat call.
+   * Retained on the prop surface for callers that still wire it, but
+   * the composer no longer renders an agent picker so the callback is
+   * never invoked. Will be removed once consumers are cleaned up.
+   * @deprecated The composer no longer surfaces an agent picker.
    */
   onAgentChange?: (agentId: string) => void
   /**
@@ -117,11 +133,17 @@ interface ChatInputProps {
    * so the text survives navigation and reloads. Cleared on submit.
    */
   draftKey?: string
-  /** Hide the agent/model picker entirely. Used by surfaces with a fixed
-   * global model (e.g. the global Ask AI palette). */
+  /** Retained for backward compatibility; the agent picker has been
+   * removed from the composer so this is always effectively true.
+   * @deprecated */
   hideAgentPicker?: boolean
   /** Skip the library dropdown and open a native file picker on click. */
   directUpload?: boolean
+  /** Hide the Schedule button (e.g. surfaces that can't schedule). */
+  hideSchedulePicker?: boolean
+  /** Drop the container shadow (e.g. inside a card/modal that already
+   *  casts its own shadow). */
+  flat?: boolean
 }
 
 const DRAFT_STORAGE_PREFIX = 'chatDraft:'
@@ -169,6 +191,31 @@ export function shouldPinTextareaScrollToEnd(valueLength: number, selectionEnd: 
   return (selectionEnd ?? valueLength) >= valueLength
 }
 
+/**
+ * Returns true when the element accepts typed text — textareas, text-like
+ * inputs, and contenteditable surfaces. Used to decide whether a paste should
+ * stay with the focused element or get redirected to the chat composer.
+ */
+export function isEditableElement(el: Element | null): boolean {
+  if (!el) return false
+  if (el instanceof HTMLTextAreaElement) return true
+  if (el instanceof HTMLInputElement) {
+    const type = el.type.toLowerCase()
+    return (
+      type === 'text'
+      || type === 'search'
+      || type === 'email'
+      || type === 'url'
+      || type === 'tel'
+      || type === 'password'
+      || type === 'number'
+      || type === ''
+    )
+  }
+  if (el instanceof HTMLElement && el.isContentEditable) return true
+  return false
+}
+
 export function ChatInput({
   onSend,
   disabled = false,
@@ -180,7 +227,7 @@ export function ChatInput({
   prefillValue,
   focusRef,
   chatAgentId,
-  chatWorkspaceId: _chatWorkspaceId,
+  chatWorkspaceId,
   chatId,
   onAgentChange,
   onOpenUploadPicker,
@@ -188,14 +235,19 @@ export function ChatInput({
   onRemoveExtraUpload,
   uploadInProgress = false,
   draftKey,
-  hideAgentPicker = false,
+  hideAgentPicker = true,
   directUpload = false,
+  hideSchedulePicker = false,
+  flat = false,
 }: ChatInputProps) {
-  // chatId is part of the public prop surface (callers pass it for
-  // upload routing) but ChatInput itself doesn't read it — touch it
-  // here so eslint's no-unused-vars stays quiet without dropping the
-  // prop from the API.
+  // These props are part of the public surface (callers pass them for
+  // backward compat / upload routing) but the new composer body doesn't
+  // read them directly — touch them so eslint's no-unused-vars stays
+  // quiet without dropping the props from the API.
   void chatId
+  void chatAgentId
+  void onAgentChange
+  void hideAgentPicker
 
   const readStoredDraft = useCallback((key: string | undefined) => (
     key ? localStorage.getItem(DRAFT_STORAGE_PREFIX + key) ?? '' : ''
@@ -211,7 +263,6 @@ export function ChatInput({
   const [hasText, setHasText] = useState(() => initialValue.trim().length > 0)
   const draftKeyRef = useRef(draftKey)
   const [attachedItems, setAttachedItems] = useState<ComposerAttachment[]>([])
-  const [previewAgentId, setPreviewAgentId] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const pickersRef = useRef<ComposerPickersHandle>(null)
   const [atMentionStart, setAtMentionStart] = useState<number | null>(null)
@@ -247,7 +298,11 @@ export function ChatInput({
     el.style.width      = saved.width
     el.style.visibility = saved.visibility
 
-    const maxH = compact ? 120 : 200
+    // Non-compact max derived from the composer card's `max-h-[256px]`
+    // minus its chrome (24 + 12 padding = 36, toolbar pt-2 + h-7 = 36).
+    // Past this, the textarea scrolls internally instead of pushing the
+    // card past its cap.
+    const maxH = compact ? 120 : 184
     const newH = Math.min(contentH, maxH)
     el.style.height     = `${newH}px`
     el.style.overflowY  = newH >= maxH ? 'auto' : 'hidden'
@@ -364,10 +419,22 @@ export function ChatInput({
     return () => { if (focusRef) focusRef.current = null }
   }, [focusRef])
 
-  const effectiveAgentId = previewAgentId ?? chatAgentId
   const [goalOverride, setGoalOverride] = useState<GoalKey | undefined>(undefined)
+  const [scheduleOverride, setScheduleOverride] = useState<SchedulePickerValue | null>(null)
   const persistedGoalKey = goal ?? null
-  const effectiveGoalKey: GoalKey = goalOverride !== undefined ? goalOverride : persistedGoalKey
+  /**
+   * `userPickedGoal` is what the Tools button shows — the user's
+   * explicit selection (or the chat's persisted goal as a fallback).
+   * `effectiveGoalKey` is the *implied* goal that drives the placeholder
+   * copy and the send wire: a scheduled date flips it to 'scheduled'
+   * even though the Tools button still reads "Task". Keeping these
+   * separate matters because Schedule only renders when Tools === task;
+   * collapsing them would hide the Schedule button as soon as the user
+   * picked a date.
+   */
+  const userPickedGoal: GoalKey = goalOverride !== undefined ? goalOverride : persistedGoalKey
+  const isScheduled = !!(scheduleOverride && (scheduleOverride.executeAt || scheduleOverride.cron))
+  const effectiveGoalKey: GoalKey = isScheduled ? 'scheduled' : userPickedGoal
   const activePlaceholder = showGoalPicker
     ? (getGoalPlaceholder(effectiveGoalKey) ?? placeholder)
     : placeholder
@@ -401,6 +468,31 @@ export function ChatInput({
   useLayoutEffect(() => {
     resizeTextarea()
   }, [resizeTextarea])
+
+  // Redirect pastes that happen while no editable element is focused (e.g. user
+  // clicked into the message list, then hit Cmd+V) into the composer so the
+  // content always lands where they can send it from.
+  useEffect(() => {
+    if (disabled) return
+    const onDocumentPaste = (e: ClipboardEvent) => {
+      if (e.defaultPrevented) return
+      if (isEditableElement(document.activeElement)) return
+      const el = textareaRef.current
+      if (!el) return
+      const text = e.clipboardData?.getData('text/plain') ?? ''
+      if (!text) return
+      e.preventDefault()
+      const start = el.selectionStart ?? el.value.length
+      const end = el.selectionEnd ?? el.value.length
+      replaceTextareaRangePreservingUndo(el, start, end, text)
+      const caret = start + text.length
+      el.setSelectionRange(caret, caret)
+      syncValue(el.value)
+      recordTextHistory(el)
+    }
+    document.addEventListener('paste', onDocumentPaste)
+    return () => document.removeEventListener('paste', onDocumentPaste)
+  }, [disabled, recordTextHistory, syncValue])
 
   // Detect @ mention while typing — drives the attach picker open via
   // the ComposerPickers imperative handle.
@@ -461,11 +553,6 @@ export function ChatInput({
     setAttachedItems(prev => prev.filter(p => p.id !== id))
   }
 
-  const handleAgentChange = useCallback((agentId: string) => {
-    setPreviewAgentId(agentId)
-    onAgentChange?.(agentId)
-  }, [onAgentChange])
-
   const handleSubmit = () => {
     const currentValue = textareaRef.current?.value ?? valueRef.current
     const trimmed = currentValue.trim()
@@ -482,10 +569,11 @@ export function ChatInput({
       path: i.id,
       kind: i.kind === 'folder' ? 'directory' : 'file',
     }))
-    const options = buildSendOptions(persistedGoalKey, goalOverride, trimmed)
+    const options = buildSendOptions(persistedGoalKey, goalOverride, trimmed, scheduleOverride)
     onSend(trimmed, [...extraUploads, ...mentionedFiles], options)
     replaceValue('')
     setAttachedItems([])
+    setScheduleOverride(null)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -507,15 +595,24 @@ export function ChatInput({
 
   return (
     <div className="w-full">
-      {/* Input card */}
-      <div className="rounded-lg border bg-background">
-        {/* Chips — only when attachments / uploads exist */}
+      {/* Single rounded card — textarea on top, toolbar at the bottom.
+          `flex-col` + the min-height clamp give the card a stable
+          footprint; the toolbar gets pushed to the bottom edge via
+          `mt-auto` when the textarea hasn't grown to fill the space.
+          Internal paddings: 24 px left/right/top, 12 px bottom. */}
+      <div className={cn(
+        'rounded-2xl border border-foreground/10 bg-background',
+        flat ? '' : 'shadow-md',
+        'flex flex-col min-h-[160px] max-h-[256px]',
+        'pl-6 pr-6 pt-6 pb-3',
+      )}>
+        {/* Attachment chips — only when items / uploads exist. */}
         {(attachedItems.length > 0 || extraUploads.length > 0) && (
-          <div className={`flex flex-wrap gap-1.5 px-3 ${compact ? 'pt-2' : 'pt-3'}`}>
+          <div className="flex flex-wrap gap-1.5 mb-2">
             {extraUploads.map(upload => (
               <span
                 key={upload.id}
-                className="inline-flex items-center gap-1 rounded-md bg-secondary text-secondary-foreground text-xs font-medium h-6 pl-2 pr-1 max-w-[200px]"
+                className="inline-flex items-center gap-1 rounded-md bg-foreground/[0.04] text-foreground text-xs font-medium h-6 pl-2 pr-1 max-w-[200px]"
               >
                 <Paperclip className="h-3 w-3 shrink-0 text-muted-foreground" />
                 <span className="truncate">{upload.name}</span>
@@ -523,7 +620,7 @@ export function ChatInput({
                   <button
                     type="button"
                     onClick={() => onRemoveExtraUpload(upload.id)}
-                    className="ml-0.5 shrink-0 rounded-sm p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                    className="ml-0.5 shrink-0 rounded-sm p-0.5 text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] transition-colors"
                     aria-label={`Remove ${upload.name}`}
                   >
                     <X className="h-2.5 w-2.5" />
@@ -536,7 +633,7 @@ export function ChatInput({
               return (
                 <span
                   key={item.id}
-                  className="inline-flex items-center gap-1 rounded-md bg-secondary text-secondary-foreground text-xs font-medium h-6 pl-2 pr-1 max-w-[200px]"
+                  className="inline-flex items-center gap-1 rounded-md bg-foreground/[0.04] text-foreground text-xs font-medium h-6 pl-2 pr-1 max-w-[200px]"
                 >
                   <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
                   <button
@@ -549,7 +646,7 @@ export function ChatInput({
                   <button
                     type="button"
                     onClick={() => removeAttachedItem(item.id)}
-                    className="ml-0.5 shrink-0 rounded-sm p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                    className="ml-0.5 shrink-0 rounded-sm p-0.5 text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] transition-colors"
                     aria-label={`Remove ${item.name}`}
                   >
                     <X className="h-2.5 w-2.5" />
@@ -560,54 +657,64 @@ export function ChatInput({
           </div>
         )}
 
-        {/* Textarea + submit inline */}
-        <div className={`flex min-w-0 gap-2 px-3 ${compact ? 'py-2' : 'py-3'}`}>
-          <textarea
-            ref={textareaRef}
-            rows={1}
-            defaultValue={initialValue}
-            onChange={handleChange}
-            onBeforeInput={handleBeforeInput}
-            onKeyDown={handleKeyDown}
-            placeholder={activePlaceholder}
-            disabled={disabled}
-            className="min-w-0 flex-1 self-center resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground/60 disabled:opacity-50"
-          />
-          <div className="self-stretch flex flex-col justify-end">
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={!canSubmit}
-              className={`shrink-0 flex items-center justify-center h-6 w-6 rounded-md transition-colors ${
-                canSubmit ? 'text-foreground hover:bg-muted' : 'text-muted-foreground/30 cursor-default'
-              }`}
-            >
-              <CornerDownLeft className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Pickers row — below the input */}
-      <div className={`flex min-w-0 max-w-full flex-wrap items-center gap-1.5 overflow-hidden ${compact ? 'mt-1.5' : 'mt-2'}`}>
-
-        <ComposerPickers
-          ref={pickersRef}
-          workspaceId={_chatWorkspaceId}
-          agentId={effectiveAgentId}
-          onAgentChange={handleAgentChange}
-          attachments={attachedItems}
-          onAttachmentsChange={setAttachedItems}
-          onAttachmentPick={insertMention}
-          onOpenUploadPicker={onOpenUploadPicker}
-          uploadInProgress={uploadInProgress}
-          hideAgentPicker={hideAgentPicker}
-          directUpload={directUpload}
-          showGoalPicker={showGoalPicker}
-          goalKey={effectiveGoalKey}
-          onGoalChange={setGoalOverride}
+        {/* Textarea */}
+        <textarea
+          ref={textareaRef}
+          rows={1}
+          defaultValue={initialValue}
+          onChange={handleChange}
+          onBeforeInput={handleBeforeInput}
+          onKeyDown={handleKeyDown}
+          placeholder={activePlaceholder}
+          disabled={disabled}
+          className={cn(
+            'block w-full min-w-0 resize-none bg-transparent text-sm leading-6 outline-none',
+            'placeholder:text-muted-foreground disabled:opacity-50',
+          )}
         />
 
+        {/* Toolbar — pickers on the left, send on the right. `mt-auto`
+            pins it to the bottom of the card; the negative horizontal
+            margin pulls the picker pills and send button so their
+            hover backgrounds line up flush with the textarea text. */}
+        <div className="mt-auto pt-2 -mx-2 flex items-center justify-between gap-2">
+          <ComposerPickers
+            ref={pickersRef}
+            workspaceId={chatWorkspaceId}
+            attachments={attachedItems}
+            onAttachmentsChange={setAttachedItems}
+            onAttachmentPick={insertMention}
+            onOpenUploadPicker={onOpenUploadPicker}
+            uploadInProgress={uploadInProgress}
+            directUpload={directUpload}
+            showGoalPicker={showGoalPicker}
+            goalKey={userPickedGoal}
+            onGoalChange={(next) => {
+              // Stepping away from `task` invalidates any pending
+              // Schedule selection — the Schedule button is gated on
+              // `goalKey === 'task'`, so leaving a schedule behind
+              // would silently round-trip with the next send.
+              setGoalOverride(next)
+              if (next !== 'task') setScheduleOverride(null)
+            }}
+            schedule={hideSchedulePicker ? null : scheduleOverride}
+            onScheduleChange={hideSchedulePicker ? undefined : setScheduleOverride}
+          />
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+            aria-label="Send message"
+            className={cn(
+              'shrink-0 flex items-center justify-center h-7 w-7 rounded-md transition-colors',
+              canSubmit
+                ? 'text-foreground hover:bg-foreground/[0.06]'
+                : 'text-muted-foreground/30 cursor-default',
+            )}
+          >
+            <ArrowRight className="h-4 w-4" />
+          </button>
+        </div>
       </div>
     </div>
   )

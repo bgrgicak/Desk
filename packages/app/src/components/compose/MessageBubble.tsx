@@ -1,12 +1,17 @@
-import { useState, type MouseEvent } from 'react'
-import { Bot, ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo, Reply, MessagesSquare } from 'lucide-react'
+import { memo, useState, type MouseEvent, type ReactNode } from 'react'
+import { toast } from 'sonner'
+import { ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo, Reply, MessagesSquare, Copy, ThumbsUp, ThumbsDown, Check } from 'lucide-react'
+import { cn } from '@agent-desk/ui'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
 import { appAttachmentToPreview } from '@/components/context/AppPreview'
 import { getRelativeTime } from '@/data/ui-types'
 import { humanSize } from '@/store/selectors/library'
 import { MarkdownContent } from '@/components/MarkdownContent'
-import { InlineArtifactPreview } from '@/components/shared/InlineArtifactPreview'
-import { useGetSummaryHistoryQuery, useGetWorkspacesQuery } from '@/store/api'
+import { InlineArtifactPreview, UnsupportedFileCard } from '@/components/shared/InlineArtifactPreview'
+import { TaskResultCard } from './TaskResultCard'
+import { useDeleteLibraryFileMutation, useGetSummaryHistoryQuery, usePostMessageFeedbackMutation } from '@/store/api'
+import { useAppDispatch, useAppSelector } from '@/store/hooks'
+import { openArtifact, selectIsArtifactInPanel } from '@/store/slices/previewPanelSlice'
 import { diffLines, type DiffSegment } from '@/lib/summary-diff'
 import { buildPath, NEW_CHAT_ID } from '@/router/nav'
 import { Link } from 'react-router-dom'
@@ -15,7 +20,22 @@ import { isRegularMessageVisible, isStructuredToolPayloadLine, isUserVisibleDiag
 interface MessageBubbleProps {
   message: ServerMessage
   workspaceId?: string
+  /**
+   * Filesystem path of the workspace, used to rewrite sandbox paths inside
+   * markdown links and tool output. Passed in by the parent — historically
+   * each bubble subscribed to `useGetWorkspacesQuery` itself, but with N
+   * bubbles in a long thread that fans out into N RTK Query subscribers
+   * notified on every workspace update. Look it up once at the thread
+   * level and pass it down.
+   */
+  workspacePath?: string
   isFirstInGroup?: boolean
+  /** When false, this message is part of a group and a later message
+   *  from the same sender follows shortly after — so the actions row
+   *  (copy / reply / feedback / timestamp) is suppressed and only
+   *  surfaces on the group's last message. Defaults to `true` so
+   *  standalone usages keep their actions row. */
+  isLastInGroup?: boolean
   isNew?: boolean
   /** Agent name to display in the message header. */
   agentName?: string
@@ -33,10 +53,12 @@ interface MessageBubbleProps {
   currentChatId?: string
 }
 
-export function MessageBubble({
+export const MessageBubble = memo(function MessageBubble({
   message,
   workspaceId,
+  workspacePath,
   isFirstInGroup = true,
+  isLastInGroup = true,
   isNew = false,
   agentName,
   onAttachmentClick,
@@ -45,8 +67,6 @@ export function MessageBubble({
   developerMode = false,
   currentChatId,
 }: MessageBubbleProps) {
-  const { data: workspaces } = useGetWorkspacesQuery()
-  const workspacePath = workspaces?.find(w => w.id === workspaceId)?.path
   const isUser = message.role === 'user'
   const modelLabel = agentName ?? 'Agent'
   const timestamp = new Date(message.createdAt)
@@ -60,121 +80,305 @@ export function MessageBubble({
     // the surrounding turn — just not from the artifactRef row itself.
     && message.content.type !== 'artifactRef'
 
+  // A task definition (the AI creating a task, or one surfaced in the
+  // conversation) renders as an inline Task result card regardless of
+  // author — except when we're already inside that task's own thread,
+  // where the same anchor message renders as the thread's header
+  // (title + full description, no status badge or View button) so it
+  // doesn't visually duplicate the "you are in this task" affordance.
+  if (message.kind === 'task') {
+    if (message.threadChatId && message.threadChatId === currentChatId) {
+      return <TaskAnchorHeader message={message} />
+    }
+    return <TaskResultCard message={message} workspaceId={workspaceId} />
+  }
+
   if (isUser) {
     if (message.kind === 'task_run' && message.content.type === 'text') {
       return <TaskRunChip prompt={message.content.text} />
     }
     return (
-      <div className="group flex w-full min-w-0 max-w-full items-start gap-1.5">
-        {showThread && (
-          <div className="shrink-0 self-end">
-            <ThreadButton message={message} workspaceId={workspaceId!} />
+      <div className="group min-w-0 max-w-full flex flex-col items-end">
+        {hasAttachments && (
+          <div className="flex w-full min-w-0 max-w-full flex-col items-end gap-1.5 overflow-hidden mb-1.5">
+            {message.attachments!.map(att => (
+              <AttachmentCard
+                key={att.path}
+                attachment={att}
+                workspaceId={workspaceId}
+                chatId={message.chatId}
+                align="right"
+                onClick={onAttachmentClick ? () => onAttachmentClick(att) : undefined}
+              />
+            ))}
           </div>
         )}
-        <div className="flex-1 min-w-0 flex flex-col items-end gap-1.5">
-          {hasAttachments && (
-            <div className="flex w-full min-w-0 max-w-full flex-col items-end gap-1.5 overflow-hidden">
-              {message.attachments!.map(att => (
-                <AttachmentCard
-                  key={att.path}
-                  attachment={att}
-                  workspaceId={workspaceId}
-                  chatId={message.chatId}
-                  align="right"
-                  onClick={onAttachmentClick ? () => onAttachmentClick(att) : undefined}
-                />
-              ))}
-            </div>
-          )}
-          {message.content.type === 'text' && message.content.text && (
-            <div className="max-w-[80%] min-w-0 break-words bg-secondary text-foreground text-sm leading-relaxed px-3.5 py-2.5 rounded-lg rounded-br-[2px]">
-              <MarkdownContent text={message.content.text} workspacePath={workspacePath} workspaceId={workspaceId} />
-            </div>
-          )}
-        </div>
+        {message.content.type === 'text' && message.content.text && (
+          // Note: we deliberately don't apply `mix-blend-multiply`
+          // here. The chat thread's scroll container uses
+          // `mask-image` for the top/bottom edge fade, which creates
+          // a new stacking context — that stops any blend mode on a
+          // descendant from reaching the AppShell-level
+          // BackgroundBlobs, so it has no visible effect. If we ever
+          // want the blend back, either replace the mask with a
+          // non-stacking-context fade (e.g. a duplicated local blob
+          // layer + sibling gradient strips) or hoist the bubble out
+          // of the masked subtree.
+          <div className="max-w-[80%] min-w-0 break-words bg-secondary text-foreground text-sm leading-relaxed px-3.5 py-2.5 rounded-lg rounded-br-[2px]">
+            <MarkdownContent text={message.content.text} workspacePath={workspacePath} workspaceId={workspaceId} />
+          </div>
+        )}
+        {isLastInGroup && <UserMessageActions message={message} timestamp={timestamp} />}
       </div>
     )
   }
 
+  // The agent header (Bot icon + model name + timestamp + "New" badge)
+  // used to live above the message; it's been retired in favour of the
+  // hover-revealed actions row below. `modelLabel`, `isNew`,
+  // `agentHeaderClassName`, and `hideAgentHeader` remain on the prop
+  // surface for callers that still set them, but no longer render.
+  // `isFirstInGroup` previously controlled a `-mt-4` collapse for
+  // consecutive grouped messages — now obsolete because the thread no
+  // longer uses `space-y-*` between messages (each message brings its
+  // own trailing actions row, which provides the natural separation).
+  void modelLabel
+  void isNew
+  void agentHeaderClassName
+  void hideAgentHeader
+  void isFirstInGroup
+
   return (
-    <div className={`group min-w-0 max-w-full ${isFirstInGroup ? '' : '-mt-4'}`}>
-      <div className="flex items-start gap-1.5">
-        <div className={`flex-1 min-w-0 ${isFirstInGroup ? 'space-y-1.5' : ''}`}>
-          {isFirstInGroup && !hideAgentHeader && (
-            <div className={`flex items-center gap-3 ${agentHeaderClassName ?? ''}`}>
-              <div className="flex items-center gap-1">
-                <Bot className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-                <span className="text-xs text-muted-foreground">{modelLabel}</span>
-              </div>
-              <span className="text-xs text-muted-foreground">{getRelativeTime(timestamp)}</span>
-              {isNew && (
-                <div className="flex items-center gap-1">
-                  <div className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
-                  <span className="text-xs text-blue-500">New</span>
-                </div>
-              )}
-            </div>
-          )}
-          {hasAttachments && (
-            <div className="flex w-full min-w-0 max-w-full flex-col items-start gap-1.5 overflow-hidden">
-              {message.attachments!.map(att => (
-                <AttachmentCard key={att.path} attachment={att} workspaceId={workspaceId} chatId={message.chatId} />
-              ))}
-            </div>
-          )}
-          <MessageContentView
-            content={message.content}
-            chatId={message.chatId}
-            messageId={message.id}
-            workspaceId={workspaceId}
-            workspacePath={workspacePath}
-            developerMode={developerMode}
-            onAttachmentClick={onAttachmentClick}
-          />
+    <div className="group min-w-0 max-w-full">
+      {hasAttachments && (
+        <div className="flex w-full min-w-0 max-w-full flex-col items-start gap-1.5 overflow-hidden mb-1.5">
+          {message.attachments!.map(att => (
+            <AttachmentCard key={att.path} attachment={att} workspaceId={workspaceId} chatId={message.chatId} />
+          ))}
         </div>
-        {showThread && (
-          <div className="shrink-0 self-end">
-            <ThreadButton message={message} workspaceId={workspaceId!} />
-          </div>
-        )}
-      </div>
+      )}
+      <MessageContentView
+        content={message.content}
+        chatId={message.chatId}
+        messageId={message.id}
+        workspaceId={workspaceId}
+        workspacePath={workspacePath}
+        developerMode={developerMode}
+        onAttachmentClick={onAttachmentClick}
+      />
+      {isLastInGroup && (
+        <AgentMessageActions
+          message={message}
+          workspaceId={workspaceId}
+          timestamp={timestamp}
+          showThread={showThread}
+        />
+      )}
+    </div>
+  )
+})
+
+// ── Agent-message actions ──────────────────────────────────────────────────
+//
+// A row of mini icon buttons (copy / reply / 👍 / 👎) plus the message
+// timestamp, rendered as a 36 px slot below every agent message. The
+// row is hover-revealed (with a touch + focus-within fallback) so it
+// doesn't clutter the resting thread; the 36 px height is reserved
+// regardless so messages don't jump when actions appear.
+
+interface AgentMessageActionsProps {
+  message: ServerMessage
+  workspaceId?: string
+  timestamp: Date
+  /** Whether to surface the reply/open-thread button. Mirrors the
+   * `showThread` gate that used to wrap the floating ThreadButton. */
+  showThread: boolean
+}
+
+function AgentMessageActions({
+  message,
+  workspaceId,
+  timestamp,
+  showThread,
+}: AgentMessageActionsProps) {
+  const [feedback, setFeedback] = useState<'up' | 'down' | null>(null)
+  const [postFeedback] = usePostMessageFeedbackMutation()
+
+  const handleCopy = () => copyMessageToClipboard(message)
+
+  const handleFeedback = (kind: 'up' | 'down') => {
+    if (feedback === kind) return
+    const previous = feedback
+    setFeedback(kind)
+    toast.success(
+      kind === 'up'
+        ? 'Thanks for the positive feedback'
+        : "Thanks for the feedback — we'll do better",
+    )
+    // The reaction is persisted as a system message so the workspace's
+    // daily reflection can see which replies the user marked helpful
+    // or unhelpful. Roll back the local active state if the request
+    // fails so the icons match server truth.
+    postFeedback({ chatId: message.chatId, messageId: message.id, rating: kind })
+      .unwrap()
+      .catch(() => {
+        setFeedback(previous)
+      })
+  }
+
+  const hasThread = !!message.threadChatId
+  // Thread-button target: existing threads navigate; new threads carry
+  // the anchor message via router state so the destination chat can
+  // pre-render the parent context.
+  const threadTo = workspaceId
+    ? (hasThread
+        ? buildPath(workspaceId, 'tasks', { chat: message.threadChatId! })
+        : buildPath(workspaceId, 'tasks', { chat: NEW_CHAT_ID, startThread: `${message.chatId}:${message.id}` }))
+    : null
+
+  return (
+    <div
+      className={cn(
+        'mt-2 h-5 flex items-center gap-0.5',
+        'opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 focus-within:opacity-100',
+        'transition-opacity',
+      )}
+    >
+      <ActionIconButton title="Copy message" onClick={handleCopy}>
+        <Copy className="h-3.5 w-3.5" />
+      </ActionIconButton>
+      {showThread && threadTo && (
+        <Link
+          to={threadTo}
+          state={hasThread ? undefined : { anchorMessage: message }}
+          title={hasThread ? 'Open thread' : 'Reply in thread'}
+          className="flex items-center justify-center h-5 w-5 rounded text-muted-foreground hover:text-foreground hover:bg-foreground/[0.04] transition-colors"
+        >
+          {hasThread
+            ? <MessagesSquare className="h-3.5 w-3.5" />
+            : <Reply className="h-3.5 w-3.5" />}
+        </Link>
+      )}
+      <ActionIconButton
+        title="Helpful"
+        onClick={() => handleFeedback('up')}
+        active={feedback === 'up'}
+      >
+        <ThumbsUp className="h-3.5 w-3.5" />
+      </ActionIconButton>
+      <ActionIconButton
+        title="Not helpful"
+        onClick={() => handleFeedback('down')}
+        active={feedback === 'down'}
+      >
+        <ThumbsDown className="h-3.5 w-3.5" />
+      </ActionIconButton>
+      <span className="text-xs text-muted-foreground ml-2">{getRelativeTime(timestamp)}</span>
     </div>
   )
 }
 
-function ThreadButton({
+function ActionIconButton({
+  title,
+  onClick,
+  active = false,
+  children,
+}: {
+  title: string
+  onClick: () => void
+  active?: boolean
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      aria-pressed={active}
+      className={cn(
+        'flex items-center justify-center h-5 w-5 rounded transition-colors',
+        active
+          ? 'text-foreground'
+          : 'text-muted-foreground hover:text-foreground hover:bg-foreground/[0.04]',
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+// ── User-message actions ───────────────────────────────────────────────────
+//
+// Mirror of the agent actions row, scoped to what the user can do with
+// their own message: copy + timestamp. There's no reply/thread
+// affordance — threading from your own message isn't a meaningful
+// action. The row is right-aligned to match the bubble's alignment.
+
+function UserMessageActions({
   message,
-  workspaceId,
-  className,
+  timestamp,
 }: {
   message: ServerMessage
-  workspaceId: string
-  className?: string
+  timestamp: Date
 }) {
-  const hasThread = !!message.threadChatId
-  const to = hasThread
-    ? buildPath(workspaceId, 'tasks', { chat: message.threadChatId! })
-    : buildPath(workspaceId, 'tasks', { chat: NEW_CHAT_ID, startThread: `${message.chatId}:${message.id}` })
-
   return (
-    <Link
-      to={to}
-      state={hasThread ? undefined : { anchorMessage: message }}
-      title={hasThread ? 'Open thread' : 'Reply in thread'}
-      className={[
-        'p-1 rounded transition-colors hover:bg-muted/40',
-        hasThread
-          ? 'text-muted-foreground/70 hover:text-foreground'
-          : 'opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 focus-visible:opacity-100 transition-opacity text-muted-foreground/50 hover:text-muted-foreground',
-        className ?? '',
-      ].join(' ')}
+    <div
+      className={cn(
+        'mt-2 h-5 flex items-center justify-end gap-0.5',
+        'opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 focus-within:opacity-100',
+        'transition-opacity',
+      )}
     >
-      {hasThread
-        ? <MessagesSquare className="h-3.5 w-3.5" />
-        : <Reply className="h-3.5 w-3.5" />
-      }
-    </Link>
+      <span className="text-xs text-muted-foreground mr-1">{getRelativeTime(timestamp)}</span>
+      <ActionIconButton title="Copy message" onClick={() => copyMessageToClipboard(message)}>
+        <Copy className="h-3.5 w-3.5" />
+      </ActionIconButton>
+    </div>
   )
+}
+
+// ── Shared copy helper ─────────────────────────────────────────────────────
+
+/** Copy the message's text content to the clipboard and surface a toast
+ *  for confirmation / failure. Shared by both `AgentMessageActions` and
+ *  `UserMessageActions` so the UX matches. */
+async function copyMessageToClipboard(message: ServerMessage): Promise<void> {
+  const text = copyMessageText(message)
+  if (!text) {
+    toast.error('Nothing to copy from this message')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    toast.success('Copied to clipboard')
+  } catch (err) {
+    toast.error('Failed to copy', {
+      description: err instanceof Error ? err.message : undefined,
+    })
+  }
+}
+
+/** Extract a copyable text representation from a message. Returns
+ *  `null` when the message has no text content (e.g. a bare artifact
+ *  reference or a summary-only entry). */
+function copyMessageText(message: ServerMessage): string | null {
+  const content = message.content
+  if (content.type === 'text') return content.text.trim() || null
+  if (content.type === 'events') {
+    const text = content.log
+      .map(entry => {
+        if (entry.kind === 'event' && entry.event.type === 'text') {
+          const t = entry.event.part?.text
+          return typeof t === 'string' ? t : ''
+        }
+        return ''
+      })
+      .join('')
+      .trim()
+    return text || null
+  }
+  return null
 }
 
 function MessageContentView({
@@ -254,7 +458,7 @@ function SummaryView({ chatId, messageId, body, workspacePath, workspaceId }: { 
     : null
 
   return (
-    <div className="rounded-lg border border-dashed bg-muted/20 p-3">
+    <div className="my-5 rounded-lg border border-dashed bg-muted/20 p-3">
       <div className="mb-2 flex items-center justify-between gap-2 text-xs font-medium text-muted-foreground">
         <div className="flex items-center gap-1.5">
           <FileText className="h-3.5 w-3.5" />
@@ -348,34 +552,49 @@ function plainLeftClick(e: MouseEvent<HTMLAnchorElement>) {
 
 function ArtifactRefRow({ workspaceId, chatId, path, name, mime, params, onClick }: { workspaceId?: string; chatId?: string; path: string; name?: string; mime?: string | null; params?: Record<string, string>; onClick?: () => void }) {
   const label = name ?? basenamePath(path)
-  const Icon = isDirectoryArtifact(mime) ? Folder : FileText
-  const className = 'inline-flex max-w-full min-w-0 items-center gap-2 self-start overflow-hidden rounded-md border bg-background px-2.5 py-1.5 text-left text-xs align-top'
   const href = artifactRefHref(workspaceId, path, mime, params)
-  const inner = (
-    <>
-      <Icon className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
-      <span className="min-w-0 flex-1 truncate font-medium sm:flex-none">{label}</span>
-      {name && <span className="hidden min-w-0 truncate text-muted-foreground sm:inline">{path}</span>}
-    </>
-  )
-  const fallback = href ? (
-    <a
-      href={href}
-      onClick={e => { if (plainLeftClick(e)) onClick?.() }}
-      className={`${className} hover:bg-muted/40 transition-colors`}
-      data-testid="artifact-inline-fallback"
-    >
-      {inner}
-    </a>
-  ) : !onClick ? <div className={className} data-testid="artifact-inline-fallback">{inner}</div> : (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`${className} hover:bg-muted/40 transition-colors`}
-      data-testid="artifact-inline-fallback"
-    >
-      {inner}
-    </button>
+  const dispatch = useAppDispatch()
+  // Highlighted = this artifact is currently mounted in the side
+  // preview panel. The card flips into its active-state styling while
+  // the panel shows the same file.
+  const isActive = useAppSelector(s => selectIsArtifactInPanel(s, workspaceId, path))
+  // The preview card's Delete affordance forwards here. It hits the
+  // library-file delete mutation; the mock layer intercepts both the
+  // request *and* purges any chat messages referencing the path so
+  // the artifactRef bubble disappears alongside the file.
+  const [deleteLibraryFile] = useDeleteLibraryFileMutation()
+  const handleDelete = workspaceId
+    ? async () => {
+        await deleteLibraryFile({ workspaceId, path }).unwrap()
+      }
+    : undefined
+  // Clicking the card body dispatches `openArtifact` so the preview
+  // panel mounts (or swaps to) this file. The previous in-app navigation
+  // (file detail route) stays available as a fallback when there's no
+  // workspace context — that path can't be panel-mounted because the
+  // panel needs the workspace id to fetch content.
+  const handlePreview = workspaceId
+    ? () => {
+        dispatch(openArtifact({
+          workspaceId,
+          path,
+          name: label,
+          mime,
+          params,
+        }))
+      }
+    : onClick
+  const fallback = (
+    <UnsupportedFileCard
+      name={label}
+      path={path}
+      mime={mime}
+      workspaceId={workspaceId}
+      openHref={href}
+      isActive={isActive}
+      onPreview={handlePreview}
+      onDelete={handleDelete}
+    />
   )
   // Global app previews (path starts with /opt/desk-apps/) don't need a
   // workspaceId — only a chatId — so allow rendering without workspaceId
@@ -393,6 +612,7 @@ function ArtifactRefRow({ workspaceId, chatId, path, name, mime, params, onClick
       onOpen={onClick}
       openHref={href}
       fallback={fallback}
+      onDelete={handleDelete}
     />
   )
 }
@@ -498,12 +718,47 @@ export function attachmentAlignmentClass(align: AttachmentAlignment) {
   return align === 'right' ? 'self-end ml-auto' : 'self-start mr-auto'
 }
 
+/** The task anchor rendered as the first item of its own thread —
+ *  a quiet bordered block with the task title and full description.
+ *  No status badge, no View button, no kebab: the user is already
+ *  inside the task's thread so the action surface lives on the
+ *  Tasks page card and the right-panel header above the messages. */
+function TaskAnchorHeader({ message }: { message: ServerMessage }) {
+  const title = message.title?.trim()
+    || (message.content.type === 'text' ? message.content.text.split('\n')[0].trim() : '')
+    || 'Task'
+  let body: string | undefined
+  if (message.content.type === 'text') {
+    const text = message.content.text.trim()
+    if (message.title && text === message.title.trim()) {
+      body = undefined
+    } else if (message.title && text.startsWith(`${message.title.trim()}\n`)) {
+      body = text.slice(message.title.trim().length).trim()
+    } else if (message.title) {
+      body = text
+    } else {
+      const [, ...rest] = text.split('\n')
+      body = rest.join('\n').trim() || undefined
+    }
+  }
+  return (
+    <div className="rounded-lg border border-foreground/10 bg-foreground/5 px-4 py-3">
+      <div className="text-sm font-medium text-foreground">{title}</div>
+      {body ? (
+        <div className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{body}</div>
+      ) : null}
+    </div>
+  )
+}
+
 function TaskRunChip({ prompt }: { prompt: string }) {
   const preview = prompt.length > 60 ? prompt.slice(0, 60) + '…' : prompt
   return (
-    <CollapsibleChip icon={<ListTodo className="h-3 w-3" />} label={`task run: ${preview}`}>
-      <pre className="text-[11px] leading-snug whitespace-pre-wrap break-words">{prompt}</pre>
-    </CollapsibleChip>
+    <div className="my-5">
+      <CollapsibleChip icon={<ListTodo className="h-3 w-3" />} label={`task run: ${preview}`}>
+        <pre className="text-[11px] leading-snug whitespace-pre-wrap break-words">{prompt}</pre>
+      </CollapsibleChip>
+    </div>
   )
 }
 
@@ -533,11 +788,16 @@ export type EventDisplayChunk =
   | { kind: 'events'; entries: AgentLogEntry[] }
   | { kind: 'stderr'; lines: string[] }
   | { kind: 'diagnostic'; lines: string[] }
+  | { kind: 'activity'; events: AgentEvent[] }
 
 export function eventDisplayChunks(log: AgentLogEntry[], developerMode: boolean): EventDisplayChunk[] {
   // Render entries in log order (old → new). Consecutive text deltas fold
   // into single paragraphs. Consecutive tool events fold into a single
   // collapsed group so they don't dominate the thread in dev mode.
+  const TOOL_EVENT_TYPES = new Set([
+    'tool_use', 'tool-call', 'tool_call', 'tool-result', 'tool_result',
+  ])
+
   const chunks: EventDisplayChunk[] = []
   let sawEvent = false
   const hiddenReasoningTextIds = reasoningPartIds(log)
@@ -562,6 +822,11 @@ export function eventDisplayChunks(log: AgentLogEntry[], developerMode: boolean)
     if (last && last.kind === 'events') last.entries.push(entry)
     else chunks.push({ kind: 'events', entries: [entry] })
   }
+  const appendActivity = (event: AgentEvent) => {
+    const last = chunks[chunks.length - 1]
+    if (last && last.kind === 'activity') last.events.push(event)
+    else chunks.push({ kind: 'activity', events: [event] })
+  }
 
   for (const entry of log) {
     if (entry.kind === 'event') {
@@ -571,10 +836,14 @@ export function eventDisplayChunks(log: AgentLogEntry[], developerMode: boolean)
         if (id && hiddenReasoningTextIds.has(id)) continue
         const t = entry.event.part?.text
         if (typeof t === 'string') appendText(t)
-      } else {
+      } else if (developerMode) {
         const diagnostic = userVisibleDiagnosticTextForEvent(entry.event)
-        if (diagnostic && developerMode) appendStderr(diagnostic)
-        else if (developerMode) appendEvent(entry)
+        if (diagnostic) appendStderr(diagnostic)
+        else appendEvent(entry)
+      } else if (TOOL_EVENT_TYPES.has(entry.event.type)) {
+        // Normal mode: surface a compact "what the agent did" line so
+        // tool activity isn't invisible (raw payloads stay dev-only).
+        appendActivity(entry.event)
       }
     } else if (entry.kind === 'stderr') {
       if (developerMode) {
@@ -626,9 +895,37 @@ function EventsView({ log, developerMode, workspacePath, workspaceId }: { log: A
         if (c.kind === 'events') {
           return <EventGroup key={i} entries={c.entries} workspacePath={workspacePath} />
         }
+        if (c.kind === 'activity') {
+          return <ActivityList key={i} events={c.events} workspacePath={workspacePath} />
+        }
         if (c.kind === 'diagnostic') return <DiagnosticBlock key={i} lines={c.lines} />
         return <StderrBlock key={i} lines={c.lines} />
       })}
+    </div>
+  )
+}
+
+/**
+ * Normal-mode "what the agent did" lines. Same shape as the live
+ * "Thinking…" status row, but each entry is a completed action, so the
+ * spinner is replaced by a muted check. (The live spinner version is
+ * still rendered by ChatThread's StatusIndicator while a turn runs.)
+ */
+function ActivityList({ events, workspacePath }: { events: AgentEvent[]; workspacePath?: string }) {
+  const lines: string[] = []
+  for (const ev of events) {
+    const label = labelForEvent(ev, workspacePath)
+    if (label && lines[lines.length - 1] !== label) lines.push(label)
+  }
+  if (lines.length === 0) return null
+  return (
+    <div className="space-y-0.5">
+      {lines.map((label, i) => (
+        <div key={i} className="flex items-center gap-2 py-1">
+          <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="text-sm text-muted-foreground">{label}</span>
+        </div>
+      ))}
     </div>
   )
 }

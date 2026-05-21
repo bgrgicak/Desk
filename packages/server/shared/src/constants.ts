@@ -16,6 +16,7 @@ export const MAX_MESSAGE_BYTES = 128 * 1024;
 export const DEFAULT_LIBRARY_PAGE_SIZE = 50;
 
 export const MESSAGE_ROLES = ["user", "agent", "system"] as const;
+export type MessageRole = (typeof MESSAGE_ROLES)[number];
 
 /** Kinds emitted by message.log_appended WS events. */
 export const MESSAGE_LOG_KINDS = ["stdout", "stderr", "event"] as const;

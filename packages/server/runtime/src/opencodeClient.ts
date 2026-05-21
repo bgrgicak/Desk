@@ -9,6 +9,8 @@
  */
 
 import { readOpencodeSseEvents, type OpencodeSseEvent } from "./opencodeEvents.js";
+import { withModule } from "@agent-desk/shared/logger";
+const log = withModule("runtime/opencodeClient");
 
 export interface OpencodeSessionInfo {
   id: string;
@@ -103,12 +105,13 @@ export class OpencodeClient {
    * parts (including tool calls, step boundaries, reasoning) to this
    * endpoint as they complete — the `sendMessage` response only
    * contains the parts known at HTTP-resolve time, which is before
-   * tool calls finish. Callers that need the full assistant turn
-   * (e.g. to synthesize non-text events the SSE stream doesn't carry)
-   * fetch this after `sendMessage` returns.
+   * tool calls finish. The driver also polls this endpoint to detect
+   * turn-terminal state authoritatively (see polling-as-truth in
+   * `driver.ts`); the per-call `signal` lets the polling loop bound
+   * each request so a wedged daemon surfaces fast.
    */
-  async listSessionMessages(sessionId: string): Promise<unknown[]> {
-    const r = await this.fetchRaw(`/session/${encodeURIComponent(sessionId)}/message`, { method: "GET" });
+  async listSessionMessages(sessionId: string, signal?: AbortSignal): Promise<unknown[]> {
+    const r = await this.fetchRaw(`/session/${encodeURIComponent(sessionId)}/message`, { method: "GET", signal });
     if (!r.ok) throw await this.toError(r, "GET /session/:id/message");
     const body = await r.json();
     return Array.isArray(body) ? body : [];
@@ -121,15 +124,28 @@ export class OpencodeClient {
    * the assistant message envelope. SSE events stream over the separate
    * `subscribeSessionEvents` channel — this method just round-trips the
    * synchronous run/response.
+   *
+   * `signal` lets the driver cancel an in-flight POST when polling
+   * detects the turn has already reached terminal state (the daemon
+   * sometimes holds the HTTP connection past the actual completion,
+   * and on a wedged-but-not-crashed daemon the request can hang
+   * indefinitely behind docker-proxy's accepted-but-unresponded socket).
+   * The polling loop in the driver is the authoritative source of
+   * "turn done"; this POST is a write+wait convenience, not a
+   * correctness requirement.
    */
-  async sendMessage(sessionId: string, input: SendMessageInput): Promise<unknown> {
+  async sendMessage(
+    sessionId: string,
+    input: SendMessageInput,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     return this.post(`/session/${encodeURIComponent(sessionId)}/message`, {
       providerID: input.providerID,
       modelID: input.modelID,
       parts: input.parts,
       ...(input.agent ? { agent: input.agent } : {}),
       ...(input.messageID ? { messageID: input.messageID } : {}),
-    });
+    }, signal);
   }
 
   // -------- SSE multiplexer --------------------------------------------
@@ -170,17 +186,55 @@ export class OpencodeClient {
    * `server.connected` event. Callers (the driver) `await` this before
    * dispatching a message so we never lose the per-message events to a
    * race against a still-handshaking SSE socket.
+   *
+   * **Why a timeout here is correct even though `sendMessage` has none:**
+   * the SSE handshake is bounded by construction — opencode-serve emits
+   * `server.connected` immediately on `GET /event`, before any model
+   * work. A healthy daemon handshakes in milliseconds. A daemon that
+   * goes silent at this stage is wedged (the only reason
+   * `server.connected` would never arrive is the daemon hanging before
+   * its event loop reaches the SSE writer). The timeout exists so a
+   * wedged daemon surfaces as a daemon-gone error the driver can recover
+   * from, instead of parking the whole run forever; it would never fire
+   * on a healthy long-running agent turn because handshake completes
+   * before the turn even begins.
+   *
+   * Default 60s is comfortably above the worst legitimate latency
+   * (cold-start on a loaded host, ~1-2s observed) and well below "user
+   * gives up and reloads".
    */
-  sseReady(): Promise<void> {
+  sseReady(timeoutMs: number = 60_000): Promise<void> {
     if (this.sseReady_) return Promise.resolve();
     if (this.sseReadyError) return Promise.reject(this.sseReadyError);
     this.ensureSseConnection();
-    return new Promise<void>((resolve) => {
+    return new Promise<void>((resolve, reject) => {
       if (this.sseReady_) {
         resolve();
         return;
       }
-      this.sseReadyResolvers.push(resolve);
+      let settled = false;
+      const wrappedResolve = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      this.sseReadyResolvers.push(wrappedResolve);
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        // Drop the orphan resolver so a late `server.connected` (e.g.
+        // daemon eventually comes back) doesn't fire on a rejected
+        // promise that's already been replaced upstream.
+        const idx = this.sseReadyResolvers.indexOf(wrappedResolve);
+        if (idx >= 0) this.sseReadyResolvers.splice(idx, 1);
+        reject(
+          new SseHandshakeTimeoutError(
+            `opencode-serve SSE handshake did not complete within ${timeoutMs}ms ` +
+              `(daemon appears wedged before its event loop reached the SSE writer)`,
+          ),
+        );
+      }, timeoutMs);
     });
   }
 
@@ -237,8 +291,7 @@ export class OpencodeClient {
             fn(evt);
           } catch (err) {
             // A bad subscriber shouldn't kill the multiplexer.
-            // eslint-disable-next-line no-console
-            console.warn("opencodeClient: subscriber threw", err);
+            log.warn({ err }, "opencodeClient: subscriber threw");
           }
         }
       }
@@ -261,8 +314,7 @@ export class OpencodeClient {
         try {
           fn(endError);
         } catch (err) {
-          // eslint-disable-next-line no-console
-          console.warn("opencodeClient: stream-end listener threw", err);
+          log.warn({ err }, "opencodeClient: stream-end listener threw");
         }
       }
     }
@@ -270,11 +322,12 @@ export class OpencodeClient {
 
   // -------- Low-level helpers ------------------------------------------
 
-  private async post<T>(path: string, body: unknown): Promise<T> {
+  private async post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
     const r = await this.fetchRaw(path, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
+      signal,
     });
     if (!r.ok) throw await this.toError(r, `POST ${path}`);
     // Many opencode endpoints return JSON; a few (DELETE on session) return `true`.
@@ -308,9 +361,26 @@ async function safeText(r: Response): Promise<string> {
   }
 }
 
+/**
+ * Thrown by `sseReady()` when the SSE handshake doesn't complete in
+ * time. Treated as a recoverable daemon-gone signal by the driver
+ * (`isServerGoneError`) — the daemon is wedged before its event loop
+ * reached the SSE writer, so the only recovery is restart.
+ */
+export class SseHandshakeTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SseHandshakeTimeoutError";
+  }
+}
+
 /** True iff `err` looks like the server stopped accepting connections (ECONNREFUSED etc.). */
 export function isServerGoneError(err: unknown): boolean {
   if (!err) return false;
+  // Wedged-daemon SSE handshake is operationally the same as a
+  // crashed daemon — only a restart will recover. Surface it to the
+  // driver's recovery loop through the same predicate.
+  if (err instanceof SseHandshakeTimeoutError) return true;
   const e = err as { cause?: { code?: string }; code?: string; message?: string };
   const code = e.cause?.code ?? e.code ?? "";
   if (code === "ECONNREFUSED" || code === "ECONNRESET" || code === "ENOTFOUND") return true;

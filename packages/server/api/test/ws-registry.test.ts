@@ -39,8 +39,8 @@ describe("WS registry", () => {
         workspaceId: "wks_test",
         agentId: "agt_test",
         title: "Test",
+        createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        awaitingUser: false,
         unread: false,
       },
     };
@@ -66,8 +66,8 @@ describe("WS registry", () => {
         workspaceId: "wks_test",
         agentId: "agt_test",
         title: "Test",
+        createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        awaitingUser: false,
         unread: false,
       },
     };
@@ -92,8 +92,8 @@ describe("WS registry", () => {
         workspaceId: "wks_test",
         agentId: "agt_test",
         title: "Test",
+        createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        awaitingUser: false,
         unread: false,
       },
     });

@@ -40,7 +40,7 @@ beforeAll(async () => {
   await runMigrations(pool);
 
   process.env.DESK_SEED_USERNAME = "testuser";
-  process.env.DESK_SEED_PASSWORD = "testpass";
+  process.env.DESK_SEED_PASSWORD = "test-pass-1234";
   await seedIfEmpty(pool);
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-routes-cov-"));
@@ -202,7 +202,7 @@ describe("Routes coverage (real Postgres)", () => {
     // Login
     const res = await request("POST", "/auth/login", undefined, {
       username: "testuser",
-      password: "testpass",
+      password: "test-pass-1234",
     });
     token = (res.body as { token: string }).token;
 
@@ -222,8 +222,8 @@ describe("Routes coverage (real Postgres)", () => {
   // ── 1. POST /me/password ─────────────────────────────────────────
   it("POST /me/password — new password works for login, old fails", async () => {
     const changeRes = await request("POST", "/me/password", token, {
-      currentPassword: "testpass",
-      newPassword: "newpass123",
+      currentPassword: "test-pass-1234",
+      newPassword: "new-pass-strong-1",
     });
     expect(changeRes.status).toBe(200);
     expect((changeRes.body as { ok: boolean }).ok).toBe(true);
@@ -231,7 +231,7 @@ describe("Routes coverage (real Postgres)", () => {
     // Login with new password succeeds
     const okLogin = await request("POST", "/auth/login", undefined, {
       username: "testuser",
-      password: "newpass123",
+      password: "new-pass-strong-1",
     });
     expect(okLogin.status).toBe(200);
     expect((okLogin.body as { token: string }).token).toMatch(/^ses_/);
@@ -239,14 +239,14 @@ describe("Routes coverage (real Postgres)", () => {
     // Login with old password fails
     const failLogin = await request("POST", "/auth/login", undefined, {
       username: "testuser",
-      password: "testpass",
+      password: "test-pass-1234",
     });
     expect(failLogin.status).toBe(401);
 
     // Restore original password for other tests
     await request("POST", "/me/password", token, {
-      currentPassword: "newpass123",
-      newPassword: "testpass",
+      currentPassword: "new-pass-strong-1",
+      newPassword: "test-pass-1234",
     });
   });
 
@@ -260,7 +260,7 @@ describe("Routes coverage (real Postgres)", () => {
     // Login with original password still works
     const okLogin = await request("POST", "/auth/login", undefined, {
       username: "testuser",
-      password: "testpass",
+      password: "test-pass-1234",
     });
     expect(okLogin.status).toBe(200);
   });
@@ -776,7 +776,10 @@ describe("Routes coverage (real Postgres)", () => {
   });
 
   it("PATCH /chats/:id — unread: false marks chat as read", async () => {
-    // Create a chat and insert a message to mark it unread.
+    // Create a chat and flip it to unread directly. Only agent-authored
+    // visible messages flip chats.unread, and the user-facing POST /messages
+    // route inserts a user row — so seed unread via SQL to keep the test
+    // focused on the PATCH behavior we're exercising here.
     const createRes = await request("POST", "/chats", token, {
       workspaceId,
       agentId,
@@ -785,11 +788,7 @@ describe("Routes coverage (real Postgres)", () => {
     expect(createRes.status).toBe(201);
     const chat = createRes.body as { id: string };
 
-    // Sending a message sets chats.unread = 1 via the DB trigger.
-    const msgRes = await request("POST", `/chats/${chat.id}/messages`, token, {
-      content: "hello",
-    });
-    expect(msgRes.status).toBe(201);
+    await pool.query("UPDATE chats SET unread = 1 WHERE id = ?", [chat.id]);
 
     // Confirm the chat is now unread.
     const getRes1 = await request("GET", `/chats/${chat.id}`, token);
@@ -815,10 +814,9 @@ describe("Routes coverage (real Postgres)", () => {
     });
     const chat = createRes.body as { id: string };
 
-    // Make it unread via a message.
-    await request("POST", `/chats/${chat.id}/messages`, token, {
-      content: "trigger unread",
-    });
+    // Seed unread directly — user POSTs don't flip the flag under the
+    // tightened semantics.
+    await pool.query("UPDATE chats SET unread = 1 WHERE id = ?", [chat.id]);
 
     // PATCH both title and unread in one call.
     const patchRes = await request("PATCH", `/chats/${chat.id}`, token, {

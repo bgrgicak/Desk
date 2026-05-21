@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Check } from 'lucide-react'
 import { Button, Input, Textarea, cn } from '@agent-desk/ui'
+import { getSessionToken, setSessionToken } from '@/auth/session'
+import { extractApiError } from '@/lib/api-error'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -377,6 +379,8 @@ interface SignupScreenProps {
 
 export function SignupScreen({ onSignIn, onComplete }: SignupScreenProps) {
   const [step, setStep] = useState<Step>(0)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const [account, setAccount] = useState<AccountData>({
     username: '', email: '', password: '', confirmPassword: '',
@@ -393,12 +397,17 @@ export function SignupScreen({ onSignIn, onComplete }: SignupScreenProps) {
     scrollRef.current?.scrollTo({ top: 0 })
   }, [step])
 
+  // Password policy on the server is min length 12 — match it here so
+  // the user gets fast feedback instead of a 400 on submit.
+  const PASSWORD_MIN_LENGTH = 12
+
   const canProceed = (() => {
+    if (isSubmitting) return false
     if (step === 0) {
       return (
         account.username.trim() &&
         account.email.trim() &&
-        account.password.length >= 6 &&
+        account.password.length >= PASSWORD_MIN_LENGTH &&
         account.password === account.confirmPassword
       )
     }
@@ -407,6 +416,8 @@ export function SignupScreen({ onSignIn, onComplete }: SignupScreenProps) {
   })()
 
   const primaryLabel = (() => {
+    if (isSubmitting && step === 0) return 'Creating account…'
+    if (isSubmitting && step === 2) return 'Saving…'
     if (step === 0) return 'Set up workspace'
     if (step === 1) return 'Set up AI'
     const hasCredentials = aiSetup.kind && aiSetup.apiKey.trim()
@@ -414,11 +425,117 @@ export function SignupScreen({ onSignIn, onComplete }: SignupScreenProps) {
   })()
 
   const handlePrimary = async () => {
-    if (step < 2) {
-      setStep(s => (s + 1) as Step)
-    } else {
-      onComplete()
+    setError(null)
+    if (step === 0) {
+      // Step 0 → 1: create the account on the server. On success the
+      // session token is stored so subsequent steps (provider keys) can
+      // hit authenticated endpoints. The server also bootstraps a hub
+      // workspace for the new user so the SPA lands on a real
+      // workspace, not "No workspaces".
+      setIsSubmitting(true)
+      try {
+        const res = await fetch('/api/auth/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: account.username.trim(),
+            email: account.email.trim(),
+            password: account.password,
+          }),
+        })
+        if (res.status !== 200) {
+          let message = `Signup failed (${res.status}).`
+          try {
+            const body = (await res.json()) as { message?: string }
+            if (body.message) message = body.message
+          } catch {
+            // Non-JSON response; keep the default message.
+          }
+          setError(message)
+          return
+        }
+        const body = (await res.json()) as { token: string }
+        setSessionToken(body.token)
+        setStep(1)
+      } catch (err) {
+        setError(extractApiError(err) ?? 'Network error while creating account.')
+      } finally {
+        setIsSubmitting(false)
+      }
+      return
     }
+    if (step === 1) {
+      // Persist the workspace details the user typed in step 1.  The
+      // server's `handleSignup` already created the user's hub; this
+      // call adds a *project* workspace with the chosen name/icon so
+      // the wizard's preview doesn't lie ("you created General" but
+      // no row landed).  A failure surfaces inline and lets the user
+      // retry — we don't advance to step 2 until the workspace is in.
+      const trimmedName = workspace.name.trim()
+      if (trimmedName) {
+        setIsSubmitting(true)
+        try {
+          const res = await fetch('/api/workspaces', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${getSessionToken()}`,
+            },
+            body: JSON.stringify({
+              name: trimmedName,
+              icon: workspace.emoji,
+              color: workspace.color,
+              description: workspace.description || undefined,
+            }),
+          })
+          if (!res.ok) {
+            setError(`Could not create workspace (${res.status}).`)
+            return
+          }
+        } catch (err) {
+          setError(extractApiError(err) ?? 'Network error while creating workspace.')
+          return
+        } finally {
+          setIsSubmitting(false)
+        }
+      }
+      setStep(2)
+      return
+    }
+    // Step 2 → done. If the user provided an AI provider key, persist
+    // it via the standard provider-keys endpoint; otherwise jump to the
+    // workspace. A failure to save the key surfaces an inline error
+    // and does not block the user from finishing onboarding.
+    if (aiSetup.kind && aiSetup.apiKey.trim()) {
+      setIsSubmitting(true)
+      try {
+        const envKey = aiSetup.kind === 'claude' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY'
+        const res = await fetch('/api/me/providers', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${getSessionToken() ?? ''}`,
+          },
+          body: JSON.stringify({ providers: { [envKey]: aiSetup.apiKey.trim() } }),
+        })
+        if (res.status !== 200) {
+          let message = `Saving API key failed (${res.status}).`
+          try {
+            const body = (await res.json()) as { message?: string }
+            if (body.message) message = body.message
+          } catch {
+            // Non-JSON response.
+          }
+          setError(`${message} You can add the key later in Settings.`)
+          // Continue anyway so the user isn't stuck.
+        }
+      } catch (err) {
+        setError(`${extractApiError(err) ?? 'Network error saving API key.'} You can add the key later in Settings.`)
+      } finally {
+        setIsSubmitting(false)
+      }
+    }
+    onComplete()
   }
 
   return (
@@ -473,11 +590,15 @@ export function SignupScreen({ onSignIn, onComplete }: SignupScreenProps) {
 
           {/* Footer — no top border, sticks at bottom via shrink-0 */}
           <div className="shrink-0 px-6 pb-6 pt-4 space-y-3">
+            {error && (
+              <p data-testid="signup-error" className="text-sm text-destructive">{error}</p>
+            )}
             <div className="flex flex-col gap-2">
               <Button
                 className="w-full"
                 disabled={!canProceed}
                 onClick={handlePrimary}
+                data-testid="signup-primary"
               >
                 {primaryLabel}
               </Button>

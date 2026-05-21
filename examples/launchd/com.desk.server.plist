@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+launchd plist for desk-server (macOS user-agent).
+
+Install:
+  cp examples/launchd/com.desk.server.plist ~/Library/LaunchAgents/
+  launchctl load ~/Library/LaunchAgents/com.desk.server.plist
+  launchctl start com.desk.server
+
+Logs: ~/Library/Logs/desk-server.{out,err}.log
+
+Edit the ProgramArguments path and the EnvironmentVariables block for
+your install. Desk needs Docker / Docker Desktop running already; this
+plist does not start Docker.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.desk.server</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/Users/you/Desk/packages/server/api/dist/main.js</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/you/Desk</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DESK_HOME</key>
+    <string>/Users/you/Desk-data</string>
+    <key>DESK_DB_PATH</key>
+    <string>/Users/you/Desk-data/.database/desk.sqlite3</string>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <!-- desk-server respects SIGTERM for graceful shutdown (see
+       DESK_SHUTDOWN_GRACE_MS, default 30s). Give launchd a matching
+       wait window. -->
+  <key>ExitTimeOut</key>
+  <integer>40</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/you/Library/Logs/desk-server.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/you/Library/Logs/desk-server.err.log</string>
+</dict>
+</plist>

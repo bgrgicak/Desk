@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canRenderInline, inlineAppPreviewFor } from './InlineArtifactPreview'
+import { inlineAppPreviewFor } from './InlineArtifactPreview'
 
 describe('inlineAppPreviewFor', () => {
   it('previews bare .app artifact refs as library apps', () => {
@@ -38,18 +38,5 @@ describe('inlineAppPreviewFor', () => {
 
   it('ignores non-app refs', () => {
     expect(inlineAppPreviewFor('notes.md', 'notes.md', 'text/markdown')).toBeNull()
-  })
-})
-
-describe('canRenderInline', () => {
-  it.each(['app', 'html', 'image', 'text', 'pdf', 'docx', 'video', 'audio'] as const)(
-    'supports %s previews inline',
-    (kind) => {
-      expect(canRenderInline(kind)).toBe(true)
-    },
-  )
-
-  it('rejects unknown previews', () => {
-    expect(canRenderInline('unknown')).toBe(false)
   })
 })

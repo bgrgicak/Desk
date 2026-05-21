@@ -56,10 +56,24 @@ export const test = base.extend<Fixtures>({
     await use(await fetchToken(serverUrl, SEED_USERNAME, SEED_PASSWORD));
   },
 
-  loggedInPage: async ({ page, baseURL, token }, use) => {
+  loggedInPage: async ({ page, baseURL, serverUrl, token }, use) => {
     if (!baseURL) throw new Error("playwright baseURL is required");
     await seedSessionToken(page.context(), new URL(baseURL).origin, token);
-    await page.goto(baseURL);
+    // The root path now renders the multi-workspace Home picker rather
+    // than auto-redirecting into the first room. Pre-resolve the seeded
+    // workspace and land directly inside it so existing specs can keep
+    // assuming the per-room sidebar (Tasks / Library / Customize) is
+    // mounted right after login.
+    const workspaces = (await (
+      await fetch(`${serverUrl}/workspaces`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+    ).json()) as Array<{ id: string }>;
+    const wsId = workspaces[0]?.id;
+    const landing = wsId
+      ? new URL(`/w/${wsId}/pinned?chat=new`, baseURL).toString()
+      : baseURL;
+    await page.goto(landing);
     await use(page);
   },
 });

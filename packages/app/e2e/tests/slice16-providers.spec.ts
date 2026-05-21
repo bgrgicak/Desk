@@ -8,7 +8,7 @@
 import { test, expect } from "../fixtures";
 
 async function openChatGPTConnection(page: import("@playwright/test").Page) {
-  await page.getByRole("button", { name: /Customize/ }).click();
+  await page.getByRole("button", { name: /Settings/ }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Connections$/i }).click();
   // The Connections tab now renders two sections under the same `div.group`
@@ -31,7 +31,7 @@ async function openChatGPTConnection(page: import("@playwright/test").Page) {
 }
 
 async function openGitHubConnection(page: import("@playwright/test").Page) {
-  await page.getByRole("button", { name: /Customize/ }).click();
+  await page.getByRole("button", { name: /Settings/ }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Connections$/i }).click();
   await dialog.getByRole("button", { name: "Add", exact: true }).click();
@@ -83,7 +83,7 @@ test("adding an API-key connection saves the key from the footer action", async 
 }) => {
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible({ timeout: 10_000 });
 
-  await loggedInPage.getByRole("button", { name: /Customize/ }).click();
+  await loggedInPage.getByRole("button", { name: /Settings/ }).click();
   const dialog = loggedInPage.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Connections$/i }).click();
   await dialog.getByRole("button", { name: "Add", exact: true }).click();

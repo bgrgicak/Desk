@@ -320,7 +320,10 @@ on every sandbox spawn / exec and forwards the resulting env vars (e.g.
 
 | Method | Path                           | Description                                     |
 |--------|--------------------------------|-------------------------------------------------|
-| GET    | /library?workspaceId=&cursor=&limit= | List library files in the given workspace  |
+| GET    | /library?workspaceId=&path=    | List the immediate children of one folder (root by default) |
+| GET    | /library?workspaceId=&pinned=true | List every pinned entry workspace-wide       |
+| GET    | /library/folders?workspaceId=  | Folders-only recursive tree (no file metadata)  |
+| GET    | /library/search?workspaceId=&q= | Capped (200) recursive name search             |
 | POST   | /library?workspaceId=          | Upload to library (multipart/form-data)         |
 | PUT    | /library/content?path=&workspaceId=  | Save content to a file (upsert — creates if missing) |
 | POST   | /library/link?workspaceId=     | Save a URL as a host-native shortcut file       |
@@ -330,13 +333,20 @@ on every sandbox spawn / exec and forwards the resulting env vars (e.g.
 | GET    | /library/download?path=&workspaceId= | Stream a library file (for download)            |
 
 Library files live flat at the workspace root on disk
-(`~/Desk/desk/`). There is no DB index; listing walks the
-directory and skips dot-prefixed entries (`.chats/`, `.memory/`, etc.)
-unless `showHidden=true` is set. Hidden (dot-prefixed) files are
-otherwise identical to regular files — all CRUD operations work the
-same way. File identifiers are workspace-root-relative paths (`foo.pdf`,
-`notes/bar.md`, `.memory/workspace.md`). The `path` query parameter is
-url-encoded.
+(`~/Desk/desk/`). There is no DB index; the list endpoint reads one
+directory at a time (no recursion) and skips dot-prefixed entries
+(`.chats/`, `.memory/`, etc.) unless `showHidden=true` is set. Use
+`/library/folders` when you need the full folder tree (move-picker,
+breadcrumb) and `/library/search` for name matching across the
+workspace — these are the only endpoints that walk recursively. Hidden
+(dot-prefixed) files are otherwise identical to regular files — all
+CRUD operations work the same way. File identifiers are
+workspace-root-relative paths (`foo.pdf`, `notes/bar.md`,
+`.memory/workspace.md`). The `path` query parameter is url-encoded.
+
+Connected local-filesystem mounts surface as top-level folder entries
+on the root listing (e.g. `Downloads`); drilling into them resolves
+through to the host directory transparently.
 
 ### Links (`POST /library/link`)
 
@@ -379,7 +389,7 @@ Lists messages across all of the caller's chats with AND-combined filters. Read-
 | `chatId` | `chat_*` | Restrict to a single chat. |
 | `state` | one of `pending\|running\|succeeded\|failed\|cancelled`, or comma-separated list | Filter by `Message.state`. |
 | `scheduled` | `true\|false` | `true` = only rows with `executeAt IS NOT NULL OR cron IS NOT NULL`. `false` = only unscheduled. |
-| `awaitingUser` | `true\|false` | Matches messages in chats whose `awaitingUser` flag is set. |
+| `unread` | `true\|false` | Matches the latest succeeded agent message in each chat whose `unread` flag is set (chat has agent activity the user hasn't opened yet). |
 | `contentKind` | one of the `Message.content` discriminants (comma-separated list accepted) | `text\|toolCall\|toolResult\|artifactRef\|events\|summary\|summary_request\|agent_turn` |
 | `since` | ISO-8601 timestamp | `createdAt > since` (reconnect catchup). |
 | `cursor` | opaque string | Same shape as `GET /chats/{id}/messages?cursor=`. |
@@ -394,7 +404,7 @@ Malformed params → 400. Non-owned `workspaceId` / `chatId` → 404.
 - Runs "Upcoming": `?scheduled=true&state=pending`
 - Runs "Active": `?state=running`
 - Runs "Completed / Cancelled / Failed": `?scheduled=true&state=succeeded,failed,cancelled`
-- Today / Inbox "Due now": `?awaitingUser=true`
+- Today / Inbox "Due now": `?unread=true`
 - Artifact badges: `?contentKind=artifactRef&since=…`
 
 ## Runs and scheduled jobs

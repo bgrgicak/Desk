@@ -2,6 +2,8 @@ import { type Pool, queries } from "@agent-desk/db";
 import { CONNECTION_ENV_VARS } from "@agent-desk/shared";
 import type { VaultStore } from "./vault/store.js";
 import { readCredentials } from "./connectors/credentialStore.js";
+import { withModule } from "@agent-desk/shared/logger";
+const log = withModule("api/providerKeys");
 
 /**
  * Resolves the connector credentials that should populate the sandbox env
@@ -68,7 +70,7 @@ export async function resolveProviderKeys(
   // to debug "I added a key but the sandbox can't see it" without
   // multiplying noise by the number of registered providers.
   if (vault && vault.isLocked(resolvedUserId)) {
-    console.warn(
+    log.warn(
       `resolveProviderKeys: vault is locked for user ${resolvedUserId} — ` +
         `no connector credentials will be forwarded to the sandbox until /vault/unlock`,
     );
@@ -82,7 +84,7 @@ export async function resolveProviderKeys(
     try {
       Object.assign(out, await handler.resolve(ctx, connection));
     } catch (err) {
-      console.warn(`provider ${handler.providerId} resolution failed:`, err instanceof Error ? err.message : err);
+      log.warn({ providerId: handler.providerId, err: err instanceof Error ? err.message : String(err) }, "provider resolution failed");
     }
   }
   return out;
@@ -132,7 +134,7 @@ function readSecretValue(
     // row in DB but no credential in vault) and worth surfacing per
     // provider so the operator can identify which connection is broken.
     if (!ctx.vault?.isLocked(ctx.userId)) {
-      console.warn(
+      log.warn(
         `provider ${envVarForLog}: connection ${connectionId} (providerId=${providerId}) has no readable vault entry — sandbox will not see this key`,
       );
     }
@@ -140,7 +142,7 @@ function readSecretValue(
   }
   const value = stringField(credentials.value) ?? stringField(credentials.token);
   if (!value) {
-    console.warn(
+    log.warn(
       `provider ${envVarForLog}: connection ${connectionId} (providerId=${providerId}) vault entry missing value/token field`,
     );
     return null;

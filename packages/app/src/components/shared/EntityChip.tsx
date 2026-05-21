@@ -1,8 +1,24 @@
-import { MessageSquare, PanelTop } from 'lucide-react'
+import { MessageSquare, PanelTop, Zap, Sparkles, FileText, type LucideIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { buildPath } from '@/router/nav'
 
-export type EntityChipKind = 'chat' | 'workspace'
+export type EntityChipKind = 'chat' | 'workspace' | 'task' | 'artifact' | 'file'
+
+const ENTITY_ICON: Record<EntityChipKind, LucideIcon> = {
+  chat: MessageSquare,
+  workspace: PanelTop,
+  task: Zap,
+  artifact: Sparkles,
+  file: FileText,
+}
+
+const ENTITY_NOUN: Record<EntityChipKind, string> = {
+  chat: 'Chat',
+  workspace: 'Workspace',
+  task: 'Task',
+  artifact: 'Artifact',
+  file: 'File',
+}
 
 interface EntityChipProps {
   kind: EntityChipKind
@@ -23,14 +39,19 @@ function fallbackId(id: string): string {
 }
 
 export function EntityChip({ kind, id, title, workspaceId }: EntityChipProps) {
-  const Icon = kind === 'chat' ? MessageSquare : PanelTop
+  const Icon = ENTITY_ICON[kind]
   const label = compactTitle(title || fallbackId(id))
-  const href = kind === 'workspace'
-    ? buildPath(id, 'pinned')
-    : workspaceId
-      ? buildPath(workspaceId, 'pinned', { chat: id })
-      : null
-  const chipTitle = title ? `${kind === 'chat' ? 'Chat' : 'Workspace'}: ${title} (${id})` : id
+  const href = (() => {
+    if (kind === 'workspace') return buildPath(id, 'pinned')
+    if (!workspaceId) return null
+    switch (kind) {
+      case 'chat': return buildPath(workspaceId, 'pinned', { chat: id })
+      case 'task': return buildPath(workspaceId, 'tasks', { task: id })
+      case 'artifact': return buildPath(workspaceId, 'pinned', { artifact: id })
+      case 'file': return buildPath(workspaceId, 'context', { item: id })
+    }
+  })()
+  const chipTitle = title ? `${ENTITY_NOUN[kind]}: ${title} (${id})` : id
   const className = "inline-flex max-w-[18rem] items-center gap-1 rounded border border-border/50 bg-muted px-1.5 py-0.5 align-baseline text-xs font-medium text-foreground no-underline transition-colors hover:bg-muted/80 aria-disabled:cursor-default aria-disabled:opacity-70"
 
   const contents = <>

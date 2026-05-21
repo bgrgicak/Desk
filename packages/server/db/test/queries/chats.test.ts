@@ -44,7 +44,7 @@ describe("chats queries", () => {
     });
     expect(chat.id).toBe(chatId);
     expect(chat.title).toBe("Hello");
-    expect(chat.awaitingUser).toBe(false);
+    expect(chat.unread).toBe(false);
   });
 
   it("finds by id", async () => {
@@ -56,6 +56,112 @@ describe("chats queries", () => {
   it("lists with latest message", async () => {
     const list = await chats.listWithLatestMessage(pool, wsId);
     expect(list.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("lastMessage prefers the agent's events output over an older user prompt", async () => {
+    // Real agent replies land as `type=events` with a `log` array,
+    // not `type=text`.  Without explicit handling for `events`, the
+    // sidebar would still preview the user's last typed prompt
+    // forever — what the reviewer flagged in PR #116.
+    const chatId = generateId("chat");
+    await chats.insert(pool, { id: chatId, workspaceId: wsId, agentId, title: "Events preview" });
+    // User prompt (older).
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "user",
+      content: { type: "text", text: "How do tasks work?" },
+    });
+    // `created_at` defaults to `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')` (ms
+    // precision). On fast CI runners two back-to-back inserts can land in
+    // the same millisecond, and `listWithLatestMessage`'s subquery then
+    // tiebreaks by `id DESC` — but `generateId` produces a random nanoid,
+    // so the user prompt can randomly win the tiebreak and the wrong
+    // preview gets surfaced. A 2ms pause guarantees the agent reply's
+    // timestamp sorts strictly after the user prompt's.
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    // Agent's events-shaped reply with two visible text parts.
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "agent",
+      content: {
+        type: "events",
+        log: [
+          { kind: "event", event: { type: "text", part: { text: "Tasks are " } } },
+          { kind: "stderr", line: "noise that should not appear in the preview" },
+          { kind: "event", event: { type: "text", part: { text: "scheduled messages." } } },
+        ],
+      },
+    });
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    const entry = list.find((c) => c.id === chatId);
+    expect(entry?.lastMessage).toBe("Tasks are scheduled messages.");
+  });
+
+  it("lastMessage previews the newest visible user/agent text message", async () => {
+    const chatId = generateId("chat");
+    await chats.insert(pool, { id: chatId, workspaceId: wsId, agentId, title: "Preview chat" });
+
+    // Newest non-text payload first; should NOT win the preview.
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "agent",
+      content: { type: "artifactRef", path: "x.txt", name: "x", workspaceId: wsId },
+    });
+    // User text — should be the preview.
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "user",
+      content: { type: "text", text: "  hello\n  there\t friend  " },
+    });
+    // Internal trigger row — must not win even though it's the newest row.
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "system",
+      content: { type: "agent_turn", userMessageId: "ignored" },
+    });
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    const entry = list.find((c) => c.id === chatId);
+    expect(entry?.lastMessage).toBe("hello there friend");
+  });
+
+  it("lastMessage is empty when the chat has no visible text messages", async () => {
+    const chatId = generateId("chat");
+    await chats.insert(pool, { id: chatId, workspaceId: wsId, agentId, title: "No text" });
+    // Only an internal agent_turn row — no user/agent text yet.
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "system",
+      content: { type: "agent_turn", userMessageId: "ignored" },
+    });
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    const entry = list.find((c) => c.id === chatId);
+    expect(entry?.lastMessage).toBe("");
+  });
+
+  it("lastMessage truncates at 200 chars with an ellipsis", async () => {
+    const chatId = generateId("chat");
+    await chats.insert(pool, { id: chatId, workspaceId: wsId, agentId, title: "Long preview" });
+    const longText = "x".repeat(500);
+    await messages.insert(pool, {
+      id: generateId("message"),
+      chatId,
+      role: "user",
+      content: { type: "text", text: longText },
+    });
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    const entry = list.find((c) => c.id === chatId);
+    expect(entry?.lastMessage).toHaveLength(200);
+    expect(entry?.lastMessage.endsWith("…")).toBe(true);
   });
 
   it("kind picks the newest user-action kind; chat and summary are fallbacks", async () => {
@@ -399,12 +505,6 @@ describe("chats queries", () => {
     await chats.markRead(pool, chatId);
     const chat = await chats.findById(pool, chatId);
     expect(chat!.unread).toBe(false);
-  });
-
-  it("sets awaiting user", async () => {
-    await chats.setAwaitingUser(pool, chatId, true);
-    const chat = await chats.findById(pool, chatId);
-    expect(chat!.awaitingUser).toBe(true);
   });
 
   it("clearOpencodeSessionsForAgent: nulls every chat using the agent and reports them", async () => {

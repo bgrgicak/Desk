@@ -10,18 +10,21 @@ import {
   Search,
   LayoutGrid,
   LayoutList,
+  ListFilter,
   MessageSquarePlus,
   MoreHorizontal,
   Download,
   Trash2,
   ChevronDown,
-  ChevronRight,
   Sparkles,
   Shapes,
   FileText,
   StickyNote,
   Link2,
   EyeOff,
+  Pin,
+  PinOff,
+  X,
   type LucideIcon,
 } from 'lucide-react'
 import {
@@ -33,14 +36,9 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
   Button,
   Checkbox,
+  cn,
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -58,43 +56,49 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Input,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  RadioGroup,
+  RadioGroupItem,
   Skeleton,
+  useIsMobile,
 } from '@agent-desk/ui'
-import { PageHeader } from '@/components/layout/PageHeader'
-import type { ContextItem } from '@/data/ui-types'
-import {
-  getRelativeTime,
-  getFolderById,
-  getFolderPath,
-  getChildFolders,
-  getItemsInFolder,
-  countDirectChildren,
-} from '@/data/ui-types'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { TopBarActions, TopBarContentActions } from '@/components/layout/TopBar'
+import { useContentAreaInsets } from '@/components/shared/splitPane'
+import type { ContextItem, Folder } from '@/data/ui-types'
+import { getRelativeTime } from '@/data/ui-types'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import {
   useCreateLibraryFolderMutation,
   useCreateLibraryLinkMutation,
   useDeleteLibraryFileMutation,
+  useGetLibraryFoldersQuery,
   useGetLibraryQuery,
+  useLazyGetLibraryQuery,
   useMoveLibraryEntryMutation,
   useUploadLibraryFileMutation,
 } from '@/store/api'
 import { downloadLibraryFile } from '@/store/library-download'
 import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone'
-import { toContextItem, toFolderList } from '@/store/selectors/library'
-import { LibraryCard } from '@/components/library/LibraryCard'
+import { toContextItem, toFolderList, type MoveTarget } from '@/store/selectors/library'
+import { MoveToFolderDialog } from '@/components/library/MoveToFolderDialog'
+import { DRAG_TYPE_LIBRARY_ITEM, LibraryCard } from '@/components/library/LibraryCard'
 import { ArtifactCreationSheet, type ArtifactCreateInput } from '@/components/artifact/ArtifactCreationSheet'
 import { toast } from 'sonner'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { usePrefs } from '@/hooks/use-prefs'
 
 interface ContextListProps {
-  items: ContextItem[]
-  isLoading?: boolean
   onItemClick: (item: ContextItem) => void
   onCompose: (attachedItems?: ContextItem[]) => void
   onPinItem?: (item: ContextItem) => void
   onUnpinItem?: (item: ContextItem) => void
+  /** Pins/unpins a directory. Optional so non-pinning surfaces don't show
+   *  the action. Routes through the same library-pins endpoint as files —
+   *  paths and folder paths share one pin store. */
+  onPinFolder?: (folder: Folder) => void
+  onUnpinFolder?: (folder: Folder) => void
   onCreateArtifact?: (input: ArtifactCreateInput) => Promise<void>
   onSkipToChat?: (agentId?: string) => Promise<void>
 }
@@ -125,7 +129,18 @@ const TYPE_FILTER_ICONS: Record<TypeFilter, LucideIcon> = {
 const HIDDEN_FILTER: { value: TypeFilter; label: string } = { value: 'hidden', label: 'Hidden' }
 
 
-export function ContextList({ items, isLoading, onItemClick, onCompose, onPinItem, onUnpinItem, onCreateArtifact, onSkipToChat }: ContextListProps) {
+export function ContextList({ onItemClick, onCompose, onPinItem, onUnpinItem, onPinFolder, onUnpinFolder, onCreateArtifact, onSkipToChat }: ContextListProps) {
+  // The Library list has no conversation, so the global avatar stack
+  // shouldn't appear over its header (insets irrelevant while hidden).
+  useContentAreaInsets('0px', '0px', { hidden: true })
+
+  // Mobile (<768px) renders the six-control toolbar (type / search /
+  // view / use-in-chat / upload / create) inline above the list
+  // instead of portaling into the top bar — there it overflows the
+  // narrow actions slot and overlaps the breadcrumb on the left
+  // (seen on iPhone-SE-class viewports).
+  const isMobile = useIsMobile()
+
   const [searchQuery, setSearchQuery] = useState('')
   const [typeFilter, setTypeFilter] = usePersistedState<TypeFilter>('desk.context.typeFilter', 'all')
   const [viewMode, setViewMode] = usePersistedState<ViewMode>('desk.context.viewMode', 'list')
@@ -152,34 +167,69 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
   // it survives unmount/remount when the user opens a file detail and comes
   // back, and so breadcrumb links in the detail view can jump straight to a
   // specific folder.
-  const [searchParams, setSearchParams] = useSearchParams()
+  const [searchParams] = useSearchParams()
   const currentFolderId = searchParams.get('folder') || null
   const [uploadLibraryFile, uploadState] = useUploadLibraryFileMutation()
   const [deleteLibraryFile] = useDeleteLibraryFileMutation()
   const [createLibraryFolder] = useCreateLibraryFolderMutation()
   const [createLibraryLink] = useCreateLibraryLinkMutation()
   const [moveLibraryEntry] = useMoveLibraryEntryMutation()
-  // Hidden mode pulls the showHidden=true superset directly so hidden entries
-  // are included in addition to the normal visible library contents.
-  const { currentData: libraryResp, isLoading: internalLoading, isUninitialized: internalUninitialized } = useGetLibraryQuery(
+  // Folder-scoped listing. The previous workspace-wide recursive query
+  // (used both here and globally in App.tsx) shipped every file's
+  // metadata to the client on every navigation — fine for tens of items,
+  // catastrophic for a home-dir-sized workspace where it ballooned to
+  // 300+ MB. Now each folder is its own request; hidden mode still
+  // toggles the showHidden=true superset but scoped to this folder only.
+  const { currentData: libraryResp, isLoading: internalLoading, isFetching: internalFetching, isUninitialized: internalUninitialized } = useGetLibraryQuery(
     activeWorkspaceId
-      ? { workspaceId: activeWorkspaceId, ...(isHiddenMode ? { showHidden: true } : {}) }
+      ? {
+          workspaceId: activeWorkspaceId,
+          path: currentFolderId ?? undefined,
+          ...(isHiddenMode ? { showHidden: true } : {}),
+        }
       : undefined,
     { skip: !activeWorkspaceId },
   )
 
-  // Treat the list as loading until both the parent AND internal queries have
-  // settled with data.  This closes every gap where `isLoading` (prop) flips
-  // false one render before data has propagated — the empty "Nothing yet"
-  // screen never appears while data is still in flight.
-  const resolvedLoading = isLoading || internalLoading || internalUninitialized || !libraryResp
-
   const effectiveItems: ContextItem[] = useMemo(() => {
-    if (!isHiddenMode) return items
     if (!activeWorkspaceId) return []
-    return (libraryResp?.items ?? [])
-      .map(f => toContextItem(f, activeWorkspaceId))
-  }, [isHiddenMode, items, libraryResp, activeWorkspaceId])
+    return (libraryResp?.items ?? []).map(f => toContextItem(f, activeWorkspaceId))
+  }, [libraryResp, activeWorkspaceId])
+
+  const resolvedLoading = internalLoading || internalUninitialized || !libraryResp || (internalFetching && effectiveItems.length === 0)
+
+  // Full folder tree for the move-to-folder dialog. Fetched lazily — only
+  // when the dialog is open — so the cheap (folder-paths-only) recursive
+  // walk on the server isn't run for every Library page view.
+  const [moveTargets, setMoveTargets] = useState<MoveTarget[] | null>(null)
+  const { currentData: foldersResp } = useGetLibraryFoldersQuery(
+    activeWorkspaceId ? { workspaceId: activeWorkspaceId, ...(isHiddenMode ? { showHidden: true } : {}) } : undefined,
+    { skip: !activeWorkspaceId || moveTargets === null },
+  )
+  const allFolders: Folder[] = useMemo(() => (
+    activeWorkspaceId ? toFolderList(foldersResp?.folders ?? [], activeWorkspaceId) : []
+  ), [foldersResp, activeWorkspaceId])
+
+  // "Use folder in chat" on a sub-folder row needs the items in that
+  // sub-folder, but the listing here is scoped to the current directory
+  // only. This trigger fetches a one-level listing on demand so the action
+  // doesn't disappear when navigating got moved server-side.
+  const [triggerFolderListing] = useLazyGetLibraryQuery()
+  const composeWithFolderContents = async (folderId: string) => {
+    if (!activeWorkspaceId) return
+    try {
+      const resp = await triggerFolderListing({
+        workspaceId: activeWorkspaceId,
+        path: folderId,
+        ...(isHiddenMode ? { showHidden: true } : {}),
+      }).unwrap()
+      onCompose(resp.items.map((f) => toContextItem(f, activeWorkspaceId)))
+    } catch (err) {
+      toast.error('Could not load folder', {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    }
+  }
 
   /**
    * Delete dialog targets can be files/notes (ContextItem) or folders.
@@ -197,9 +247,6 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
     | { kind: 'file'; id: string; name: string }
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
   const [renameValue, setRenameValue] = useState('')
-  const [moveTargets, setMoveTargets] = useState<
-    Array<{ path: string; name: string; kind: 'item' | 'folder' }> | null
-  >(null)
 
   const handleDownload = async (item: ContextItem) => {
     if (!activeWorkspaceId) return
@@ -434,20 +481,32 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
     }
   }
 
-  // Folders come from the server's recursive library listing; the
-  // selector maps each FolderRef to a UI Folder whose `id` is the
-  // workspace-relative path so navigation and filtering just work.
-  const folders = activeWorkspaceId
-    ? toFolderList(libraryResp?.folders ?? [], activeWorkspaceId)
-    : []
+  // Folder + file lists arrive scoped to `currentFolderId` from the
+  // server — no recursive walk needed. The current folder isn't itself
+  // in the response (it's the parent of the listing), so its display
+  // metadata is derived from the URL path: name = last segment, parentId
+  // = everything before the last slash.
+  const childFolders: Folder[] = useMemo(() => {
+    if (!activeWorkspaceId) return []
+    return toFolderList(libraryResp?.folders ?? [], activeWorkspaceId)
+  }, [libraryResp, activeWorkspaceId])
 
-  const currentFolder = getFolderById(folders, currentFolderId)
-  const breadcrumbPath = getFolderPath(folders, currentFolderId)
+  const currentFolder: Folder | undefined = useMemo(() => {
+    if (!currentFolderId) return undefined
+    const slash = currentFolderId.lastIndexOf('/')
+    const name = slash === -1 ? currentFolderId : currentFolderId.slice(slash + 1)
+    const parentId = slash === -1 ? null : currentFolderId.slice(0, slash)
+    return {
+      id: currentFolderId,
+      name,
+      parentId,
+      createdAt: new Date(0),
+      pinned: false,
+    }
+  }, [currentFolderId])
   const isInsideFolder = currentFolder != null
 
-  // Get folders + items in current location
-  const childFolders = getChildFolders(folders, currentFolderId)
-  const folderItems = getItemsInFolder(currentFolderId, effectiveItems)
+  const folderItems = effectiveItems
 
   // Apply filters. Hidden mode shows the server's showHidden=true superset —
   // all normal entries plus dot-prefixed/gitignored entries — regardless of
@@ -493,29 +552,39 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
 
   const clearSelection = () => setSelectedIds(new Set())
 
-  const selectedItems = items.filter(i => selectedIds.has(i.id))
+  const selectedItems = effectiveItems.filter(i => selectedIds.has(i.id))
   // Bulk actions that funnel through /library (move, delete) apply to
   // folders too — build a flat target list from both folders and items.
+  // Only entries currently visible in the listing can be selected, so the
+  // pool is `childFolders` (this folder's direct subfolders), not the
+  // workspace-wide tree.
   const selectedTargets: Array<{ path: string; name: string; kind: 'item' | 'folder' }> = [
-    ...folders
+    ...childFolders
       .filter(f => selectedIds.has(f.id))
       .map(f => ({ path: f.id, name: f.name, kind: 'folder' as const })),
     ...selectedItems.map(i => ({ path: i.id, name: i.name, kind: 'item' as const })),
   ]
   const hasSelection = selectedIds.size > 0
 
-  const navigateToFolder = (folderId: string | null) => {
-    setSearchParams(prev => {
-      const next = new URLSearchParams(prev)
-      if (folderId) next.set('folder', folderId)
-      else next.delete('folder')
-      return next
-    })
-    clearSelection()
-    setSearchQuery('')
-    // Don't reset the type filter on navigation — it's a persisted user
-    // choice. Forcing it back to 'all' (and writing 'all' to localStorage)
-    // makes any chosen filter feel like it randomly drops itself.
+  // Hrefs used by the `<Link>` wrappers on folder rows and library cards.
+  // They mirror the previous folder/item navigation behavior exactly so
+  // middle-click opens a new tab with the same destination the left-click
+  // would reach. Folder navigation preserves the existing query string so
+  // unrelated state (search, filter chips, etc.) survives the transition;
+  // item navigation resets the query and only sets `item`, mirroring the
+  // App-level `goTo({ item })` helper.
+  const buildFolderHref = (folderId: string) => {
+    if (!activeWorkspaceId) return '#'
+    const sp = new URLSearchParams(searchParams)
+    sp.set('folder', folderId)
+    const q = sp.toString()
+    return `/w/${activeWorkspaceId}/context${q ? `?${q}` : ''}`
+  }
+  const buildItemHref = (itemId: string) => {
+    if (!activeWorkspaceId) return '#'
+    const sp = new URLSearchParams()
+    sp.set('item', itemId)
+    return `/w/${activeWorkspaceId}/context?${sp.toString()}`
   }
 
   // Compose with the entire current folder's contents
@@ -535,98 +604,158 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
       {({ openPicker, openDirectoryPicker }) => (
         <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
 
-      {/* ── Header bar ── */}
-      <PageHeader
-        breadcrumb={
-          <Breadcrumb className="shrink-0">
-            <BreadcrumbList>
-              <BreadcrumbItem>
-                {currentFolderId ? (
-                  <BreadcrumbLink asChild>
-                    <button
-                      onClick={() => navigateToFolder(null)}
-                      className="text-sm font-semibold text-foreground hover:text-foreground/70 transition-colors"
-                    >
-                      Library
-                    </button>
-                  </BreadcrumbLink>
-                ) : (
-                  <BreadcrumbPage className="text-sm font-semibold text-foreground">Library</BreadcrumbPage>
-                )}
-              </BreadcrumbItem>
-              {breadcrumbPath.map((folder, idx) => {
-                const isLast = idx === breadcrumbPath.length - 1
-                return (
-                  <span key={folder.id} className="flex items-center gap-1.5">
-                    <BreadcrumbSeparator><ChevronRight className="h-3.5 w-3.5" /></BreadcrumbSeparator>
-                    <BreadcrumbItem>
-                      {isLast ? (
-                        <BreadcrumbPage className="text-sm font-semibold text-foreground">{folder.name}</BreadcrumbPage>
-                      ) : (
-                        <BreadcrumbLink asChild>
-                          <button
-                            onClick={() => navigateToFolder(folder.id)}
-                            className="text-sm font-semibold text-foreground hover:text-foreground/70 transition-colors"
-                          >
-                            {folder.name}
-                          </button>
-                        </BreadcrumbLink>
-                      )}
-                    </BreadcrumbItem>
-                  </span>
-                )
-              })}
-            </BreadcrumbList>
-          </Breadcrumb>
-        }
-        actions={<div className="flex w-full min-w-0 flex-wrap items-center gap-1 sm:w-auto sm:flex-nowrap sm:justify-end sm:gap-2">
-          {/* Type dropdown */}
-          <div className="order-2 shrink-0 sm:order-none">
-            {(() => {
-              const TypeIcon = TYPE_FILTER_ICONS[typeFilter]
-              const currentLabel = typeFilter === 'all' ? 'All' : filterChips.find(f => f.value === typeFilter)?.label ?? 'All'
-              return (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      data-testid="library-type-filter"
-                      className="flex h-10 shrink-0 items-center gap-1 rounded-md border px-2 text-xs font-medium transition-colors hover:bg-accent/30 sm:h-8 sm:gap-1.5 sm:px-2.5"
-                    >
-                      <TypeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                      <span className="text-muted-foreground">{currentLabel}</span>
-                      <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-40">
-                    {filterChips.map(f => {
-                      const FIcon = TYPE_FILTER_ICONS[f.value]
-                      return (
-                        <DropdownMenuItem key={f.value} onSelect={() => setTypeFilter(f.value)}>
-                          <FIcon className="h-4 w-4 text-muted-foreground" />
-                          {f.label}
-                        </DropdownMenuItem>
-                      )
-                    })}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )
-            })()}
-          </div>
+      {/* Library controls. Desktop: a single tight toolbar portaled
+          into the global top bar's right-side actions slot. Mobile:
+          the filter (funnel) + search are icon popovers in the top
+          bar — matching the Tasks list — while the heavier view /
+          use-in-chat / upload / create buttons stay inline above the
+          list (they need more width than a 375 px top bar can give).
+          The folder breadcrumb that used to live here was removed
+          with the PageHeader — the TopBar shows `/ Library`, and
+          folder drill-down stays reachable through the list rows. */}
+      {(() => {
+        const TypeIcon = TYPE_FILTER_ICONS[typeFilter]
+        const currentLabel = typeFilter === 'all'
+          ? 'All'
+          : filterChips.find(f => f.value === typeFilter)?.label ?? 'All'
 
-          {/* Search */}
-          <div className="order-1 relative min-w-0 flex-1 basis-full sm:order-none sm:basis-auto sm:flex-none">
+        // Mobile filter — funnel icon → popover with radio list,
+        // mirroring TaskFilterSearch. Tinted primary when a non-default
+        // type is selected so the affordance reads as "filtered".
+        const mobileFilterPopover = (
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className={cn('h-8 w-8 shrink-0', typeFilter !== 'all' && 'text-primary')}
+                aria-label="Filter library"
+                data-testid="library-type-filter"
+              >
+                <ListFilter className="h-4 w-4" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-56 p-3">
+              <label className="mb-2 block text-xs font-medium text-muted-foreground">
+                Type
+              </label>
+              <RadioGroup
+                value={typeFilter}
+                onValueChange={(v) => setTypeFilter(v as TypeFilter)}
+                className="flex flex-col gap-2"
+              >
+                {filterChips.map(f => {
+                  const FIcon = TYPE_FILTER_ICONS[f.value]
+                  return (
+                    <label
+                      key={f.value}
+                      className="flex cursor-pointer items-center gap-2 text-sm"
+                    >
+                      <RadioGroupItem value={f.value} />
+                      <FIcon className="h-4 w-4 text-muted-foreground" />
+                      {f.label}
+                    </label>
+                  )
+                })}
+              </RadioGroup>
+            </PopoverContent>
+          </Popover>
+        )
+
+        // Mobile search — magnifier icon → popover with an input.
+        // Tinted primary while a query is set so the affordance reads
+        // as "actively searching".
+        const mobileSearchPopover = (
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className={cn('h-8 w-8 shrink-0', searchQuery && 'text-primary')}
+                aria-label="Search library"
+                data-testid="library-search-button"
+              >
+                <Search className="h-4 w-4" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-72 p-2">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  autoFocus
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search..."
+                  className="h-9 w-full rounded-md border bg-background pl-8 pr-8 text-sm outline-none placeholder:text-muted-foreground/60 focus:border-ring/40 focus:ring-2 focus:ring-ring/20"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    aria-label="Clear search"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
+        )
+
+        // Desktop type-filter dropdown — text+icon trigger so the
+        // chosen label is visible in the toolbar.
+        const desktopTypeFilter = (
+          <div className="shrink-0">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  data-testid="library-type-filter"
+                  className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors hover:bg-accent/30"
+                >
+                  <TypeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <span className="text-muted-foreground">{currentLabel}</span>
+                  <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-40">
+                {filterChips.map(f => {
+                  const FIcon = TYPE_FILTER_ICONS[f.value]
+                  return (
+                    <DropdownMenuItem key={f.value} onSelect={() => setTypeFilter(f.value)}>
+                      <FIcon className="h-4 w-4 text-muted-foreground" />
+                      {f.label}
+                    </DropdownMenuItem>
+                  )
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )
+
+        // Desktop inline search — fixed-width input.
+        const desktopSearch = (
+          <div className="relative shrink-0">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search..."
-              className="h-10 w-full rounded-md border bg-background pl-8 pr-3 text-xs outline-none transition-all placeholder:text-muted-foreground/60 focus:border-ring/40 focus:ring-2 focus:ring-ring/20 sm:h-8 sm:w-40"
+              className="h-8 w-40 rounded-md border bg-background pl-8 pr-3 text-xs outline-none transition-all placeholder:text-muted-foreground/60 focus:border-ring/40 focus:ring-2 focus:ring-ring/20"
             />
           </div>
+        )
 
-          <div className="order-2 ml-auto flex shrink-0 items-center gap-1 sm:order-none sm:ml-0 sm:gap-2">
+        // Button cluster — view toggle, optional use-in-chat, upload,
+        // create. Lives inline on mobile (above the list) and inline
+        // in the top bar on desktop.
+        const buttonCluster = (
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
             {/* View toggle */}
             <div className="flex h-10 shrink-0 items-center rounded-lg border p-0.5 sm:h-auto">
               <button onClick={() => setViewMode('list')} className={`flex h-9 w-9 items-center justify-center rounded-md transition-colors sm:h-auto sm:w-auto sm:p-1.5 ${viewMode === 'list' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
@@ -679,14 +808,44 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-        </div>}
-      />
+        )
+
+        if (isMobile) {
+          return (
+            <>
+              <TopBarContentActions>
+                {mobileFilterPopover}
+                {mobileSearchPopover}
+              </TopBarContentActions>
+              <div className="shrink-0 border-b border-border/40">
+                <div className="flex w-full items-center justify-end gap-2 px-4 py-2">
+                  {buttonCluster}
+                </div>
+              </div>
+            </>
+          )
+        }
+
+        return (
+          <TopBarActions>
+            <div className="flex items-center gap-2">
+              {desktopTypeFilter}
+              {desktopSearch}
+              {buttonCluster}
+            </div>
+          </TopBarActions>
+        )
+      })()}
 
       {/* ── Body ── */}
       <ContextMenu>
       <ContextMenuTrigger asChild>
-      <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-      <div className="flex-1 overflow-y-auto px-2 py-3 sm:px-4">
+      <div className="relative flex flex-col flex-1 min-h-0 overflow-hidden">
+      {/* `pt-6` matches the sidebar's first-section top padding
+          (RoomSidebar `<SidebarMenu className="pt-6">`) so the first
+          Library row lines up horizontally with the first sidebar
+          item now that the in-content page header is gone. */}
+      <div className="flex-1 overflow-y-auto px-8 pt-6 pb-3">
         {resolvedLoading ? (
           <div className="space-y-0.5 pt-1">
             {Array.from({ length: 6 }).map((_, i) => (
@@ -740,7 +899,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
           /* ─── List view ─── */
           <div>
             {/* Column headers */}
-            <div className="flex items-center gap-3 px-3 py-1.5 mb-1">
+            <div className="flex items-center gap-3 px-3 pt-1.5 pb-2 mb-1">
               <Checkbox
                 checked={selectAllState}
                 onCheckedChange={toggleSelectAll}
@@ -755,7 +914,16 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
               {/* Folders */}
               {filteredFolders.map((folder, i) => {
                 const isSelected = selectedIds.has(folder.id)
-                const itemCount = countDirectChildren(folders, folder.id, effectiveItems)
+                // Sub-folder child counts were derived from the recursive
+                // listing; with folder-scoped fetching the client only
+                // knows this directory's contents. Showing "—" is the
+                // honest signal until per-folder counts are added server-side.
+                const itemCount = null as number | null
+                const folderDraggable = !!onPinFolder
+                const handleFolderDragStart = (e: React.DragEvent<HTMLElement>) => {
+                  e.dataTransfer.effectAllowed = 'move'
+                  e.dataTransfer.setData(DRAG_TYPE_LIBRARY_ITEM, folder.id)
+                }
                 return (
                   <motion.div
                     key={folder.id}
@@ -764,7 +932,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
                     transition={{ delay: i * 0.02 }}
                     className={`flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors group cursor-pointer ${
                       isSelected ? 'bg-primary/5 border border-primary/10' : 'hover:bg-muted/50 border border-transparent'
-                    }`}
+                    } ${folderDraggable ? 'active:cursor-grabbing' : ''}`}
                   >
                     <Checkbox
                       checked={isSelected}
@@ -772,18 +940,28 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
                       className="h-4 w-4"
                       onClick={(e) => e.stopPropagation()}
                     />
-                    <div
-                      className="flex items-center gap-3 flex-1 min-w-0"
-                      onClick={() => navigateToFolder(folder.id)}
+                    <Link
+                      to={buildFolderHref(folder.id)}
+                      onClick={() => {
+                        // The Link itself handles SPA navigation on plain
+                        // left-click (and a middle/modifier-click bypasses
+                        // this handler and opens a new tab). We only need to
+                        // run the side effects that mirror navigateToFolder.
+                        clearSelection()
+                        setSearchQuery('')
+                      }}
+                      draggable={folderDraggable ? true : false}
+                      onDragStart={folderDraggable ? handleFolderDragStart : undefined}
+                      className="flex items-center gap-3 flex-1 min-w-0 no-underline text-inherit"
                     >
                       <FolderIcon className="h-4 w-4 text-muted-foreground shrink-0 fill-muted-foreground/20" />
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-foreground truncate">{folder.name}</p>
                         <p className="text-xs text-muted-foreground">
-                          {itemCount} {itemCount === 1 ? 'item' : 'items'}
+                          {itemCount !== null && `${itemCount} ${itemCount === 1 ? 'item' : 'items'}`}
                         </p>
                       </div>
-                    </div>
+                    </Link>
                     <span className="hidden text-xs text-muted-foreground shrink-0 w-20 text-right capitalize sm:block">
                       Folder
                     </span>
@@ -797,7 +975,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
                           className="hidden h-7 text-xs opacity-0 transition-opacity group-hover:opacity-100 sm:inline-flex"
                         onClick={(e) => {
                           e.stopPropagation()
-                          onCompose(getItemsInFolder(folder.id, items))
+                          void composeWithFolderContents(folder.id)
                         }}
                       >
                         Use in chat
@@ -809,10 +987,20 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-40">
-                          <DropdownMenuItem onClick={() => onCompose(getItemsInFolder(folder.id, items))}>
+                          <DropdownMenuItem onClick={() => void composeWithFolderContents(folder.id)}>
                             <MessageSquarePlus className="h-4 w-4 mr-2" />
                             Use in chat
                           </DropdownMenuItem>
+                          {(onPinFolder || onUnpinFolder) && (
+                            <DropdownMenuItem
+                              onClick={() => (folder.pinned ? onUnpinFolder?.(folder) : onPinFolder?.(folder))}
+                            >
+                              {folder.pinned
+                                ? <><PinOff className="h-4 w-4 mr-2" />Unpin</>
+                                : <><Pin className="h-4 w-4 mr-2" />Pin</>
+                              }
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuItem onClick={() => { setRenameTarget({ kind: 'folder', id: folder.id, name: folder.name, parentId: folder.parentId }); setRenameValue(folder.name) }}>
                             <PenLine className="h-4 w-4 mr-2" />
                             Rename
@@ -846,6 +1034,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
                   index={filteredFolders.length + i}
                   selected={selectedIds.has(item.id)}
                   onSelectChange={() => toggleSelect(item.id)}
+                  href={buildItemHref(item.id)}
                   onClick={() => onItemClick(item)}
                   onUseInChat={() => onCompose([item])}
                   onDownload={() => handleDownload(item)}
@@ -866,7 +1055,12 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
             {/* Folder cards */}
             {filteredFolders.map((folder, i) => {
               const isSelected = selectedIds.has(folder.id)
-              const itemCount = countDirectChildren(folders, folder.id, effectiveItems)
+              const itemCount = null as number | null
+              const folderDraggable = !!onPinFolder
+              const handleFolderDragStart = (e: React.DragEvent<HTMLElement>) => {
+                e.dataTransfer.effectAllowed = 'move'
+                e.dataTransfer.setData(DRAG_TYPE_LIBRARY_ITEM, folder.id)
+              }
               return (
                 <motion.div
                   key={folder.id}
@@ -875,11 +1069,10 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
                   transition={{ delay: i * 0.03 }}
                   className={`group relative rounded-xl border bg-background p-4 cursor-pointer hover:shadow-sm transition-all ${
                     isSelected ? 'ring-2 ring-primary/30 border-primary/20' : 'border-border'
-                  }`}
-                  onClick={() => navigateToFolder(folder.id)}
+                  } ${folderDraggable ? 'active:cursor-grabbing' : ''}`}
                 >
                   <div
-                    className={`absolute top-2 left-2 transition-opacity ${isSelected || hasSelection ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+                    className={`absolute top-2 left-2 z-10 transition-opacity ${isSelected || hasSelection ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
                     onClick={(e) => e.stopPropagation()}
                   >
                     <Checkbox
@@ -888,14 +1081,14 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
                       className="h-4 w-4 bg-background/80 backdrop-blur"
                     />
                   </div>
-                  <div className="absolute top-2 right-2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="absolute top-2 right-2 z-10 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                     <Button
                       variant="outline"
                       size="icon"
                       className="h-6 w-6 bg-background/80 backdrop-blur"
                       onClick={(e) => {
                         e.stopPropagation()
-                        onCompose(getItemsInFolder(folder.id, items))
+                        void composeWithFolderContents(folder.id)
                       }}
                     >
                       <MessageSquarePlus className="h-3 w-3" />
@@ -907,9 +1100,19 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-40">
-                        <DropdownMenuItem onClick={() => onCompose(getItemsInFolder(folder.id, items))}>
+                        <DropdownMenuItem onClick={() => void composeWithFolderContents(folder.id)}>
                           <MessageSquarePlus className="h-4 w-4 mr-2" />Use in chat
                         </DropdownMenuItem>
+                        {(onPinFolder || onUnpinFolder) && (
+                          <DropdownMenuItem
+                            onClick={() => (folder.pinned ? onUnpinFolder?.(folder) : onPinFolder?.(folder))}
+                          >
+                            {folder.pinned
+                              ? <><PinOff className="h-4 w-4 mr-2" />Unpin</>
+                              : <><Pin className="h-4 w-4 mr-2" />Pin</>
+                            }
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem onClick={() => { setRenameTarget({ kind: 'folder', id: folder.id, name: folder.name, parentId: folder.parentId }); setRenameValue(folder.name) }}>
                           <PenLine className="h-4 w-4 mr-2" />Rename
                         </DropdownMenuItem>
@@ -927,13 +1130,27 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
-                  <div className="flex flex-col items-center text-center pt-4 pb-1">
-                    <FolderIcon className="h-8 w-8 text-muted-foreground/40 mb-3 fill-muted-foreground/15" />
-                    <p className="text-sm font-medium text-foreground line-clamp-2 break-all mb-1 w-full">{folder.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {itemCount} {itemCount === 1 ? 'item' : 'items'}
-                    </p>
-                  </div>
+                  <Link
+                    to={buildFolderHref(folder.id)}
+                    onClick={() => {
+                      // Link handles SPA navigation on plain left-click;
+                      // middle / cmd / ctrl click bypasses this and opens a
+                      // new tab. Only mirror the side effects here.
+                      clearSelection()
+                      setSearchQuery('')
+                    }}
+                    draggable={folderDraggable ? true : false}
+                    onDragStart={folderDraggable ? handleFolderDragStart : undefined}
+                    className="block no-underline text-inherit"
+                  >
+                    <div className="flex flex-col items-center text-center pt-4 pb-1">
+                      <FolderIcon className="h-8 w-8 text-muted-foreground/40 mb-3 fill-muted-foreground/15" />
+                      <p className="text-sm font-medium text-foreground line-clamp-2 break-all mb-1 w-full">{folder.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {itemCount !== null && `${itemCount} ${itemCount === 1 ? 'item' : 'items'}`}
+                      </p>
+                    </div>
+                  </Link>
                 </motion.div>
               )
             })}
@@ -948,6 +1165,7 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
                 selected={selectedIds.has(item.id)}
                 hasSelection={hasSelection}
                 onSelectChange={() => toggleSelect(item.id)}
+                href={buildItemHref(item.id)}
                 onClick={() => onItemClick(item)}
                 onUseInChat={() => onCompose([item])}
                 onDownload={() => handleDownload(item)}
@@ -964,15 +1182,18 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
         )}
       </div>
 
-        {/* Bulk actions bar */}
+        {/* Bulk actions bar — floats as a card 24 px from the file
+            browser window's edges (bottom/left/right), matching other
+            floating layouts. Card chrome mirrors the composer input:
+            12 px radius, bg token, hairline border, `shadow-md`. */}
         <AnimatePresence>
           {hasSelection && (
             <motion.div
-              initial={{ opacity: 0, maxHeight: 0 }}
-              animate={{ opacity: 1, maxHeight: 120 }}
-              exit={{ opacity: 0, maxHeight: 0 }}
-              transition={{ duration: 0.2 }}
-              className="border-t bg-muted/30 overflow-hidden shrink-0"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 12 }}
+              transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+              className="absolute inset-x-6 bottom-6 z-30 rounded-xl border border-foreground/10 bg-background shadow-md"
             >
               <div className="flex items-center gap-3 px-5 py-3">
                 <Checkbox
@@ -1043,264 +1264,233 @@ export function ContextList({ items, isLoading, onItemClick, onCompose, onPinIte
       </ContextMenuContent>
       </ContextMenu>
 
-      {/* New folder dialog */}
-      <Dialog open={folderDialogOpen} onOpenChange={(open) => {
-        setFolderDialogOpen(open)
-        if (!open) setNewFolderName('')
-      }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>New folder</DialogTitle>
-            <DialogDescription>
-              {currentFolder
-                ? `Create a folder inside "${currentFolder.name}".`
-                : 'Create a folder to organize your library.'}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 py-2">
-            <label className="text-sm font-medium text-foreground">Folder name</label>
-            <Input
-              placeholder="e.g., Q2 plans"
-              value={newFolderName}
-              onChange={(e) => setNewFolderName(e.target.value)}
-              autoFocus
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setFolderDialogOpen(false); setNewFolderName('') }}>
-              Cancel
-            </Button>
-            <Button
-              disabled={!newFolderName.trim()}
-              onClick={handleCreateFolder}
-            >
-              Create folder
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* New folder dialog — gated so the Radix Dialog providers
+          (~5 fibers each) don't mount when the dialog is closed. */}
+      {folderDialogOpen && (
+        <Dialog open onOpenChange={(open) => {
+          setFolderDialogOpen(open)
+          if (!open) setNewFolderName('')
+        }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>New folder</DialogTitle>
+              <DialogDescription>
+                {currentFolder
+                  ? `Create a folder inside "${currentFolder.name}".`
+                  : 'Create a folder to organize your library.'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2 py-2">
+              <label className="text-sm font-medium text-foreground">Folder name</label>
+              <Input
+                placeholder="e.g., Q2 plans"
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setFolderDialogOpen(false); setNewFolderName('') }}>
+                Cancel
+              </Button>
+              <Button
+                disabled={!newFolderName.trim()}
+                onClick={handleCreateFolder}
+              >
+                Create folder
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* Create blank file dialog */}
-      <Dialog
-        open={createFileDialogOpen}
-        onOpenChange={(open) => {
-          setCreateFileDialogOpen(open)
-          if (!open) setNewFileName('')
-        }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Create file</DialogTitle>
-            <DialogDescription>
-              {currentFolder
-                ? `Create a new blank file inside "${currentFolder.name}". Include the extension in the name.`
-                : 'Create a new blank file. Include the extension in the name.'}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 py-2">
-            <label className="text-sm font-medium text-foreground">File name</label>
-            <Input
-              placeholder="e.g., notes.md"
-              value={newFileName}
-              onChange={(e) => setNewFileName(e.target.value)}
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newFileName.trim()) handleCreateFile()
-              }}
-            />
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => { setCreateFileDialogOpen(false); setNewFileName('') }}
-            >
-              Cancel
-            </Button>
-            <Button
-              disabled={!newFileName.trim()}
-              onClick={handleCreateFile}
-            >
-              Create file
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Paste link dialog */}
-      <Dialog
-        open={pasteLinkDialogOpen}
-        onOpenChange={(open) => {
-          setPasteLinkDialogOpen(open)
-          if (!open) { setLinkUrl(''); setLinkName('') }
-        }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Paste link</DialogTitle>
-            <DialogDescription>
-              {currentFolder
-                ? `Save a URL to "${currentFolder.name}".`
-                : 'Save a URL to your library.'}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-foreground">URL</label>
+      {createFileDialogOpen && (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            setCreateFileDialogOpen(open)
+            if (!open) setNewFileName('')
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Create file</DialogTitle>
+              <DialogDescription>
+                {currentFolder
+                  ? `Create a new blank file inside "${currentFolder.name}". Include the extension in the name.`
+                  : 'Create a new blank file. Include the extension in the name.'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2 py-2">
+              <label className="text-sm font-medium text-foreground">File name</label>
               <Input
-                placeholder="https://example.com"
-                value={linkUrl}
-                onChange={(e) => setLinkUrl(e.target.value)}
+                placeholder="e.g., notes.md"
+                value={newFileName}
+                onChange={(e) => setNewFileName(e.target.value)}
                 autoFocus
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && linkUrl.trim()) handleCreateLink()
+                  if (e.key === 'Enter' && newFileName.trim()) handleCreateFile()
                 }}
               />
             </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-foreground">
-                Name <span className="text-muted-foreground font-normal">(optional)</span>
-              </label>
-              <Input
-                placeholder="Defaults to the URL hostname"
-                value={linkName}
-                onChange={(e) => setLinkName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && linkUrl.trim()) handleCreateLink()
-                }}
-              />
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => { setCreateFileDialogOpen(false); setNewFileName('') }}
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={!newFileName.trim()}
+                onClick={handleCreateFile}
+              >
+                Create file
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Paste link dialog */}
+      {pasteLinkDialogOpen && (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            setPasteLinkDialogOpen(open)
+            if (!open) { setLinkUrl(''); setLinkName('') }
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Paste link</DialogTitle>
+              <DialogDescription>
+                {currentFolder
+                  ? `Save a URL to "${currentFolder.name}".`
+                  : 'Save a URL to your library.'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 py-2">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">URL</label>
+                <Input
+                  placeholder="https://example.com"
+                  value={linkUrl}
+                  onChange={(e) => setLinkUrl(e.target.value)}
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && linkUrl.trim()) handleCreateLink()
+                  }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">
+                  Name <span className="text-muted-foreground font-normal">(optional)</span>
+                </label>
+                <Input
+                  placeholder="Defaults to the URL hostname"
+                  value={linkName}
+                  onChange={(e) => setLinkName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && linkUrl.trim()) handleCreateLink()
+                  }}
+                />
+              </div>
             </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => { setPasteLinkDialogOpen(false); setLinkUrl(''); setLinkName('') }}
-            >
-              Cancel
-            </Button>
-            <Button disabled={!linkUrl.trim()} onClick={handleCreateLink}>
-              Save link
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => { setPasteLinkDialogOpen(false); setLinkUrl(''); setLinkName('') }}
+              >
+                Cancel
+              </Button>
+              <Button disabled={!linkUrl.trim()} onClick={handleCreateLink}>
+                Save link
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* Rename dialog (file or folder) */}
-      <Dialog
-        open={renameTarget !== null}
-        onOpenChange={(open) => { if (!open) setRenameTarget(null) }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>
-              {renameTarget?.kind === 'file' ? 'Rename file' : 'Rename folder'}
-            </DialogTitle>
-            <DialogDescription>
-              {renameTarget?.kind === 'file'
-                ? 'Give the file a new name. Include the extension.'
-                : 'Give the folder a new name.'}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 py-2">
-            <label className="text-sm font-medium text-foreground">
-              {renameTarget?.kind === 'file' ? 'File name' : 'Folder name'}
-            </label>
-            <Input
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleRename()
-              }}
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRenameTarget(null)}>Cancel</Button>
-            <Button
-              disabled={!renameValue.trim() || renameValue.trim() === renameTarget?.name}
-              onClick={handleRename}
-            >
-              Rename
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {renameTarget !== null && (
+        <Dialog
+          open
+          onOpenChange={(open) => { if (!open) setRenameTarget(null) }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>
+                {renameTarget.kind === 'file' ? 'Rename file' : 'Rename folder'}
+              </DialogTitle>
+              <DialogDescription>
+                {renameTarget.kind === 'file'
+                  ? 'Give the file a new name. Include the extension.'
+                  : 'Give the folder a new name.'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2 py-2">
+              <label className="text-sm font-medium text-foreground">
+                {renameTarget.kind === 'file' ? 'File name' : 'Folder name'}
+              </label>
+              <Input
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleRename()
+                }}
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setRenameTarget(null)}>Cancel</Button>
+              <Button
+                disabled={!renameValue.trim() || renameValue.trim() === renameTarget.name}
+                onClick={handleRename}
+              >
+                Rename
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
-      {/* Move-to-folder dialog */}
-      <Dialog
-        open={moveTargets !== null}
-        onOpenChange={(open) => { if (!open) setMoveTargets(null) }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>
-              {moveTargets && moveTargets.length === 1
-                ? `Move "${moveTargets[0].name}"`
-                : `Move ${moveTargets?.length ?? 0} items`}
-            </DialogTitle>
-            <DialogDescription>Pick a destination folder.</DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[50vh] overflow-y-auto py-2 space-y-1">
-            <button
-              className="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-muted"
-              onClick={() => handleMoveToFolder(null)}
-            >
-              <FolderIcon className="h-4 w-4 mr-2 inline" />
-              Library (root)
-            </button>
-            {folders
-              // Can't move an item into itself or one of its descendants.
-              .filter((f) => {
-                if (!moveTargets) return true
-                for (const t of moveTargets) {
-                  if (t.path === f.id) return false
-                  if (f.id.startsWith(`${t.path}/`)) return false
-                }
-                return true
-              })
-              .sort((a, b) => a.id.localeCompare(b.id))
-              .map((f) => (
-                <button
-                  key={f.id}
-                  className="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-muted"
-                  onClick={() => handleMoveToFolder(f.id)}
-                >
-                  <FolderIcon className="h-4 w-4 mr-2 inline" />
-                  {f.id}
-                </button>
-              ))}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setMoveTargets(null)}>Cancel</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Move-to-folder dialog (shared with the file-detail view) */}
+      <MoveToFolderDialog
+        targets={moveTargets}
+        folders={allFolders}
+        onClose={() => setMoveTargets(null)}
+        onMove={handleMoveToFolder}
+      />
 
-      <AlertDialog
-        open={deleteTargets !== null}
-        onOpenChange={(open) => { if (!open) setDeleteTargets(null) }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {deleteTargets && deleteTargets.length === 1
-                ? `Delete "${deleteTargets[0].name}"?`
-                : `Delete ${deleteTargets?.length ?? 0} items?`}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              This permanently removes the selected items from your library.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={confirmDelete}
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {deleteTargets !== null && (
+        <AlertDialog
+          open
+          onOpenChange={(open) => { if (!open) setDeleteTargets(null) }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {deleteTargets.length === 1
+                  ? `Delete "${deleteTargets[0].name}"?`
+                  : `Delete ${deleteTargets.length} items?`}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                This permanently removes the selected items from your library.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={confirmDelete}
+              >
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
           {onCreateArtifact && (
             <ArtifactCreationSheet
               open={createSheetOpen}

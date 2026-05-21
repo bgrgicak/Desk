@@ -345,6 +345,52 @@ execRunFn: async () => ({ exitCode: 1 }),
     expect(msg?.state).toBe("failed");
   });
 
+  it("re-fire of a previously failed message starts with a clean log", async () => {
+    // Regression: the "Try again" path (POST /chats/.../messages/{id}/run)
+    // resets state to pending and re-invokes fireMessage with the same
+    // runId. The log file is reused — when it was opened with flags:"a"
+    // the new attempt's events got appended to the prior failure's
+    // stderr, so the successful retry's child message contained both
+    // the old "Agent run failed before it could complete." line and the
+    // new tokens. Flags:"w" truncates at fire-start.
+    let firstCall = true;
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_runId, _agentId, _prompt, onLog) => {
+        if (firstCall) {
+          firstCall = false;
+          await onLog({ runId: _runId, seq: 0, kind: "stderr", payload: "FIRST_RUN_STDERR_TOKEN" });
+          return { exitCode: 1 };
+        }
+        await onLog({ runId: _runId, seq: 0, kind: "stdout", payload: "SECOND_RUN_STDOUT_TOKEN" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const messageId = await insertPendingMessage({ type: "text", text: "fire then refire" });
+    await mgr.fireMessage(messageId);
+    const failed = await queries.messages.findById(pool, messageId);
+    expect(failed?.state).toBe("failed");
+
+    // Simulate /run: flip state back to pending and fire again.
+    await pool.query("UPDATE messages SET state = 'pending' WHERE id = ?", [messageId]);
+    await mgr.fireMessage(messageId);
+
+    const succeeded = await queries.messages.findById(pool, messageId);
+    expect(succeeded?.state).toBe("succeeded");
+
+    const logDir = path.join(
+      process.env.DESK_HOME!,
+      "desk",
+      ".chats",
+      chatId,
+      "logs",
+    );
+    const logBody = await fs.readFile(path.join(logDir, `${messageId}.log`), "utf-8").catch(() => "");
+    expect(logBody).toContain("SECOND_RUN_STDOUT_TOKEN");
+    expect(logBody).not.toContain("FIRST_RUN_STDERR_TOKEN");
+  });
+
   it("thrown run setup errors are appended as stderr event messages", async () => {
     const events: WsEvent[] = [];
     const mgr = createRunManager({
@@ -920,7 +966,16 @@ execRunFn: async () => ({ exitCode: 1 }),
     expect(runs[0].state).toBe("succeeded");
   });
 
-  it("agent-created unscheduled task: direct scheduler fire does not move the parent", async () => {
+  it("agent-created unscheduled task: a clean run leaves the parent in `running` for task complete to close", async () => {
+    // Sandbox sub-tasks are agent-authored. fireMessage promotes the
+    // parent to `running` so the kanban card lands on Active, runs the
+    // agent, then hands off: afterTaskRun does NOT propagate a clean
+    // success onto the parent. The canonical close is
+    // `desk-agent task complete`, and auto-completing here would steal
+    // the Needs-input hand-off (the agent's reply lands in the thread,
+    // flipping chat.unread) AND break callers that issue task complete
+    // after the run terminates (the endpoint refuses terminal state).
+    // Failure DOES propagate — see the sibling failed-run test.
     const mgr = createRunManager({
       pool,
       execRunFn: async (_id, _a, _p, onLog) => {
@@ -938,12 +993,41 @@ execRunFn: async () => ({ exitCode: 1 }),
     await mgr.fireMessage(taskId);
 
     const parent = await queries.messages.findById(pool, taskId);
-    expect(parent?.state).toBe("pending");
+    expect(parent?.state).toBe("running");
     expect(parent?.executeAt).toBeUndefined();
 
     const runs = await listTaskRuns(taskId);
     expect(runs).toHaveLength(1);
     expect(runs[0].state).toBe("succeeded");
+  });
+
+  it("agent-created unscheduled task: a failed run propagates `failed` onto the parent", async () => {
+    // Failure is the one terminal state afterTaskRun mirrors onto an
+    // agent-authored unscheduled parent: the UI selector folds `failed`
+    // back into Open (failure is internal-only — see
+    // app/src/lib/task-status.ts) so the user retries from the same
+    // column, instead of the card sitting in stale Active forever.
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _a, _p, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stderr", payload: "boom" });
+        return { exitCode: 1 };
+      },
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "agent todo that fails" },
+      role: "agent",
+    });
+
+    await mgr.fireMessage(taskId);
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("failed");
+
+    const runs = await listTaskRuns(taskId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].state).toBe("failed");
   });
 
   it("failed unscheduled task run does not complete the manually defined parent", async () => {
@@ -1228,6 +1312,76 @@ describe("workspace.synced", () => {
 
     const synced = events.filter((e) => e.type === "workspace.synced");
     expect(synced.length).toBe(1);
+  });
+});
+
+describe("preemptChatRun", () => {
+  it("a chat agent_turn cancelled mid-fire does not insert a duplicate child on the success path", async () => {
+    // Repro for: rapid user sends produce N identical agent replies.
+    //
+    // Per-send flow:
+    //   1. preemptChatRun → state='cancelled' on the in-flight trigger
+    //   2. insert a fresh agent_turn trigger
+    //   3. fireMessage(newTrigger) — fire-and-forget
+    //
+    // Each cancelled fire's execRunFn still resolves cleanly (opencode
+    // preserves session state on abort and exits 0). The success path
+    // at the bottom of fireMessageImpl then reads the log and inserts a
+    // child message — even though the row is already in 'cancelled'
+    // state and finalizeExecution was a WHERE-clause no-op. Net effect:
+    // every preempted turn leaves behind an extra identical child.
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => { release = resolve; });
+
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (id, _agentId, _prompt, onLog) => {
+        onLog({ runId: id, seq: 0, kind: "stdout", payload: JSON.stringify({ type: "step_start", sessionID: "s1" }) });
+        onLog({ runId: id, seq: 1, kind: "stdout", payload: JSON.stringify({ type: "text", part: { text: "duplicate reply" } }) });
+        // Hold until the test has preempted the row, then exit cleanly —
+        // mirroring opencode returning Cancelled with exitCode=0 after
+        // session.abort.
+        await released;
+        onLog({ runId: id, seq: 2, kind: "stdout", payload: JSON.stringify({ type: "step_finish" }) });
+        return { exitCode: 0 };
+      },
+    });
+
+    const userMessageId = await insertChatRow({
+      targetChatId: chatId,
+      role: "user",
+      content: { type: "text", text: "first send" },
+      createdAt: new Date().toISOString(),
+    });
+    const triggerId = await insertPendingMessage({ type: "agent_turn", userMessageId });
+
+    const firePromise = mgr.fireMessage(triggerId);
+
+    // Wait until claimPending has flipped state to 'running' so
+    // findRunningChatTurn (which filters on state='running') sees it.
+    let claimed = false;
+    for (let i = 0; i < 400; i++) {
+      const row = await queries.messages.findById(pool, triggerId);
+      if (row?.state === "running") { claimed = true; break; }
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(claimed).toBe(true);
+
+    const preempted = await mgr.preemptChatRun(chatId);
+    expect(preempted?.preempted).toBe(triggerId);
+
+    release();
+    const result = await firePromise;
+    expect(result.fired).toBe(true);
+
+    const { rows: children } = await pool.query(
+      `SELECT id, content FROM messages WHERE parent_id = ? AND role = 'agent'`,
+      [triggerId],
+    );
+    expect(children).toHaveLength(0);
+
+    const finalTrigger = await queries.messages.findById(pool, triggerId);
+    expect(finalTrigger?.state).toBe("cancelled");
   });
 });
 

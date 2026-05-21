@@ -4,8 +4,8 @@ import { CheckCircle2, Loader2 } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 import { StatusIndicator } from './StatusIndicator'
 import { FailedRunBanner } from './FailedRunBanner'
-import { firstUserVisibleDiagnosticString, isMessageVisible, isStructuredToolPayloadLine, isUserVisibleDiagnosticLine, userVisibleDiagnosticTextForEvent } from './messageVisibility'
-import { useGetChatMessagesQuery } from '@/store/api'
+import { findActiveAgentTurn, firstUserVisibleDiagnosticString, isMessageVisible, isStructuredToolPayloadLine, isUserVisibleDiagnosticLine, userVisibleDiagnosticTextForEvent } from './messageVisibility'
+import { useGetChatMessagesQuery, useGetWorkspacesQuery } from '@/store/api'
 import type { ListMessagesResponse } from '@/store/types'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, ServerMessage } from '@/store/types'
 
@@ -47,15 +47,10 @@ export function findFailedOrDiagnosticAgentTurn(items: ServerMessage[]): ServerM
   return null
 }
 
-export function findActiveAgentTurn(items: ServerMessage[]): ServerMessage | null {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const m = items[i]
-    if (m.content.type === 'agent_turn') {
-      return m.state === 'pending' || m.state === 'running' ? m : null
-    }
-  }
-  return null
-}
+// `findActiveAgentTurn` moved to ./messageVisibility so non-component
+// callers (store selectors) can reuse it without dragging TSX into
+// the store layer. Re-exported for existing importers and tests.
+export { findActiveAgentTurn }
 
 export function failureDetailForAgentTurn(items: ServerMessage[], failedTurn: ServerMessage | null): string | null {
   if (!failedTurn) return null
@@ -451,6 +446,27 @@ export function ChatThread({
   const scrollRef = useRef<HTMLDivElement>(null)
   const [scrollbarWidth, setScrollbarWidth] = useState(0)
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  // Per-id stable ref callback. The naïve inline `ref={el => ...}` form
+  // creates a new function identity on every render, so React calls the
+  // callback with null and then the same element again on every re-render
+  // of the parent — at N messages this is one of the dominant per-render
+  // costs once a thread gets long. Memoizing per id keeps the callback
+  // identity stable so React skips the spurious null/element pair.
+  const messageRefCallbacks = useRef<Map<string, (el: HTMLDivElement | null) => void>>(new Map())
+  const getMessageRefCallback = (id: string) => {
+    let cb = messageRefCallbacks.current.get(id)
+    if (!cb) {
+      cb = (el: HTMLDivElement | null) => {
+        if (el) messageRefs.current.set(id, el)
+        else {
+          messageRefs.current.delete(id)
+          messageRefCallbacks.current.delete(id)
+        }
+      }
+      messageRefCallbacks.current.set(id, cb)
+    }
+    return cb
+  }
   /** Tracks whether we should auto-scroll to bottom (user is at the bottom). */
   const isAtBottomRef = useRef(true)
   /** When loading older messages, stores the scroll-height before prepend so
@@ -460,6 +476,13 @@ export function ChatThread({
   const allItems = activeData?.items ?? []
   const prevCursor = activeData?.prevCursor
   const isInitialLoading = !skipQuery && !activeData && !isError
+
+  // Resolve the workspace's filesystem path once for the whole thread so
+  // every MessageBubble doesn't have to subscribe to the workspaces cache
+  // individually. With N messages, the per-bubble subscription used to
+  // fan out into N RTK Query notifications on every workspace update.
+  const { data: workspaces } = useGetWorkspacesQuery()
+  const workspacePath = workspaces?.find(w => w.id === workspaceId)?.path
 
   const activeAgentTurn = useMemo(
     () => findActiveAgentTurn(allItems),
@@ -587,8 +610,13 @@ export function ChatThread({
 
     prevMessageCountRef.current = messages.length
 
-    // Auto-scroll to bottom when at/near the bottom.
-    if (isAtBottomRef.current) {
+    // Auto-scroll to bottom when at/near the bottom — but only if
+    // there's actually a thread of messages. When the chat is empty
+    // (new-chat first paint), the scroll-to-bottom pushes the
+    // empty-state H2 ("What would you like to create?") above the
+    // viewport on short screens; messages.length === 0 means there's
+    // nothing to follow, so the scroll is purely harmful.
+    if (isAtBottomRef.current && messages.length > 0) {
       el.scrollTop = el.scrollHeight
     }
   }, [messages, isTyping, failedAgentTurn, highlightMessageId])
@@ -655,19 +683,31 @@ export function ChatThread({
       style={{ '--chat-thread-scrollbar-width': `${scrollbarWidth}px` } as CSSProperties}
     >
       {headerSlot}
-      <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]" onScroll={handleScroll}>
+      <div
+        ref={scrollRef}
+        className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]"
+        // Top + bottom edge mask: messages fade as they scroll up past
+        // the top bar and as they scroll down behind the composer.
+        // Mask is on the scrolling element itself (not an overlay) so it
+        // tracks the content, not a fixed strip near the chrome.
+        //
+        // Heads-up for anyone tempted to also put `mix-blend-mode` on a
+        // descendant bubble: `mask-image` here creates a new stacking
+        // context, which traps blends inside the masked subtree and
+        // stops them reaching the AppShell-level BackgroundBlobs.
+        // Either the mask goes, or the blend mode does.
+        style={{
+          maskImage: 'linear-gradient(to bottom, transparent 0, black 48px, black calc(100% - 48px), transparent 100%)',
+          WebkitMaskImage: 'linear-gradient(to bottom, transparent 0, black 48px, black calc(100% - 48px), transparent 100%)',
+        }}
+        onScroll={handleScroll}
+      >
         <div className={`min-w-0 max-w-full ${innerClassName}`}>
           {/* Loading-older indicator */}
           {isFetchingOlder && (
             <div className="flex justify-center py-2">
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
             </div>
-          )}
-          {/* "Beginning of conversation" marker */}
-          {!prevCursor && messages.length > 0 && !isInitialLoading && (
-            <p className="text-xs text-muted-foreground text-center pt-1 pb-2">
-              Beginning of conversation
-            </p>
           )}
           {isError && (
             <p className="text-xs text-destructive text-center pt-4">
@@ -681,23 +721,42 @@ export function ChatThread({
               </p>
             )
           )}
-          {messages.map((msg, i) => (
+          {messages.map((msg, i) => {
+            // Consecutive same-role messages sent within a 1-second
+            // window are treated as a single group: only the last one
+            // surfaces the actions row, and within the group the
+            // bubbles sit tight (just the inter-message `space-y-3`
+            // gap, no per-message actions reserved space). Artifact
+            // refs and event logs participate in groups too, so a
+            // sequence like "text → file → text" sent in one breath
+            // reads as one expression. The 1-second threshold mirrors
+            // how rapid-fire follow-ups tend to be parts of one
+            // thought rather than separate turns.
+            const GROUP_WINDOW_MS = 1000
+            const prev: typeof msg | undefined = messages[i - 1]
+            const next: typeof msg | undefined = messages[i + 1]
+            const sameGroupAs = (a: typeof msg | undefined, b: typeof msg | undefined) =>
+              !!a && !!b
+              && a.role === b.role
+              && Math.abs(new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) <= GROUP_WINDOW_MS
+            const isFirstInGroup = !sameGroupAs(prev, msg)
+            const isLastInGroup = !sameGroupAs(msg, next)
+            return (
             <div
               key={msg.id}
               className="min-w-0 max-w-full"
               data-message-id={msg.id}
-              ref={(el) => {
-                if (el) messageRefs.current.set(msg.id, el)
-                else messageRefs.current.delete(msg.id)
-              }}
+              ref={getMessageRefCallback(msg.id)}
             >
               <div className={`min-w-0 ${typeof messageClassName === 'function' ? (messageClassName(msg) ?? '') : (messageClassName ?? '')}`}>
                 <MessageBubble
                   message={msg}
                   workspaceId={workspaceId}
+                  workspacePath={workspacePath}
                   currentChatId={chatId}
                   agentName={agentName}
-                  isFirstInGroup={i === 0 || messages[i - 1].role !== msg.role || messages[i - 1].content.type === 'artifactRef'}
+                  isFirstInGroup={isFirstInGroup}
+                  isLastInGroup={isLastInGroup}
                   isNew={shouldShowNewAssistantBadge(msg, lastAssistantId, showNewBadge, failedAgentTurn)}
                   onAttachmentClick={onAttachmentClick}
                   agentHeaderClassName={agentHeaderClassName}
@@ -711,7 +770,8 @@ export function ChatThread({
                 </div>
               )}
             </div>
-          ))}
+            )
+          })}
           {showToolOnlyFallback && (
             <div className={resolvedStatusClassName}>
               <ToolOnlyRunFallback />
@@ -722,6 +782,7 @@ export function ChatThread({
               <MessageBubble
                 message={liveDeveloperMessage}
                 workspaceId={workspaceId}
+                workspacePath={workspacePath}
                 agentName={agentName}
                 isFirstInGroup
                 onAttachmentClick={onAttachmentClick}
@@ -735,6 +796,7 @@ export function ChatThread({
               <MessageBubble
                 message={liveAssistantText}
                 workspaceId={workspaceId}
+                workspacePath={workspacePath}
                 agentName={agentName}
                 isFirstInGroup
                 onAttachmentClick={onAttachmentClick}

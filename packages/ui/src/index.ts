@@ -24,3 +24,4 @@ export * from "./components/switch";
 export * from "./components/tabs";
 export * from "./components/textarea";
 export * from "./components/tooltip";
+export { useIsMobile } from "./hooks/use-mobile";

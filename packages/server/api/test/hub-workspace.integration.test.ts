@@ -3,12 +3,12 @@
  *
  * Covers:
  *   - the boot pass auto-creates a hub for every user (idempotent)
+ *   - the hub workspace ships empty — no seeded chat, no greeting
  *   - `GET /workspaces` sorts the hub first and exposes `kind`
  *   - the hub can't be deleted via the API
  *   - the hub can't be renamed via PATCH
  *   - users can't create or rename a workspace into a reserved `-hub` slug
  *   - the API rejects a client-supplied `kind` field
- *   - a fresh hub ships with one initial chat + one agent message
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as http from "node:http";
@@ -129,44 +129,62 @@ describe("hub workspace boot pass", () => {
     expect(after.filter((w) => w.kind === "hub")).toHaveLength(1);
   });
 
-  it("seeds an initial chat with one agent message", async () => {
+  it("does not seed any chats or messages in the hub workspace", async () => {
+    // The hub is created empty — users start their own chats. createHub
+    // intentionally inserts no chat, no greeting, and no agent message.
     const hub = await queries.workspaces.findHubByUser(pool, userId);
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM chats WHERE workspace_id = ?`,
       [hub!.id],
     );
-    expect(rows.length).toBeGreaterThanOrEqual(1);
-    const messages = await queries.messages.listByChat(pool, rows[0].id, {});
-    const visible = messages.items.filter((m) => m.kind !== "summary" && m.role === "agent");
-    expect(visible.length).toBeGreaterThanOrEqual(1);
-    expect(visible[0].content.type).toBe("text");
+    expect(rows).toHaveLength(0);
   });
 
-  it("repairs a partially-seeded hub — workspace exists but chat was never created", async () => {
-    // Simulate the failure mode: workspace row written, but chat/message insert
-    // failed. createHub should detect the missing chat and seed it on the next call.
-    const partialUserId = generateId("user");
+  it("does not re-seed anything on a second createHub call for the same user", async () => {
+    // Idempotency contract: createHub may be invoked from boot, login,
+    // and any future trigger. It must never inject content into the
+    // workspace's chats — neither into the hub itself nor into any
+    // user-created chat the user has added.
+    const reuserId = generateId("user");
     await queries.users.insert(pool, {
-      id: partialUserId,
-      username: "partialuser",
+      id: reuserId,
+      username: "reuser",
       passwordHash: await hashPassword("pw"),
-      email: "partial@example.com",
+      email: "reuser@example.com",
     });
-    // First call creates the hub workspace and seeds it.
-    const hub = await createHub(pool, home, partialUserId, "partialuser");
-    // Manually delete the chat to simulate a partial failure.
-    await pool.query(`DELETE FROM messages WHERE chat_id IN (SELECT id FROM chats WHERE workspace_id = ?)`, [hub.id]);
-    await pool.query(`DELETE FROM chats WHERE workspace_id = ?`, [hub.id]);
-    // Second call should repair: hub workspace already exists, but chat is missing.
-    await createHub(pool, home, partialUserId, "partialuser");
-    const { rows } = await pool.query<{ id: string }>(
+    const hub = await createHub(pool, home, reuserId, "reuser");
+
+    // Simulate a user-created chat with a single user message and no
+    // agent reply yet — the exact shape that would have triggered the
+    // old greeting-injection bug.
+    const memberships = await queries.workspaceAgents.listForWorkspace(pool, hub.id);
+    const agentId = memberships[0]!.agentId;
+    const userChat = await queries.chats.insert(pool, {
+      id: generateId("chat"),
+      workspaceId: hub.id,
+      agentId,
+      title: "Can we build a small Todo app?",
+    });
+    await queries.messages.insert(pool, {
+      id: generateId("message"),
+      chatId: userChat.id,
+      role: "user",
+      content: { type: "text", text: "Can we build a small Todo app?" },
+    });
+
+    await createHub(pool, home, reuserId, "reuser");
+
+    const userChatMessages = await queries.messages.listByChat(pool, userChat.id, {});
+    const agentMessagesInUserChat = userChatMessages.items.filter(
+      (m) => m.role === "agent" && m.content.type === "text",
+    );
+    expect(agentMessagesInUserChat).toHaveLength(0);
+
+    const { rows: allChats } = await pool.query<{ id: string }>(
       `SELECT id FROM chats WHERE workspace_id = ?`,
       [hub.id],
     );
-    expect(rows.length).toBe(1);
-    const messages = await queries.messages.listByChat(pool, rows[0].id, {});
-    const agentMessages = messages.items.filter((m) => m.role === "agent");
-    expect(agentMessages.length).toBeGreaterThanOrEqual(1);
+    expect(allChats).toHaveLength(1);
   });
 
   it("creates a hub for a freshly-inserted user when the boot pass runs", async () => {
@@ -255,8 +273,6 @@ describe("hub workspace — chats and library access", () => {
     const res = await request("GET", `/chats?workspaceId=${hub!.id}`, token);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
-    // The hub ships with one initial chat.
-    expect((res.body as unknown[]).length).toBeGreaterThanOrEqual(1);
   });
 
   it("GET /library?workspaceId=<hub-id> returns the hub's library (not 400)", async () => {

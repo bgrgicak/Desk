@@ -49,7 +49,7 @@ beforeAll(async () => {
   await runMigrations(pool);
 
   process.env.DESK_SEED_USERNAME = "testuser";
-  process.env.DESK_SEED_PASSWORD = "testpass";
+  process.env.DESK_SEED_PASSWORD = "test-pass-1234";
   await seedIfEmpty(pool);
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-tools-models-it-"));
@@ -70,7 +70,7 @@ beforeAll(async () => {
 
   const loginRes = await httpJson("POST", "/auth/login", undefined, {
     username: "testuser",
-    password: "testpass",
+    password: "test-pass-1234",
   });
   token = (loginRes.body as { token: string }).token;
 }, 60_000);

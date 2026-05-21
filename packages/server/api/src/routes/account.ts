@@ -13,6 +13,7 @@ import { workspaceRootPath } from "@agent-desk/storage";
 import type { LocalFilesystemConnectionMetadata, LocalFilesystemDirectoryConfig } from "@agent-desk/shared";
 import type { VaultStore } from "../vault/store.js";
 import { deleteCredentials, readCredentials, writeCredentials } from "../connectors/credentialStore.js";
+import { enforcePasswordPolicy } from "../auth/passwordPolicy.js";
 
 type ProviderMetaEntry = {
   name?: string;
@@ -272,6 +273,14 @@ export async function changePassword(
   userId: string,
   data: { currentPassword: string; newPassword: string },
 ) {
+  // Enforce the same min-length + no-seed-reuse policy here as at
+  // signup and vault setup.  Without this the must-change-password
+  // gate is defeatable: a user could "change" to the documented
+  // seed value, clear must_change_password=1, and end up back at
+  // square one with a public-known credential.
+  enforcePasswordPolicy(
+    typeof data?.newPassword === "string" ? data.newPassword : "",
+  );
   await queries.users.setPassword(pool, userId, data.currentPassword, data.newPassword);
   return { ok: true };
 }
@@ -404,6 +413,58 @@ export async function setProviders(
     await queries.providerKeyAccessLog.logKeyAccess(pool, userId, "delete", deleted, "user_update");
   }
   return getProviders(pool, vault, userId);
+}
+
+/**
+ * Returns the audit log entries for provider-key reads, writes and
+ * deletes for the calling user, newest first. Logging is performed by
+ * `logKeyAccess` from `setProviders` (user-initiated) and
+ * `fireMessage` (sandbox-initiated). This is the read surface so the
+ * SPA can show a "your AI keys were read at …" panel.
+ *
+ * Bound to `GET /me/key-access-log`, optional `?limit=` (1–500,
+ * default 100). Returns ISO timestamps so the client doesn't need to
+ * know the DB column shape.
+ *
+ * Threat model: the audit table holds only metadata (key names, never
+ * values). A SPA session that's been hijacked can read what the
+ * legitimate user could see anyway — the timestamps and "this key was
+ * used by a sandbox run" reason strings aren't sensitive on their own.
+ * For that reason this endpoint deliberately does NOT require a vault
+ * unlock; the threat model matches GET /me/providers (masked-key
+ * metadata available at any time).
+ */
+export async function getKeyAccessLog(
+  pool: Pool,
+  userId: string,
+  rawLimit?: string,
+): Promise<{
+  entries: Array<{
+    id: string;
+    action: "read" | "write" | "delete";
+    providers: string[];
+    reason: string | null;
+    createdAt: string;
+  }>;
+}> {
+  let limit = 100;
+  if (rawLimit !== undefined) {
+    const parsed = Number.parseInt(rawLimit, 10);
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 500) {
+      throw new ValidationError("limit must be an integer between 1 and 500");
+    }
+    limit = parsed;
+  }
+  const rows = await queries.providerKeyAccessLog.getKeyAccessLog(pool, userId, limit);
+  return {
+    entries: rows.map((r) => ({
+      id: r.id,
+      action: r.action,
+      providers: r.providers,
+      reason: r.reason,
+      createdAt: r.createdAt.toISOString(),
+    })),
+  };
 }
 
 export async function getProvidersMeta(

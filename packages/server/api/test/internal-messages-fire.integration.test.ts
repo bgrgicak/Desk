@@ -31,6 +31,13 @@ let runManager: ReturnType<typeof createRunManager>;
 let dbPath: string;
 
 beforeAll(async () => {
+  // Every userRequest() in this suite does a fresh /auth/login, and the
+  // auth.login bucket is capped at 10/min/IP. The test fires well over
+  // that, so the run hits 401 from the rate limiter rather than the
+  // assertion-meaningful status. The escape hatch is the documented
+  // test affordance — production never sets it (see rateLimit.ts:56).
+  process.env.DESK_RATE_LIMIT_DISABLED = "1";
+
   const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-msg-fire-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
@@ -77,6 +84,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  delete process.env.DESK_RATE_LIMIT_DISABLED;
   await clearSessions(pool);
   clearConnections();
   server?.close();
@@ -404,13 +412,13 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     expect(JSON.parse(outputRows[0].content).type).toBe("events");
   });
 
-  it("POST /run moves a plain user task parent to Active durably", async () => {
+  it("POST /run fires a plain user task without mutating the parent", async () => {
     const mid = await insertPlainUserTask({ type: "text", text: "manual active" });
 
     const res = await userRequest("POST", `/chats/${chatId}/messages/${mid}/run`);
     expect(res.status).toBe(200);
     expect((res.body as { kind: string; state: string }).kind).toBe("task");
-    expect((res.body as { state: string }).state).toBe("running");
+    expect((res.body as { state: string }).state).toBe("pending");
 
     for (let i = 0; i < 50; i++) {
       const { rows } = await pool.query<{ state: string }>(
@@ -422,7 +430,7 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     }
 
     const parent = await queries.messages.findById(pool, mid);
-    expect(parent?.state).toBe("running");
+    expect(parent?.state).toBe("pending");
 
     const { rows } = await pool.query<{ state: string }>(
       `SELECT state FROM messages WHERE parent_id = ? AND kind = 'task_run'`,
@@ -432,25 +440,30 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     expect(rows[0].state).toBe("succeeded");
   });
 
-  it("POST /run keeps a manually activated agent task Active when the run fails", async () => {
+  it("POST /run propagates a failed agent-authored unscheduled task's terminal state onto the parent", async () => {
+    // afterTaskRun mirrors the run's terminal state onto an
+    // agent-authored unscheduled parent (sandbox sub-task semantics): a
+    // run that errored out lands the parent in `failed` so the board
+    // surfaces the failure (the UI selector folds `failed` into Open,
+    // see app/src/lib/task-status.ts) instead of leaving the card stuck
+    // in stale Active. User-authored unscheduled tasks remain kanban-
+    // sticky and are covered by the sibling test above.
     const mid = await insertPlainAgentTask({ type: "text", text: "missing attachment failure" });
 
     const res = await userRequest("POST", `/chats/${chatId}/messages/${mid}/run`);
     expect(res.status).toBe(200);
     expect((res.body as { kind: string; state: string }).kind).toBe("task");
-    expect((res.body as { state: string }).state).toBe("running");
+    expect((res.body as { state: string }).state).toBe("pending");
 
-    for (let i = 0; i < 50; i++) {
-      const { rows } = await pool.query<{ state: string }>(
-        `SELECT state FROM messages WHERE parent_id = ? AND kind = 'task_run'`,
-        [mid],
-      );
-      if (rows[0]?.state === "failed") break;
+    let parentState: string | undefined;
+    for (let i = 0; i < 100; i++) {
       await new Promise((r) => setTimeout(r, 20));
+      const parent = await queries.messages.findById(pool, mid);
+      parentState = parent?.state;
+      if (parentState === "failed") break;
     }
 
-    const parent = await queries.messages.findById(pool, mid);
-    expect(parent?.state).toBe("running");
+    expect(parentState).toBe("failed");
 
     const { rows } = await pool.query<{ state: string }>(
       `SELECT state FROM messages WHERE parent_id = ? AND kind = 'task_run'`,

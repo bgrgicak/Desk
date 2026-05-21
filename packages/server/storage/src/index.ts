@@ -30,6 +30,7 @@ export {
   readFile,
   downloadFile,
   statFile,
+  statPath,
   moveFile,
   deleteFile,
   overwriteFile,
@@ -56,6 +57,9 @@ export type {
 } from "./files.js";
 export {
   listLibrary,
+  listLibraryFolders,
+  searchLibrary,
+  statPinnedEntries,
   createLibraryFolder,
   createLibraryLink,
   moveLibraryEntry,

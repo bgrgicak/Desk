@@ -7,6 +7,9 @@ import { queries } from "@agent-desk/db";
 import { generateId } from "@agent-desk/shared";
 import { workspaceJournalDir, workspaceJournalPath, workspaceMemoryDir } from "@agent-desk/storage";
 import { resolveLocalSourceEnv } from "@agent-desk/runtime";
+import { resolveModelForRun } from "./runs-helpers.js";
+import { withModule } from "@agent-desk/shared/logger";
+const log = withModule("scheduler/reflection");
 
 /**
  * Memory-system Phase 5 — daily reflection.
@@ -133,6 +136,10 @@ async function listWorkspaceActivityForDate(
   const [year, month, day] = date.split("-").map(Number);
   const dayStart = new Date(year, month - 1, day, 0, 0, 0, 0).toISOString();
   const dayEnd = new Date(year, month - 1, day, 23, 59, 59, 999).toISOString();
+  // `feedback`-content rows are `role: 'system'` thumbs-up / thumbs-down
+  // reactions the user left on agent replies. They're whitelisted here so
+  // reflection sees the signal alongside the conversation; rendered into
+  // a human-readable line below so the prompt can read it as text.
   const { rows } = await pool.query<{
     chat_id: string;
     role: string;
@@ -144,14 +151,33 @@ async function listWorkspaceActivityForDate(
      JOIN chats c ON c.id = m.chat_id
      WHERE c.workspace_id = ?
        AND m.created_at BETWEEN ? AND ?
-       AND m.role IN ('user', 'agent')
        AND json_valid(m.content)
-       AND json_extract(m.content, '$.type') IN ('text', 'summary')
+       AND (
+         (m.role IN ('user', 'agent')
+          AND json_extract(m.content, '$.type') IN ('text', 'summary'))
+         OR (m.role = 'system'
+             AND json_extract(m.content, '$.type') = 'feedback')
+       )
      ORDER BY m.created_at`,
     [workspaceId, dayStart, dayEnd],
   );
   return rows.map((r) => {
-    const content = JSON.parse(r.content) as { text?: string; body?: string };
+    const content = JSON.parse(r.content) as {
+      type?: string;
+      text?: string;
+      body?: string;
+      rating?: string;
+      targetMessageId?: string;
+    };
+    if (content.type === "feedback") {
+      const rating = content.rating === "down" ? "👎 not helpful" : "👍 helpful";
+      return {
+        chatId: r.chat_id,
+        role: "user",
+        createdAt: r.created_at,
+        body: `User reacted ${rating} on a prior agent reply${content.targetMessageId ? ` (message ${content.targetMessageId})` : ""}.`,
+      };
+    }
     return {
       chatId: r.chat_id,
       role: r.role,
@@ -215,6 +241,26 @@ export async function runWorkspaceReflection(
   if (activity.length === 0 && !opts.reflectOnEmptyActivity) return null;
   const priorJournals = await listPriorWorkspaceJournals(opts.home, opts.workspaceSlug, date);
 
+  // Run the requested model through the same resolver chat fires use.
+  // The agent file the reflection sandbox writes ends up with this
+  // `model:` line, and opencode-serve caches the agent file's model at
+  // daemon startup — feeding it the raw `codex/<name>` Desk relabel
+  // would leave the daemon resolving against a provider it doesn't know
+  // and 500 every reflection. The resolver also strips `OPENAI_API_KEY`
+  // on the codex-OAuth path so the daemon picks the OAuth route instead
+  // of a tie-break against a stale cloud key.
+  const billing = resolveModelForRun(
+    opts.agent.model,
+    opts.providerKeys ?? {},
+    opts.extraEnv,
+  );
+  if (billing.reason !== null) {
+    log.info(
+      { workspaceId: opts.workspaceId, requested: opts.agent.model, runtime: billing.runtimeModel, reason: billing.reason },
+      "reflection: model translated for daemon",
+    );
+  }
+
   const result = await opts.reflectWorkspace({
     pool: opts.pool,
     home: opts.home,
@@ -224,8 +270,8 @@ export async function runWorkspaceReflection(
     userId: opts.userId,
     userName: opts.userName,
     userTimezone: opts.userTimezone,
-    agent: opts.agent,
-    providerKeys: opts.providerKeys,
+    agent: { ...opts.agent, model: billing.runtimeModel },
+    providerKeys: billing.providerKeys,
     extraEnv: opts.extraEnv,
     date,
     activity,
@@ -289,7 +335,7 @@ export async function runDailyReflection(opts: RunDailyReflectionOptions): Promi
 export interface DailyReflectionScheduleOptions extends RunDailyReflectionOptions {
   /** Cron expression. Defaults to `0 3 * * *` per spec (03:00 server time daily). */
   cron?: string;
-  /** Logger hook. Defaults to console.error on failures. */
+  /** Logger hook. Defaults to log.error on failures. */
   onError?: (err: unknown) => void;
 }
 
@@ -421,8 +467,7 @@ export function startDailyReflection(opts: DailyReflectionScheduleOptions): Cron
       await runDailyReflection(opts);
     } catch (err) {
       if (opts.onError) opts.onError(err);
-      // eslint-disable-next-line no-console
-      else console.error("daily reflection job failed:", err);
+      else log.error({ err }, "daily reflection job failed");
     }
   });
   return job;

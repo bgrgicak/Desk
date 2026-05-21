@@ -76,13 +76,6 @@ export interface InboxItem {
   uiCard?: InboxUICard
 }
 
-export interface TodoItem {
-  id: string
-  text: string
-  done: boolean
-  source: 'ai' | 'user'
-}
-
 export type TodayItemType =
   | 'broken-connection'
   | 'decision-from-run'
@@ -122,11 +115,6 @@ export interface ContextItem {
   folderId?: string | null
   addedAt: Date
   usedBy: string[]
-  uploadedBy: 'user' | 'ai'
-  /** Display name of the agent that originally created this file, when
-   * `uploadedBy === 'ai'`. Used to show an inline provenance badge on
-   * library cards. */
-  agentName?: string
   /** Whether this file is pinned in the workspace's Pinned view. */
   pinned?: boolean
   lastAccessed?: Date
@@ -145,7 +133,13 @@ export interface Folder {
   name: string
   parentId: string | null
   createdAt: Date
+  /** True when the folder is pinned to the workspace sidebar (mirrors
+   *  ContextItem.pinned). Optional so library lists that don't surface
+   *  pin state stay compatible. */
+  pinned?: boolean
 }
+
+export type PinnedEntryKind = 'library' | 'folder' | 'chat'
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
 
@@ -160,9 +154,21 @@ export interface TaskOccurrence {
 export interface Task {
   id: string
   name: string
+  /** AI-generated short title (parity with chat titles). Shown as the
+   *  card heading above the body. Empty until titled. */
+  title?: string
   description?: string
   agentName: string
-  status: 'todo' | 'active' | 'complete' | 'scheduled'
+  /** `todo` = idle (created, not picked up, OR last agent run errored —
+   *  failure is internal-only and surfaces as Open in the UI so the
+   *  user retries from the same column instead of learning a new
+   *  status). `active` = in progress (picked up by the user or the AI
+   *  / a run is executing / parent state is `running`). `needs_input`
+   *  = the AI paused awaiting the user's reply (the AI moves it here
+   *  and back). `scheduled` = has a future run. `complete` =
+   *  done/cancelled. `failed` = a run terminated in error and no
+   *  retry has succeeded since. */
+  status: 'todo' | 'active' | 'needs_input' | 'complete' | 'scheduled' | 'failed'
   statusText: string
   priority?: 'low' | 'medium' | 'high' | 'highest'
   assigneeId?: string
@@ -178,8 +184,15 @@ export interface Task {
   messageRole?: 'user' | 'agent' | 'system'
   /** Raw server lifecycle state. UI status is derived from this plus schedule/run children. */
   messageState?: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'paused'
-  /** Chat the backing message lives in. */
+  /** Chat the backing message (anchor) lives in. For tasks created from
+   *  within a chat this is the *parent/source* chat — clicking the task
+   *  in the tasks list should open `threadChatId` (the dedicated thread
+   *  chat) instead, where task_runs and replies live. */
   chatId?: string
+  /** Dedicated thread chat anchored at this task's message. Present
+   *  when the task was created from inside an existing conversation;
+   *  absent for stand-alone tasks created via the TasksPage composer. */
+  threadChatId?: string
   /** True when the task has actually fired at least once. */
   hasRealStartedAt?: boolean
   artifactIds: string[]
@@ -258,139 +271,15 @@ export interface Chat {
    * message kind, falling back to `'chat'`.
    */
   kind?: ChatKind
-}
-
-// ── Settings / Connections (catalog of integrations the UI can render) ───────
-
-export type ConnectionKind =
-  | 'claude' | 'chatgpt'
-  | 'notion' | 'github' | 'slack' | 'figma' | 'linear' | 'web-clipper'
-
-export interface ConnectionMeta {
-  name: string
-  description: string
-  /** Emoji used when no brand mark applies. */
-  icon: string
-}
-
-export const CONNECTION_CATALOG: Record<ConnectionKind, ConnectionMeta> = {
-  'claude':       { name: 'Claude',       description: 'Claude models via the Anthropic API', icon: '🅰️' },
-  'chatgpt':      { name: 'ChatGPT',      description: 'OpenAI models via the OpenAI API',    icon: '🅶' },
-  'notion':       { name: 'Notion',       description: 'Pages and databases',                  icon: '📝' },
-  'github':       { name: 'GitHub',       description: 'Repositories and issues',              icon: '🐙' },
-  'slack':        { name: 'Slack',        description: 'Messages and channels',                icon: '💬' },
-  'figma':        { name: 'Figma',        description: 'Design files and prototypes',          icon: '🎨' },
-  'linear':       { name: 'Linear',       description: 'Issues, projects and cycles',          icon: '🔷' },
-  'web-clipper':  { name: 'Web Clipper',  description: 'Save pages from your browser',         icon: '🌐' },
-}
-
-export interface Connection {
-  id: string
-  kind: ConnectionKind
-  name: string
-  apiKey?: string
-  baseUrl?: string
-  enabled: boolean
-}
-
-// ── Settings / Providers ──────────────────────────────────────────────────────
-
-export type ProviderKind = 'claude' | 'chatgpt' | 'other'
-
-export interface Provider {
-  id: string
-  kind: ProviderKind
-  name: string
-  apiKey: string
-  organizationId?: string
-  baseUrl?: string
-}
-
-export interface SettingsAgent {
-  id: string
-  name: string
-  providerId: string
-  model: string
-}
-
-export const PROVIDER_MODELS: Record<ProviderKind, string[]> = {
-  claude: ['Claude Sonnet 4', 'Claude Opus 4', 'Claude Haiku 3.5'],
-  chatgpt: ['GPT-4o', 'GPT-4o mini', 'GPT-4 Turbo'],
-  other: [],
-}
-
-export const PROVIDER_LABELS: Record<ProviderKind, string> = {
-  claude: 'Claude',
-  chatgpt: 'ChatGPT',
-  other: 'Other',
-}
-
-// ── Compose scenarios (UI-only "Analyzing requirements…" sequence) ────────────
-// TODO(api-gap): wire scripted status strings to WS `message.log_appended`
-// once slice 12's event stream drives compose progression. Matrix §4.2.3.
-
-export interface ComposeScenario {
-  triggers: string[]
-  statusMessages: string[]
-  resultArtifact: Omit<Artifact, 'id' | 'createdAt' | 'updatedAt' | 'conversation'>
-  finalResponse: string
-}
-
-export const COMPOSE_SCENARIOS: ComposeScenario[] = [
-  {
-    triggers: ['summarise', 'summarize', 'summary', 'recap'],
-    statusMessages: ['Reading your files...', 'Pulling out the key points...', 'Writing the summary...'],
-    resultArtifact: {
-      name: 'Summary',
-      type: 'document',
-      agentName: 'Claude',
-      agentModel: 'Claude Sonnet 4',
-      content: '# Summary\n\nThis is a placeholder summary. Real content arrives from the agent.',
-    },
-    finalResponse: "Here's your summary. I've highlighted the key themes and action items.",
-  },
-  {
-    triggers: ['build', 'create', 'make', 'app', 'tracker', 'dashboard', 'tool'],
-    statusMessages: ['Understanding what you need...', 'Designing the interface...', 'Building the components...', 'Adding the finishing touches...'],
-    resultArtifact: {
-      name: 'New App',
-      type: 'app',
-      agentName: 'Claude',
-      agentModel: 'Claude Sonnet 4',
-      content: 'app',
-    },
-    finalResponse: "Your app is ready! I've built it with the features you described. You can start using it right away.",
-  },
-  {
-    triggers: ['write', 'draft', 'document', 'doc', 'plan', 'strategy', 'brief', 'report', 'email', 'agenda', 'notes'],
-    statusMessages: ['Thinking about the structure...', 'Writing the first draft...', 'Reviewing and polishing...'],
-    resultArtifact: {
-      name: 'New Document',
-      type: 'document',
-      agentName: 'Claude',
-      agentModel: 'Claude Sonnet 4',
-      content: '# New Document\n\nDraft body.',
-    },
-    finalResponse: "Your document is ready. Take a look and let me know if you'd like any changes.",
-  },
-  {
-    triggers: ['image', 'design', 'logo', 'illustration', 'palette', 'visual'],
-    statusMessages: ['Exploring visual directions...', 'Generating the design...'],
-    resultArtifact: {
-      name: 'New Design',
-      type: 'image',
-      agentName: 'Claude',
-      agentModel: 'Claude Sonnet 4',
-      content: 'image',
-    },
-    finalResponse: "Here's your design. Let me know if you want to adjust colors, layout, or style.",
-  },
-]
-
-export function matchComposeScenario(input: string): ComposeScenario {
-  const lower = input.toLowerCase()
-  const matched = COMPOSE_SCENARIOS.find(s => s.triggers.some(t => lower.includes(t)))
-  return matched || COMPOSE_SCENARIOS[2]
+  /** True when the user has pinned this chat to the sidebar's Pinned
+   *  section. Server-derived from the chat_pins table. */
+  pinned?: boolean
+  /** When this chat is a thread, the parent chat where the anchor
+   *  message lives. Server-derived; absent for standalone chats. */
+  parentChatId?: string
+  /** When this chat is a thread, the anchor message id in
+   *  `parentChatId`. Used to deep-link back to the originating turn. */
+  anchorMessageId?: string
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────
@@ -420,9 +309,11 @@ export function getArtifactIcon(type: ArtifactType): LucideIcon {
   }
 }
 
-// Folder helpers — accept the folder list explicitly so they can be used
-// against whatever derivedSlice selector returns (empty for now, see
-// matrix §4.2.1).
+// Folder helpers — accept the folder list explicitly so they can be
+// used against whatever folder source the caller has handy. The
+// server does not currently expose folders as a first-class entity
+// (tracked as a roadmap feature); callers using a derived list pass
+// an empty array and the helpers behave correctly.
 
 export function getFolderById(folders: Folder[], id: string | null | undefined): Folder | undefined {
   if (!id) return undefined

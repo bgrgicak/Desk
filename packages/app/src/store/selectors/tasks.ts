@@ -11,7 +11,10 @@ export function summaryRequestMessageKindsForDeveloperMode(developerMode: boolea
 }
 
 export function isTaskListMessageForDeveloperMode(m: ServerMessage, developerMode: boolean): boolean {
-  if (m.kind === "task") return true;
+  if (m.kind === "task") {
+    if (!developerMode && m.content.type === "reflection_request") return false;
+    return true;
+  }
   if (!developerMode) return false;
   return m.kind === "summary" && m.content.type === "summary_request";
 }
@@ -75,15 +78,29 @@ function descriptionFor(m: ServerMessage): string | undefined {
   return description.length > 0 ? description : undefined;
 }
 
-function statusFor(m: ServerMessage, runs: ServerMessage[] = []): Task["status"] {
+function statusFor(
+  m: ServerMessage,
+  runs: ServerMessage[] = [],
+  chat?: ServerChat,
+): Task["status"] {
   return taskStatusFromTaskAndRuns(
     { state: m.state ?? "pending", executeAt: m.executeAt, cron: m.cron },
     runs.map(run => ({ state: run.state })),
+    chat ? { unread: chat.unread, running: chat.running } : undefined,
   );
 }
 
-function statusTextFor(m: ServerMessage): string {
-  if (m.state === "running") return "Running";
+function statusTextFor(
+  m: ServerMessage,
+  chat?: ServerChat,
+  runs: ServerMessage[] = [],
+): string {
+  // Real execution signals first — match the badge in task-status.ts so the
+  // helper text never says "Running" on a card that isn't actually running.
+  // A parent task's own state='running' is a kanban label, not execution,
+  // so it does not flip the text on its own.
+  if (runs.some(run => run.state === "running")) return "Running";
+  if (chat?.running) return "Agent working…";
   if (m.state === "succeeded") return "Completed";
   if (m.state === "failed") return "Failed";
   if (m.state === "cancelled") return "Cancelled";
@@ -98,6 +115,7 @@ function statusTextFor(m: ServerMessage): string {
     return when.getTime() < Date.now() ? `Overdue since ${label}` : `Scheduled for ${label}`;
   }
   if (m.cron) return `Cron: ${m.cron}`;
+  if (chat?.unread) return "Waiting for your reply";
   return "Pending";
 }
 
@@ -136,9 +154,17 @@ export function toUiTask(
   runs: ServerMessage[] = [],
 ): Task {
   const agent = agents.find((a) => a.id === m.agentId);
+  // For a sub-task, the agent runs inside the dedicated thread chat —
+  // that's where messages-writes.ts flips `unread = 1` when the agent
+  // posts, and where `running` reflects the live agent_turn. Reading
+  // unread/running off the parent chat would surface false negatives
+  // (the parent chat stays unread=false while the sub-task thread
+  // accumulates agent replies) and the task would never show as
+  // `needs_input` until the user opened the thread themselves.
+  const chat = chats.find((c) => c.id === (m.threadChatId ?? m.chatId));
   const realStartedAt = m.startedAt ? new Date(m.startedAt) : undefined;
   const completedAt = m.endedAt ? new Date(m.endedAt) : undefined;
-  const status = statusFor(m, runs);
+  const status = statusFor(m, runs, chat);
 
   const history: TaskOccurrence[] = [];
   for (const run of runs) {
@@ -166,11 +192,15 @@ export function toUiTask(
   return {
     id: m.id,
     name: nameFor(m, chats, workspaces),
+    title: m.title?.trim() || undefined,
     description: descriptionFor(m),
     agentName: agent?.name ?? "Agent",
     status,
-    statusText: statusTextFor(m),
-    assigneeId: m.assigneeId ?? agent?.id,
+    statusText: statusTextFor(m, chat, runs),
+    // The server has no `assigneeId` field — task assignment is just
+    // `agentId`.  Drop the dead alias (PATCH bodies that included it
+    // were silently no-op on the server) and use the row's agentId.
+    assigneeId: agent?.id,
     startedAt,
     hasRealStartedAt: !!realStartedAt,
     completedAt,
@@ -179,6 +209,7 @@ export function toUiTask(
     messageRole: m.role,
     messageState: m.state ?? "pending",
     chatId: m.chatId,
+    threadChatId: m.threadChatId,
     messageId: m.id,
     artifactIds: [],
     scheduledFor: m.executeAt ? new Date(m.executeAt) : undefined,

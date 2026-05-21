@@ -1,17 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { usePersistedState } from '@/hooks/use-persisted-state'
-import { useSelector } from 'react-redux'
+import { useSelector, useDispatch } from 'react-redux'
 import { getSessionToken } from '@/auth/session'
 import {
   Link2,
   Download,
-  MessageSquarePlus,
-  Trash2,
   MoreHorizontal,
   ExternalLink,
-  Pencil,
-  PanelRight,
-  ChevronRight,
+  MessageSquare,
+  X,
   Eye,
   Code,
 } from 'lucide-react'
@@ -24,12 +22,6 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
   Button,
   Dialog,
   DialogContent,
@@ -39,20 +31,18 @@ import {
   DialogTitle,
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuTrigger,
   Input,
 } from '@agent-desk/ui'
-import { PageHeader } from '@/components/layout/PageHeader'
+import { TopBarActions, TopBarContentActions } from '@/components/layout/TopBar'
 import type { ContextItem, Artifact } from '@/data/ui-types'
-import { getArtifactIcon, getFolderPath } from '@/data/ui-types'
+import { getArtifactIcon } from '@/data/ui-types'
 import { fileKindForItem, fileKindFrom, iconForItem, isMarkdownFile, isHtmlFile } from '@/data/file-kind'
 import {
   useDeleteLibraryFileMutation,
-  useGetLibraryQuery,
+  useGetLibraryFoldersQuery,
   useMoveLibraryEntryMutation,
 } from '@/store/api'
-import { toFolderList } from '@/store/selectors/library'
 import { downloadLibraryFile, fetchLibraryContent, saveLibraryContent } from '@/store/library-download'
 import { TextFileEditor } from './TextFileEditor'
 import { MergeEditor } from './MergeEditor'
@@ -66,8 +56,10 @@ import {
   parseLibraryAppManifestPath,
 } from './AppPreview'
 import { MarkdownContent } from '@/components/MarkdownContent'
-import { ConversationPanel } from '@/components/artifact/ConversationPanel'
-import { toArtifactFromFile } from '@/store/selectors/artifacts'
+import { FileChatPanel } from '@/components/context/FileChatPanel'
+import { toFolderList, type MoveTarget } from '@/store/selectors/library'
+import { FileActionMenuItems } from '@/components/library/FileActionMenuItems'
+import { MoveToFolderDialog } from '@/components/library/MoveToFolderDialog'
 import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { RootState } from '@/store/store'
@@ -77,9 +69,17 @@ import { previewBlobFor } from '@/lib/preview-blob'
 import {
   DESKTOP_RIGHT_PANEL_BREAKPOINT,
   isSmallRightPanelViewport,
-  rightPanelClassName,
   shouldOpenRightPanelsByDefault,
 } from '@/components/shared/rightPanelLayout'
+import { SplitResizeHandle } from '@/components/shared/SplitResizeHandle'
+import { useSplitResize, useContentAreaInsets } from '@/components/shared/splitPane'
+import {
+  LIBRARY_DETAIL_SPLIT_RATIO_STORAGE_KEY_EXPORT,
+  PREVIEW_MIN_CHAT_WIDTH,
+  PREVIEW_MIN_PANEL_WIDTH,
+  selectLibraryDetailSplitRatio,
+  setLibraryDetailSplitRatio,
+} from '@/store/slices/previewPanelSlice'
 
 const AUTO_SAVE_DEBOUNCE_MS = 600
 
@@ -140,6 +140,11 @@ interface ContextDetailProps {
   /** Called after a successful rename (note title auto-rename or file
    * rename modal) so the parent can update the URL to the new path. */
   onRenameItem?: (newPath: string) => void
+  /** Pin/unpin wiring (mirrors the Library list) so the file-detail
+   *  kebab offers the same actions. Pin row hidden if neither given. */
+  isPinned?: boolean
+  onPin?: () => void
+  onUnpin?: () => void
   previewParams?: Record<string, string>
 }
 
@@ -149,7 +154,7 @@ function canPreview(item: ContextItem): boolean {
   return k !== 'unknown' && k !== 'app'
 }
 
-export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onRenameItem, previewParams }: ContextDetailProps) {
+export function ContextDetail({ item, onBack, onCompose, onRenameItem, isPinned, onPin, onUnpin, previewParams }: ContextDetailProps) {
   const { wsId: activeWorkspaceId } = useParams<{ wsId: string }>()
   const [deleteLibraryFile, deleteState] = useDeleteLibraryFileMutation()
   const [moveLibraryEntry, moveState] = useMoveLibraryEntryMutation()
@@ -157,6 +162,58 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
   const rightPanelOpenKey = `desk.library.${item.id}.rightPanelOpen`
   const [panelOpen, setPanelOpen] = usePersistedState<boolean>(rightPanelOpenKey, shouldOpenRightPanelsByDefault())
   const isSmallViewport = useIsSmallRightPanelScreen()
+
+  // ── Resizable two-pane split (mirror of the chat-view preview) ──
+  // The file card is the growing LEFT pane (its viewport fraction =
+  // libraryDetailSplitRatio); the chat panel is the fixed right pane.
+  // Only a docked desktop panel resizes — when it's closed the file
+  // card is full-width (no handle), and on small screens the panel is
+  // a full-screen overlay (no handle).
+  const dispatch = useDispatch()
+  const splitRatio = useSelector(selectLibraryDetailSplitRatio)
+  const dockedSplit = panelOpen && !isSmallViewport
+  const fileWidth = `${Math.round(splitRatio * 100)}vw`
+  const chatWidth = `${Math.round((1 - splitRatio) * 100)}vw`
+  const { isResizing, onMouseDown: onResizeStart } = useSplitResize({
+    getStartRatio: () => splitRatio,
+    onRatio: (r) => dispatch(setLibraryDetailSplitRatio(r)),
+    onCommit: (r) => {
+      try {
+        window.localStorage.setItem(
+          LIBRARY_DETAIL_SPLIT_RATIO_STORAGE_KEY_EXPORT,
+          String(r),
+        )
+      } catch {
+        // localStorage unavailable — ratio still applies this session.
+      }
+    },
+    // File card needs the larger min (it's the document surface); the
+    // chat panel mirrors the chat-view min.
+    minLeftPx: PREVIEW_MIN_PANEL_WIDTH,
+    minRightPx: PREVIEW_MIN_CHAT_WIDTH,
+  })
+  // Keep the global avatar overlay centred over the chat panel. We
+  // pass the *eventual* left inset (= file-card width) even while the
+  // chat is closed, so opening it only fades + slides the stack down
+  // in place — it never travels horizontally across the viewport.
+  // `hidden` toggles only opacity/translateY.
+  useContentAreaInsets(fileWidth, '0px', { hidden: !panelOpen })
+
+  // Align the file-controls TopBar slot to the file preview's right
+  // edge: at the file/chat seam while the chat is docked, the normal
+  // 24 px gutter otherwise. The slot is absolute, so changing this
+  // never reflows the breadcrumb.
+  useEffect(() => {
+    const root = document.documentElement
+    root.style.setProperty(
+      '--topbar-content-actions-right',
+      dockedSplit ? chatWidth : '1.5rem',
+    )
+    return () => {
+      root.style.removeProperty('--topbar-content-actions-right')
+    }
+  }, [dockedSplit, chatWidth])
+
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [showPreview, setShowPreview] = usePersistedState(
     `desk.library.${item.id}.previewMode`,
@@ -318,10 +375,10 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
     }
   }
 
-  // Display name for the breadcrumb on notes — trunk's heading auto-rename
-  // (handleHeadingChange below) writes through this so the page header
-  // reflects the live heading. Non-notes show item.name directly.
-  const [itemName, setItemName] = useState(item.name)
+  // The breadcrumb now lives in the global TopBar (fed by the server
+  // item name via App → AppShell). Note heading auto-rename persists
+  // through `moveLibraryEntry` + `onRenameItem` below, which updates
+  // the route and re-derives that name — so no local mirror is needed.
 
   // Rename modal (for file / link items — notes rename via the heading
   // editor). The parent re-keys this component on item.id, so initial state
@@ -346,6 +403,29 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
       onRenameItem?.(to)
     } catch (err) {
       toast.error(`Rename failed`, {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    }
+  }
+
+  // Move-to-folder — same shared dialog the Library list uses. Moving
+  // keeps the file name but changes its parent path; mirror the
+  // rename flow so the route/selection follows the new path.
+  const [moveTargets, setMoveTargets] = useState<MoveTarget[] | null>(null)
+  const handleMoveToFolder = async (destFolderId: string | null) => {
+    if (!activeWorkspaceId) return
+    const base = item.name
+    const to = destFolderId ? `${destFolderId}/${base}` : base
+    setMoveTargets(null)
+    if (to === item.id) return
+    try {
+      await moveLibraryEntry({ workspaceId: activeWorkspaceId, from: item.id, to }).unwrap()
+      toast.success(
+        destFolderId ? `Moved to "${destFolderId}"` : 'Moved to Library root',
+      )
+      onRenameItem?.(to)
+    } catch (err) {
+      toast.error('Move failed', {
         description: err instanceof Error ? err.message : undefined,
       })
     }
@@ -456,7 +536,6 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
     setNoteHeading(value)
     setEditorValue(value ? value + '\n\n' + noteBody : noteBody)
     if (!headingLinkedRef.current || !activeWorkspaceId) return
-    setItemName((value.trim() || 'Untitled') + noteExt)
     if (renameTimerRef.current) clearTimeout(renameTimerRef.current)
     renameTimerRef.current = setTimeout(async () => {
       const stem = value.trim() || 'Untitled'
@@ -467,7 +546,6 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
       const newPath = folder ? `${folder}/${newName}` : newName
       try {
         await moveLibraryEntry({ workspaceId: activeWorkspaceId, from: item.id, to: newPath }).unwrap()
-        setItemName(newName)
         onRenameItem?.(newPath)
       } catch (err) {
         toast.error('Rename failed', {
@@ -483,86 +561,37 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
   }
 
   // "Related artifacts" — the server has no explicit artifact-to-context
-  // relation yet. We hydrate against the library and filter by the ids
-  // the UI already tracks on the item; it's empty for server-backed
-  // items today. TODO(api-gap): replace with a first-class relation in
-  // matrix §4.2.5 once the server exposes it.
-  const { data: libraryResp } = useGetLibraryQuery(
+  // relation yet and `relatedArtifactIds` is always empty for
+  // server-backed items today. The previous client-side hydration
+  // walked the whole library to resolve those ids, which is no longer
+  // possible (and unnecessary while the list stays empty).
+  const relatedArtifacts: Artifact[] = []
+  // Destination folders for the shared Move dialog. Lazy: only fetch
+  // when the move dialog is actually opened. The dialog mounts on
+  // `moveTargets !== null`, so the data is in cache by the time it renders.
+  const { data: foldersResp } = useGetLibraryFoldersQuery(
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
-    { skip: !activeWorkspaceId },
+    { skip: !activeWorkspaceId || moveTargets === null },
   )
-  const folders = activeWorkspaceId
-    ? toFolderList(libraryResp?.folders ?? [], activeWorkspaceId)
-    : []
-  const libraryArtifacts: Artifact[] = (libraryResp?.items ?? []).map(f => toArtifactFromFile(f))
-  const relatedArtifacts = libraryArtifacts.filter(a => item.relatedArtifactIds.includes(a.id))
+  const folders = toFolderList(foldersResp?.folders ?? [], activeWorkspaceId ?? '')
   const FileIcon = iconForItem(item)
 
   return (
-    <div className="flex flex-1 min-h-0 overflow-hidden">
-      {/* Main content area — preview */}
+    <div className="relative flex flex-1 min-h-0 overflow-hidden">
+      {/* File card column — always `flex-1`. The chat pane animates
+          its own width (below), so this column simply yields space as
+          the chat grows / reclaims it as the chat shrinks — one
+          smooth flex transition, no competing width animation here. */}
       <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
-        {/* Header — breadcrumb style */}
-        <PageHeader
-          breadcrumb={(() => {
-            const folderPath = getFolderPath(folders, item.folderId ?? null)
-            return (
-              <Breadcrumb className="min-w-0 flex-1">
-                <BreadcrumbList className="flex-nowrap">
-                  <BreadcrumbItem>
-                    <BreadcrumbLink asChild>
-                      <button
-                        onClick={() => onNavigateToFolder(null)}
-                        className="text-sm font-semibold text-foreground hover:text-foreground/70 transition-colors"
-                      >
-                        Library
-                      </button>
-                    </BreadcrumbLink>
-                  </BreadcrumbItem>
-                  {folderPath.map((folder) => (
-                    <span key={folder.id} className="flex items-center gap-1.5">
-                      <BreadcrumbSeparator>
-                        <ChevronRight className="h-3.5 w-3.5" />
-                      </BreadcrumbSeparator>
-                      <BreadcrumbItem>
-                        <BreadcrumbLink asChild>
-                          <button
-                            onClick={() => onNavigateToFolder(folder.id)}
-                            className="text-sm font-semibold text-foreground hover:text-foreground/70 transition-colors"
-                          >
-                            {folder.name}
-                          </button>
-                        </BreadcrumbLink>
-                      </BreadcrumbItem>
-                    </span>
-                  ))}
-                  <BreadcrumbSeparator>
-                    <ChevronRight className="h-3.5 w-3.5" />
-                  </BreadcrumbSeparator>
-                  <BreadcrumbItem className="min-w-0">
-                    <BreadcrumbPage className="flex items-center gap-1.5 text-sm font-semibold text-foreground min-w-0">
-                      <FileIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                      {item.type === 'note' ? (
-                        // Notes: name is driven by the in-page heading editor's
-                        // auto-rename (handleHeadingChange). Static here.
-                        <span className="truncate">{itemName}</span>
-                      ) : (
-                        <button
-                          onClick={() => { setRenameValue(item.name); setRenameOpen(true) }}
-                          className="flex items-center gap-1 min-w-0 group hover:text-foreground/70 transition-colors"
-                        >
-                          <span className="truncate">{item.name}</span>
-                          <Pencil className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                        </button>
-                      )}
-                    </BreadcrumbPage>
-                  </BreadcrumbItem>
-                </BreadcrumbList>
-              </Breadcrumb>
-            )
-          })()}
-          actions={
-            <>
+        {/* File controls live in the *content-pane* TopBar slot —
+            absolutely aligned to the file preview's right edge (the
+            file/chat seam when docked, the 24 px gutter otherwise)
+            via `--topbar-content-actions-right`. The chat sidebar's
+            only control — the collapse X — is in the separate
+            far-right slot below. Both slots are absolute so the
+            breadcrumb never reflows between views. */}
+        <TopBarContentActions>
+          <div className="flex items-center gap-1.5 sm:gap-2">
               {isTextEditable && (isDirty || isSaving) && (
                 <Button
                   size="sm"
@@ -577,20 +606,28 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
               )}
 
               {isTextEditable && (isMarkdown || isHtml) && (
-                <div className="flex items-center rounded-lg border p-0.5" data-testid="library-preview-toggle">
+                // Segmented Preview/Code toggle — matches Figma
+                // 628:7031 (accent track, 10px radius, 3px inset;
+                // the active tab is a white, sm-shadowed 8px pill).
+                // Hidden on mobile: with Save + kebab + Open-chat +
+                // (when docked) Close-X already in the row, the
+                // toggle pushed the file-name crumb to "CL…" on a
+                // 375 px viewport. Mobile defaults to the preview
+                // mode set by `showPreview`'s persisted state.
+                <div className="hidden items-center gap-1 rounded-[10px] bg-accent p-[3px] sm:flex" data-testid="library-preview-toggle">
                   <button
                     onClick={() => setShowPreview(true)}
-                    className={`rounded-md p-1.5 transition-colors ${showPreview ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                    className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${showPreview ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
                     aria-label="Preview"
                   >
-                    <Eye className="h-3.5 w-3.5" />
+                    <Eye className="h-4 w-4" />
                   </button>
                   <button
                     onClick={() => setShowPreview(false)}
-                    className={`rounded-md p-1.5 transition-colors ${!showPreview ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                    className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${!showPreview ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
                     aria-label="Code"
                   >
-                    <Code className="h-3.5 w-3.5" />
+                    <Code className="h-4 w-4" />
                   </button>
                 </div>
               )}
@@ -602,45 +639,74 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-44">
-                  <DropdownMenuItem onClick={() => onCompose([item])}>
-                    <MessageSquarePlus className="h-4 w-4 mr-2" />
-                    Use in chat
-                  </DropdownMenuItem>
-                  {(item.type === 'file' || item.type === 'note') && (
-                    <DropdownMenuItem onClick={handleDownload}>
-                      <Download className="h-4 w-4 mr-2" />
-                      Download
-                    </DropdownMenuItem>
-                  )}
-                  {item.type !== 'note' && (
-                    <DropdownMenuItem onClick={() => { setRenameValue(item.name); setRenameOpen(true) }}>
-                      <Pencil className="h-4 w-4 mr-2" />
-                      Rename
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuItem onClick={() => setDeleteDialogOpen(true)}>
-                    <Trash2 className="h-4 w-4 mr-2" />
-                    Delete
-                  </DropdownMenuItem>
+                  <FileActionMenuItems
+                    onUseInChat={() => onCompose([item])}
+                    isPinned={isPinned}
+                    onPin={onPin}
+                    onUnpin={onUnpin}
+                    onDownload={
+                      item.type === 'file' || item.type === 'note'
+                        ? handleDownload
+                        : undefined
+                    }
+                    onRename={
+                      item.type !== 'note'
+                        ? () => { setRenameValue(item.name); setRenameOpen(true) }
+                        : undefined
+                    }
+                    onMove={() =>
+                      setMoveTargets([{ path: item.id, name: item.name, kind: 'item' }])
+                    }
+                    onDelete={() => setDeleteDialogOpen(true)}
+                  />
                 </DropdownMenuContent>
               </DropdownMenu>
 
+              {/* Open-chat lives with the file controls (there's no
+                  chat sidebar yet to host it). Once the chat is open
+                  this disappears — the only chat-sidebar control is
+                  the collapse X in the far-right slot below. */}
               {!panelOpen && (
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
                   onClick={() => setPanelOpen(true)}
+                  aria-label="Open chat"
                 >
-                  <PanelRight className="h-4 w-4" />
+                  <MessageSquare className="h-4 w-4" />
                 </Button>
               )}
-            </>
-          }
-        />
+          </div>
+        </TopBarContentActions>
 
-        {/* Preview area */}
-        <div className="flex-1 min-h-0 overflow-y-auto bg-muted/20 flex flex-col">
+        {/* Chat sidebar's sole control: the collapse X, pinned far
+            right over the chat pane. Only present while open. */}
+        {panelOpen && (
+          <TopBarActions>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+              onClick={() => setPanelOpen(false)}
+              aria-label="Close chat"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </TopBarActions>
+        )}
+
+        {/* Preview area — Figma 628:7033/7034. Content area padded
+            `pl-5 pb-6` with NO right padding while the chat is docked
+            so the card's right edge is flush with the pane seam: the
+            only gap to the chat composer is then the chat's own
+            `px-6` (24 px) gutter — matching the chat-view preview
+            spacing exactly. When the chat is closed the card is
+            symmetric (`px-5 pb-6`). No top padding — the global
+            TopBar supplies it. */}
+        <div className={`flex flex-1 min-h-0 pb-6 ${dockedSplit ? 'pl-5' : 'px-5'}`}>
+        <div className="flex flex-1 min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-background shadow-md">
+        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
           {appPreviewRef ? (
             <AppPreview {...appPreviewRef} />
           ) : item.type === 'note' && item.mimeType !== 'text/markdown' ? (
@@ -905,19 +971,50 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
             </div>
           )}
         </div>
+        </div>
+        </div>
       </div>
 
-      {/* Right panel — conversation + details */}
-      <div className={rightPanelClassName(panelOpen, isSmallViewport, 'w-[380px]')}>
-        {panelOpen && (
-          <ConversationPanel
-            initialMessages={[]}
-            item={item}
-            workspaceId={activeWorkspaceId}
-            onCollapse={() => setPanelOpen(false)}
-          />
-        )}
-      </div>
+      {/* Right pane — the chat (mirror of the chat-view preview
+          split, roles swapped). One element that animates as a single
+          piece: desktop docks and animates its `width` 0↔chatWidth
+          (the file column yields via flex, so the whole thing slides
+          open/closed smoothly with no double animation); small
+          screens slide in as a right overlay. The grab bar sits on
+          the left seam, outside the overflow-hidden inner so its
+          straddling hit area isn't clipped. */}
+      <AnimatePresence initial={false}>
+        {panelOpen && (isSmallViewport ? (
+          <motion.div
+            key="file-chat-overlay"
+            initial={{ opacity: 0, x: '100%' }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: '100%' }}
+            transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+            className="absolute inset-y-0 right-0 z-40 flex w-full max-w-[320px] flex-col bg-background shadow-xl"
+          >
+            <FileChatPanel item={item} workspaceId={activeWorkspaceId} />
+          </motion.div>
+        ) : (
+          <motion.div
+            key="file-chat"
+            initial={{ width: 0 }}
+            animate={{ width: chatWidth }}
+            exit={{ width: 0 }}
+            transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+            className="relative shrink-0 flex flex-col bg-transparent"
+          >
+            <SplitResizeHandle
+              isResizing={isResizing}
+              onMouseDown={onResizeStart}
+              ariaLabel="Resize file and chat panels"
+            />
+            <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
+              <FileChatPanel item={item} workspaceId={activeWorkspaceId} />
+            </div>
+          </motion.div>
+        ))}
+      </AnimatePresence>
 
       {/* Delete confirmation dialog */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
@@ -999,6 +1096,14 @@ export function ContextDetail({ item, onBack, onCompose, onNavigateToFolder, onR
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Move-to-folder dialog (shared with the Library list) */}
+      <MoveToFolderDialog
+        targets={moveTargets}
+        folders={folders}
+        onClose={() => setMoveTargets(null)}
+        onMove={handleMoveToFolder}
+      />
     </div>
   )
 }

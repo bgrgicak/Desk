@@ -14,10 +14,13 @@ import {
   chatArtifactsDir,
   chatAttachmentsDir,
   resolveHostPath,
+  resolveLibraryHostPath,
   tmpDir,
   trashDir,
   workspaceRootPath,
+  type VirtualLibraryMount,
 } from "./layout.js";
+import { invalidateLibraryListCache } from "./library-cache.js";
 import { ID_PREFIXES } from "@agent-desk/shared";
 
 /**
@@ -58,12 +61,6 @@ export interface FileRef {
   createdAt: string;
   /** Last-modified time as a Unix millisecond timestamp string — used as an ETag. */
   updatedAtMs: string;
-  /** ID of the agent that *last* created or edited this file, if known. */
-  agentId?: string;
-  /** ID of the agent that *originally* created this file, if known. Stays
-   * stable even after subsequent human or agent edits — used by the
-   * Library UI to show a "by AI" provenance label. */
-  creatorAgentId?: string;
   /** Whether this file is pinned in the workspace's Pinned view. */
   pinned?: boolean;
   /** True when the entry is a directory rather than a regular file. Set
@@ -218,6 +215,12 @@ export async function uploadArtifact(
   const stat = await fs.stat(destPath);
   const relPath = path.relative(workspaceRootPath(ctx.home, input.workspaceSlug), destPath);
 
+  // Chat-scoped uploads land under `.chats/{chatId}/attachments/` and don't
+  // affect the library listing, so skip the invalidation in that case.
+  if (!input.chatId) {
+    invalidateLibraryListCache(input.workspaceSlug);
+  }
+
   return {
     path: relPath.split(path.sep).join("/"),
     name: path.basename(destPath),
@@ -228,8 +231,13 @@ export async function uploadArtifact(
   };
 }
 
-async function fileRefFromDisk(home: string, slug: string, relPath: string): Promise<FileRef> {
-  const abs = resolveHostPath(home, slug, relPath);
+async function fileRefFromDisk(
+  home: string,
+  slug: string,
+  relPath: string,
+  virtualMounts?: readonly VirtualLibraryMount[],
+): Promise<FileRef> {
+  const abs = resolveLibraryHostPath(home, slug, relPath, virtualMounts);
   const stat = await fs.stat(abs).catch(() => null);
   if (!stat) throw new NotFoundError(`File not found: ${relPath}`);
   // Allow `.app/` directories to be stat'd so the frontend can render them
@@ -262,15 +270,19 @@ async function fileRefFromDisk(home: string, slug: string, relPath: string): Pro
 
 /**
  * Opens a file for reading. The `ref` is the workspace-relative path
- * returned by uploadArtifact / listLibrary.
+ * returned by uploadArtifact / listLibrary. `virtualMounts` lets paths
+ * projected from connected host directories (e.g. `Downloads/foo.md`)
+ * resolve to the actual host file instead of 404'ing inside the
+ * workspace tree.
  */
 export async function readFile(
   ctx: StorageContext,
   slug: string,
   relPath: string,
+  virtualMounts?: readonly VirtualLibraryMount[],
 ): Promise<{ stream: Readable; file: FileRef }> {
-  const file = await fileRefFromDisk(ctx.home, slug, relPath);
-  const abs = resolveHostPath(ctx.home, slug, relPath);
+  const file = await fileRefFromDisk(ctx.home, slug, relPath, virtualMounts);
+  const abs = resolveLibraryHostPath(ctx.home, slug, relPath, virtualMounts);
   const stream = createReadStream(abs);
   return { stream, file };
 }
@@ -280,8 +292,9 @@ export async function downloadFile(
   ctx: StorageContext,
   slug: string,
   relPath: string,
+  virtualMounts?: readonly VirtualLibraryMount[],
 ): Promise<{ stream: Readable; file: FileRef }> {
-  return readFile(ctx, slug, relPath);
+  return readFile(ctx, slug, relPath, virtualMounts);
 }
 
 /**
@@ -291,8 +304,29 @@ export async function statFile(
   ctx: StorageContext,
   slug: string,
   relPath: string,
+  virtualMounts?: readonly VirtualLibraryMount[],
 ): Promise<FileRef> {
-  return fileRefFromDisk(ctx.home, slug, relPath);
+  return fileRefFromDisk(ctx.home, slug, relPath, virtualMounts);
+}
+
+/**
+ * Existence-only stat that accepts any path (files OR directories) inside
+ * the workspace. Used by the pin route to validate a target without the
+ * `fileRefFromDisk` directory restriction (which rejects non-`.app` dirs).
+ */
+export async function statPath(
+  ctx: StorageContext,
+  slug: string,
+  relPath: string,
+  virtualMounts?: readonly VirtualLibraryMount[],
+): Promise<{ isDir: boolean }> {
+  const abs = resolveLibraryHostPath(ctx.home, slug, relPath, virtualMounts);
+  const stat = await fs.stat(abs).catch(() => null);
+  if (!stat) throw new NotFoundError(`Path not found: ${relPath}`);
+  if (!stat.isFile() && !stat.isDirectory()) {
+    throw new NotFoundError(`Path not found: ${relPath}`);
+  }
+  return { isDir: stat.isDirectory() };
 }
 
 /**
@@ -310,16 +344,22 @@ export async function overwriteFile(
   slug: string,
   relPath: string,
   stream: Readable,
+  virtualMounts?: readonly VirtualLibraryMount[],
 ): Promise<FileRef> {
-  const abs = resolveHostPath(ctx.home, slug, relPath);
+  const abs = resolveLibraryHostPath(ctx.home, slug, relPath, virtualMounts);
   const stat = await fs.stat(abs).catch(() => null);
   if (stat && !stat.isFile()) throw new NotFoundError(`Not a file: ${relPath}`);
 
   // Ensure parent directory exists so new files in nested hidden paths
   // (e.g. .memory/workspace.md) can be created via PUT.
-  await fs.mkdir(path.dirname(abs), { recursive: true });
+  const parent = path.dirname(abs);
+  await fs.mkdir(parent, { recursive: true });
 
-  const tmpPath = path.join(tmpDir(ctx.home), crypto.randomUUID());
+  // Place the temp file beside the target rather than under Desk's tmp
+  // dir. Virtual mounts can live on a different filesystem (e.g. a user's
+  // home directory on a separate mount), and `fs.rename` across devices
+  // fails with EXDEV.
+  const tmpPath = path.join(parent, `.tmp-${crypto.randomUUID()}`);
   let size = 0;
   const sizeEnforcer = new (await import("node:stream")).Transform({
     transform(chunk: Buffer, _encoding, callback) {
@@ -344,7 +384,8 @@ export async function overwriteFile(
     await fs.unlink(tmpPath).catch(() => {});
     throw err;
   }
-  return fileRefFromDisk(ctx.home, slug, relPath);
+  invalidateLibraryListCache(slug);
+  return fileRefFromDisk(ctx.home, slug, relPath, virtualMounts);
 }
 
 /**
@@ -547,6 +588,7 @@ export async function saveChatAttachmentToLibrary(
   // the file via `listAttachments`. If the symlink can't be created the
   // save still succeeded — the chat sidebar will just lose the row.
   await fs.symlink(relativeSymlinkTarget(srcAbs, destAbs), srcAbs).catch(() => {});
+  invalidateLibraryListCache(slug);
 
   const relPath = path.relative(root, destAbs).split(path.sep).join("/");
   return fileRefFromDisk(ctx.home, slug, relPath);
@@ -846,6 +888,7 @@ export async function replaceLibraryAppFromChat(
 
   await fs.rename(srcAbs, destAbs);
   await pruneAppVersionTrash(ctx.home);
+  invalidateLibraryListCache(slug);
 
   const newStat = await fs.stat(destAbs);
   const relPath = path.relative(root, destAbs).split(path.sep).join("/");
@@ -918,6 +961,7 @@ export async function deleteLibraryApp(
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const trashTarget = path.join(versionsRoot, `${baseName}-${stamp}`);
   await fs.rename(target, trashTarget);
+  invalidateLibraryListCache(slug);
 }
 
 /**
@@ -940,6 +984,7 @@ export async function moveFile(
     // If the symlink can't be created (e.g. parent dir gone), swallow — the
     // move still succeeded; references to the old path will fail-fast.
   });
+  invalidateLibraryListCache(slug);
   return fileRefFromDisk(ctx.home, slug, toRel);
 }
 
@@ -965,6 +1010,7 @@ export async function deleteFile(
   const stamp = Date.now();
   const trashPath = path.join(trash, `${stamp}-${path.basename(abs)}`);
   await fs.rename(abs, trashPath);
+  invalidateLibraryListCache(slug);
 }
 
 /**

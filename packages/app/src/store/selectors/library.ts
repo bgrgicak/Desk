@@ -1,5 +1,16 @@
 import type { ContextItem, Folder } from "@/data/ui-types";
-import type { ServerAgent, ServerFile, ServerFolder } from "../types";
+import type { ServerFile, ServerFolder } from "../types";
+
+/**
+ * A library entry targeted by a move-to-folder action. Shared by the
+ * Library list (bulk + single, files & folders) and the file-detail
+ * view (single file) so both drive the same `MoveToFolderDialog`.
+ */
+export type MoveTarget = {
+  path: string;
+  name: string;
+  kind: "item" | "folder";
+};
 
 export function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -32,17 +43,12 @@ function folderIdForFile(filePath: string): string | null {
 /**
  * Folder hierarchy is derived from the server's `ServerFolder[]`
  * directly; the workspaceId is a no-op in v1 but kept in the signature
- * for forward compatibility. `agents`, when provided, lets the selector
- * resolve a display name for the originating agent.
+ * for forward compatibility.
  */
 export function toContextItem(
   f: ServerFile,
   _workspaceId: string,
-  agents: ServerAgent[] = [],
 ): ContextItem {
-  const creatorAgent = f.creatorAgentId
-    ? agents.find((a) => a.id === f.creatorAgentId)
-    : undefined;
   return {
     id: f.path,
     type: inferType(f.mime, f.name, f.isDir ?? false),
@@ -54,8 +60,6 @@ export function toContextItem(
     folderId: folderIdForFile(f.path),
     addedAt: new Date(f.createdAt),
     usedBy: [],
-    uploadedBy: f.creatorAgentId ? "ai" : "user",
-    agentName: creatorAgent?.name,
     pinned: f.pinned ?? false,
     lastAccessed: undefined,
     relatedArtifactIds: [],
@@ -82,6 +86,7 @@ export function toFolderList(
       name: f.name,
       parentId,
       createdAt: new Date(f.createdAt),
+      pinned: f.pinned ?? false,
     };
   });
 }

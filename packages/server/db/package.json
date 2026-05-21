@@ -10,10 +10,12 @@
       "@agent-desk/dev": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "migrations",
     "package.json",
     "README.md"
   ],
@@ -22,7 +24,7 @@
     "tag": "alpha"
   },
   "engines": {
-    "node": ">=23.4.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "build": "tsc",
@@ -33,8 +35,7 @@
   },
   "dependencies": {
     "@agent-desk/shared": ">=0.1.0-0",
-    "hash-wasm": "^4.11.0",
-    "zod": "^3.23.0"
+    "hash-wasm": "^4.11.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

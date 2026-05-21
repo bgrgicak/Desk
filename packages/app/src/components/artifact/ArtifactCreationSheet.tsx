@@ -65,12 +65,11 @@ export function ArtifactCreationSheet({
 }: ArtifactCreationSheetProps) {
   const [form, setForm] = useState<FormState>(DEFAULT_FORM)
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
-  const [agentId, setAgentId] = useState<string | undefined>(undefined)
+  // Agent selection is no longer surfaced in the composer — kept as
+  // `undefined` so downstream callers keep their existing signature.
+  // If a per-sheet agent picker is reintroduced, wire it back here.
+  const agentId: string | undefined = undefined
   const [submitting, setSubmitting] = useState(false)
-  // Portal target for ComposerPickers' floating dropdowns. Must live
-  // inside SheetContent so the dropdown sits within Radix Dialog's
-  // FocusScope (otherwise the trap pulls focus out of the search input).
-  const [portalContainer, setPortalContainer] = useState<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [uploadLibraryFile, { isLoading: isUploading }] = useUploadLibraryFileMutation()
   const prevOpenRef = useRef(false)
@@ -79,7 +78,6 @@ export function ArtifactCreationSheet({
     if (open && !prevOpenRef.current) {
       setForm(DEFAULT_FORM)
       setAttachments([])
-      setAgentId(undefined)
     }
     prevOpenRef.current = open
   }, [open])
@@ -159,7 +157,6 @@ export function ArtifactCreationSheet({
         side="right"
         showCloseButton={false}
         className="flex flex-col p-0 gap-0 sm:max-w-none w-[480px]"
-        ref={setPortalContainer}
       >
         {/* Header */}
         <div className="h-[52px] flex items-center justify-between px-4 border-b shrink-0">
@@ -238,11 +235,8 @@ export function ArtifactCreationSheet({
             <div className="mt-1.5">
               <ComposerPickers
                 workspaceId={workspaceId}
-                agentId={agentId}
-                onAgentChange={setAgentId}
                 attachments={attachments}
                 onAttachmentsChange={setAttachments}
-                portalContainer={portalContainer}
                 onOpenUploadPicker={workspaceId ? openUploadPicker : undefined}
                 uploadInProgress={isUploading}
               />

@@ -136,10 +136,10 @@ test("clicking a chat artifact file opens it in the detail view", async ({
   await expect(chatButton).toBeVisible({ timeout: 10_000 });
   await chatButton.click();
 
-  // The Artifacts panel is open by default; wait for the entry to appear.
-  // Match the panel row via its aria-label rather than the file name, since
-  // the patched agent message also surfaces the filename in the chat thread.
-  const panelEntry = page.getByLabel(`Open ${artifactName}`).first();
+  // The right panel renders the file row as a Link whose accessible
+  // name is the filename. The previous aria-label="Open <name>" wrapper
+  // went away with the panel redesign — pick the link directly.
+  const panelEntry = page.getByRole("link", { name: artifactName }).first();
   await expect(panelEntry).toBeVisible({ timeout: 10_000 });
 
   // Single-click the file row — the new behaviour navigates to the

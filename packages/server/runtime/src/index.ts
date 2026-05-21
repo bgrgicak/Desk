@@ -55,7 +55,7 @@ export {
   DESK_GOAL_SKILL_PREFIX,
   goalSkillName,
 } from "./goalSkills.js";
-export { createDriver, buildDaemonEnv, hasActiveRunForContainer } from "./driver.js";
+export { createDriver, buildDaemonEnv, hasActiveRunForContainer, isContainerGoneError } from "./driver.js";
 export type { SandboxDriver, RunOptions, LogEvent, ExecResult } from "./driver.js";
 export { refreshSandboxConnections } from "./connectionRefresh.js";
 export type {

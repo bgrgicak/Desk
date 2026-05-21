@@ -21,6 +21,8 @@ import * as crypto from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Engine } from "./engine.js";
 import { SANDBOX_HOME } from "./mounts.js";
+import { withModule } from "@agent-desk/shared/logger";
+const log = withModule("runtime/opencodeServer");
 
 /** Container-internal port the daemon binds to. Published to host at an auto-assigned port via `-p`. */
 export const OPENCODE_SERVE_CONTAINER_PORT = 9105;
@@ -180,8 +182,7 @@ export async function ensureOpencodeServer(
           const nextKeys = populatedKeys(opts.env);
           const added = nextKeys.filter((k) => !live.populatedEnvKeys.includes(k));
           const removed = live.populatedEnvKeys.filter((k) => !nextKeys.includes(k));
-          // eslint-disable-next-line no-console
-          console.log(
+          log.info(
             `opencode-serve: env changed for container ${opts.containerId}, respawning daemon ` +
               `(added: ${added.join(",") || "-"}; removed: ${removed.join(",") || "-"})`,
           );
@@ -267,11 +268,34 @@ export async function restartOpencodeServer(
  * so the next `ensureOpencodeServer` re-spawns. Returns the stale
  * instance, if any, so the caller can record metrics about the
  * restart-cause.
+ *
+ * When `staleInstance` is provided, the eviction is compare-and-swap:
+ * if the cache currently holds a *different* instance, the entry is
+ * left in place untouched. This prevents the chaos-test cascade where
+ * concurrent chats sharing a daemon each detect the same death and
+ * blindly wipe the successor's freshly-populated entry — every wipe
+ * triggered another spawn that killed the previous one (see
+ * `startOpencodeServer`'s `killAnyOpencodeServeInContainer` step),
+ * locking the workspace in a kill-spawn-kill loop.
+ *
+ * Identity is keyed on `password`: opencode-serve mints a fresh random
+ * password per spawn, so two instances are equal iff they're the same
+ * process.
  */
 export function invalidateOpencodeServerCache(
   containerId: string,
+  staleInstance?: OpencodeServerInstance,
 ): OpencodeServerInstance | null {
   const entry = cache.get(containerId);
+  if (
+    staleInstance &&
+    entry?.instance &&
+    entry.instance.password !== staleInstance.password
+  ) {
+    // Cache has a successor's fresh instance; this caller is acting
+    // on stale information. No-op.
+    return null;
+  }
   cache.delete(containerId);
   return entry?.instance ?? null;
 }
@@ -367,10 +391,9 @@ async function startOpencodeServer(
   // accumulate over time.
   await wipeDaemonAuthStore(engine, opts.containerId, signal).catch((err: unknown) => {
     if (isAbortError(err)) throw err;
-    // eslint-disable-next-line no-console
-    console.warn(
-      `opencode-serve: failed to wipe persistent auth store for ${opts.containerId}:`,
-      (err as Error)?.message ?? err,
+    log.warn(
+      { containerId: opts.containerId, err: (err as Error)?.message ?? String(err) },
+      "opencode-serve: failed to wipe persistent auth store",
     );
   });
   signal?.throwIfAborted();
@@ -453,10 +476,9 @@ async function startOpencodeServer(
   if (opts.env.OPENCODE_AUTH_CONTENT) {
     await registerAuthBlobs(url, password, opts.env.OPENCODE_AUTH_CONTENT, signal).catch((err) => {
       if (isAbortError(err)) throw err;
-      // eslint-disable-next-line no-console
-      console.warn(
-        `opencode-serve: failed to register OPENCODE_AUTH_CONTENT for ${opts.containerId}:`,
-        (err as Error)?.message ?? err,
+      log.warn(
+        { containerId: opts.containerId, err: (err as Error)?.message ?? String(err) },
+        "opencode-serve: failed to register OPENCODE_AUTH_CONTENT",
       );
     });
   }
@@ -470,10 +492,9 @@ async function startOpencodeServer(
   // is fine because we only run this when the key is absent).
   if (!opts.env.OPENCODE_API_KEY) {
     await registerAuthBlobs(url, password, JSON.stringify({ opencode: { type: "api", key: "" } })).catch((err) => {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `opencode-serve: failed to register opencode free-tier for ${opts.containerId}:`,
-        (err as Error)?.message ?? err,
+      log.warn(
+        { containerId: opts.containerId, err: (err as Error)?.message ?? String(err) },
+        "opencode-serve: failed to register opencode free-tier",
       );
     });
   }
@@ -527,8 +548,7 @@ async function registerAuthBlobs(
     });
     if (!r.ok) {
       const body = await r.text().catch(() => "");
-      // eslint-disable-next-line no-console
-      console.warn(
+      log.warn(
         `opencode-serve: PUT /auth/${providerID} returned ${r.status}: ${body.slice(0, 200)}`,
       );
     }
@@ -721,6 +741,41 @@ export async function killAnyOpencodeServeInContainer(
     ],
   });
   await waitWithSignal(h, signal);
+}
+
+/**
+ * Tail the daemon log file from inside a sandbox container. The daemon
+ * writes `--port`-bound stderr/stdout to `/tmp/opencode-serve.log` (see
+ * `startOpencodeServer`). When the daemon resolves a `POST /session/:id/message`
+ * with `name: "UnknownError"` and the boilerplate `Check server logs`
+ * pointer, the only place those server logs live is that file — pulling
+ * the tail surfaces it to the host caller so reflection failures and
+ * mid-turn 500s actually say what went wrong.
+ *
+ * Best-effort: returns "" when the container is gone, the file doesn't
+ * exist yet (daemon never spawned), or the exec fails. Bytes is a soft
+ * cap; we read the file's tail rather than the head so a long-running
+ * daemon's earliest startup chatter doesn't crowd out the latest stack
+ * trace.
+ */
+export async function readDaemonLogTail(
+  engine: Engine,
+  containerId: string,
+  bytes: number = 4000,
+): Promise<string> {
+  try {
+    const h = await engine.exec({
+      containerId,
+      cmd: ["sh", "-c", `tail -c ${bytes} /tmp/opencode-serve.log 2>/dev/null || true`],
+    });
+    const chunks: Buffer[] = [];
+    h.stdout.on("data", (c: Buffer) => chunks.push(c));
+    const code = await h.wait();
+    if (code !== 0) return "";
+    return Buffer.concat(chunks).toString("utf8").trim();
+  } catch {
+    return "";
+  }
 }
 
 /**

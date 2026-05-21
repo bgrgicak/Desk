@@ -1,69 +1,41 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { Link as RouterLink, useLocation } from 'react-router-dom'
-import {
-  MoreHorizontal, Trash2, Search, FileText,
-  ChevronDown, Folder, Zap, Link2, StickyNote, Paperclip, Plus, X,
-  PanelRight, PanelRightClose, BookmarkPlus, Check, ExternalLink, Sparkles,
-} from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { AnimatePresence, motion } from 'framer-motion'
+import { Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  Button,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@agent-desk/ui'
 import type { UploadedFile, SendOptions } from '@/components/compose/ChatInput'
 import { ArtifactInlineCard } from '@/components/shared/ArtifactInlineCard'
-import { PageHeader } from '@/components/layout/PageHeader'
+import { RoomTopBarActions } from '@/components/layout/RoomTopBarActions'
+import { ChatRightPanel } from '@/components/chats/ChatRightPanel'
+import { ThreadParentChip } from '@/components/chats/ThreadParentChip'
+import { useTaskForChat } from '@/components/tasks/useTaskForChat'
+import { useTaskActions } from '@/components/tasks/useTaskActions'
+import { buildPath } from '@/router/nav'
+import { closeArtifact, selectPreviewArtifact, selectPreviewSplitRatio } from '@/store/slices/previewPanelSlice'
 import { ChatThread } from '@/components/compose/ChatThread'
 import { MessageBubble } from '@/components/compose/MessageBubble'
-import { ChatMenuItems } from '@/components/chats/ChatMenuItems'
 import { ChatInput } from '@/components/compose/ChatInput'
 import type { Chat, Artifact, ContextItem } from '@/data/ui-types'
-import { getArtifactIcon, getRelativeTime } from '@/data/ui-types'
 import {
   useDeleteChatAttachmentMutation,
   useGetAgentsQuery,
   useGetChatArtifactsQuery,
-  useGetLibraryQuery,
+  useGetWorkspacesQuery,
   usePatchChatMutation,
-  usePinChatLibraryRefMutation,
   usePostChatMessageMutation,
 } from '@/store/api'
-import { toContextItem } from '@/store/selectors/library'
-import { iconForFile } from '@/data/file-kind'
+import { useContentAreaInsets } from '@/components/shared/splitPane'
 import { isAppArtifactFile } from '@/store/selectors/artifacts'
-import { buildPath, NEW_CHAT_ID } from '@/router/nav'
+import { NEW_CHAT_ID } from '@/router/nav'
 import { useAppDispatch, useAppSelector, useAppStore } from '@/store/hooks'
 import { setPendingNewChatAgentId } from '@/store/slices/uiSlice'
 import { setViewingChat } from '@/store/slices/derivedSlice'
 import { markChatReadQuietly } from '@/store/ws/middleware'
 import type { AttachmentRef, ServerFile, ServerMessage } from '@/store/types'
-import { ArtifactsEmptyState, FilesEmptyState } from '@/components/shared/PanelEmptyStates'
 import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone'
-import { useListKeyboardNav } from '@/hooks/use-list-keyboard-nav'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { usePrefs } from '@/hooks/use-prefs'
-import { DESKTOP_SIDEBAR_BREAKPOINT, chatRightPanelClassName, isSmallChatViewport, shouldOpenChatSidebarsByDefault } from './chatViewUtils'
-
-function activateOnEnterOrSpace(e: KeyboardEvent<HTMLElement>, action: () => void) {
-  if (e.currentTarget !== e.target) return
-  if (e.key !== 'Enter' && e.key !== ' ') return
-  e.preventDefault()
-  action()
-}
+import { DESKTOP_SIDEBAR_BREAKPOINT, isSmallChatViewport, shouldOpenChatSidebarsByDefault } from './chatViewUtils'
 
 const STARTER_CHIPS = [
   'Draft a project brief',
@@ -72,8 +44,24 @@ const STARTER_CHIPS = [
   'Design a color palette',
 ]
 
-const CHAT_COLUMN_CLASS = 'w-full max-w-2xl min-w-0 mx-auto'
-const CHAT_GUTTER_CLASS = 'px-4 sm:px-6'
+// max-w-4xl (896 px) gives the message column ~33 % more horizontal room than
+// the previous max-w-2xl (672 px) cap — comfortably over the 20 % minimum
+// the design asked for, and a standard Tailwind size token so it stays in
+// the design system.
+const CHAT_COLUMN_CLASS = 'w-full max-w-4xl min-w-0 mx-auto'
+// The composer is 48 px wider than the message column (still centred)
+// so the input card reads as a distinct, slightly broader surface.
+const CHAT_COMPOSER_CLASS = 'w-full max-w-[calc(56rem_+_48px)] min-w-0 mx-auto'
+// Gutter widths around the centred conversation column. The panel open
+// state pushes the chat content, so the outer gutter shrinks from 128 → 80
+// px on desktop when the panel is open (mobile keeps a small 16/24 gutter).
+const CHAT_GUTTER_CLOSED = 'px-4 sm:px-6 md:px-32'
+const CHAT_GUTTER_OPEN   = 'px-4 sm:px-6 md:px-20'
+// When the preview panel is open the chat column compresses to ~35 %
+// of the viewport, so the previous comfortable gutters become wasted
+// space. Hard-pin to a single `px-6` (24 px) on every breakpoint to
+// maximise usable width for messages and the composer.
+const CHAT_GUTTER_PREVIEW = 'px-6'
 
 function isSmallScreen() {
   return isSmallChatViewport()
@@ -98,8 +86,6 @@ function useIsSmallScreen() {
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type RightTab = 'artifacts' | 'files'
-type ArtifactFilter = 'all' | 'document' | 'app' | 'image' | 'spreadsheet' | 'site'
 
 interface ChatViewProps {
   chat: Chat
@@ -128,430 +114,6 @@ interface ChatViewProps {
   startThread?: string | null
 }
 
-// ── Icon helpers ───────────────────────────────────────────────────────────────
-
-const CONTEXT_ICON: Record<ContextItem['type'], typeof FileText> = {
-  file: FileText,
-  note: StickyNote,
-  link: Link2,
-  app: Zap,
-}
-
-const ARTIFACT_TYPE_LABELS: Record<string, string> = {
-  document: 'Doc', app: 'App', image: 'Image', spreadsheet: 'Sheet', site: 'Site',
-}
-
-// ── Right panel: Artifacts tab ─────────────────────────────────────────────────
-
-function ArtifactsPanel({
-  chatId,
-  workspaceId,
-  artifacts,
-  chatArtifactFiles,
-  onArtifactClick,
-  onArtifactStage,
-  onChatArtifactClick,
-  onChatArtifactStage,
-  onPrefillInput,
-  savedArtifactIds = new Set(),
-  onSaveArtifact,
-  onDeleteArtifact,
-}: {
-  chatId: string
-  workspaceId?: string
-  artifacts: Artifact[]
-  /** Agent-written files/dirs from `.chats/{id}/artifacts/`. Rendered as
-   *  a "Chat files" section above the workspace artifacts list. */
-  chatArtifactFiles: ServerFile[]
-  /** Double-click an artifact: open it in detail view. */
-  onArtifactClick?: (artifact: Artifact) => void
-  /** Single-click an artifact: stage it on the next outgoing message. */
-  onArtifactStage?: (artifact: Artifact) => void
-  /** Double-click a chat artifact file: open it in detail view. */
-  onChatArtifactClick?: (file: ServerFile) => void
-  /** Single-click a chat artifact file: stage it on the next outgoing message. */
-  onChatArtifactStage?: (file: ServerFile) => void
-  onPrefillInput?: (text: string) => void
-  savedArtifactIds?: Set<string>
-  onSaveArtifact?: (artifactId: string) => void
-  onDeleteArtifact?: (artifact: Artifact) => void
-}) {
-  const filterKey = chatId && chatId !== NEW_CHAT_ID ? `desk.chat.${chatId}.artifactFilter` : null
-  const [filter, setFilter] = usePersistedState<ArtifactFilter>(filterKey, 'all')
-  const [search, setSearch] = useState('')
-  const [deletingArtifact, setDeletingArtifact] = useState<Artifact | null>(null)
-
-  const filtered = artifacts.filter(a => {
-    if (filter !== 'all' && a.type !== filter) return false
-    if (search.trim() && !a.name.toLowerCase().includes(search.toLowerCase())) return false
-    return true
-  })
-  const filteredChatArtifacts = chatArtifactFiles.filter(n =>
-    !search.trim()
-    || (n.label ?? '').toLowerCase().includes(search.toLowerCase())
-    || n.name.toLowerCase().includes(search.toLowerCase())
-  )
-
-  if (artifacts.length === 0 && chatArtifactFiles.length === 0) {
-    return <ArtifactsEmptyState onPrefillInput={onPrefillInput} />
-  }
-
-  return (
-    <div className="flex flex-col h-full">
-      {/* Filter row */}
-      <div className="flex items-center gap-2 px-3 py-2.5 border-b shrink-0">
-        <div className="relative flex-1">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search…"
-            className="w-full h-7 pl-6 pr-2 rounded-md border bg-background text-xs outline-none placeholder:text-muted-foreground/50 focus:ring-1 focus:ring-ring/30"
-          />
-        </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-1 h-7 px-2 rounded-md border bg-background text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors shrink-0">
-              {filter === 'all' ? 'All types' : ARTIFACT_TYPE_LABELS[filter]}
-              <ChevronDown className="h-3 w-3 opacity-60" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-36">
-            {(['all', 'document', 'app', 'image', 'spreadsheet', 'site'] as const).map(f => (
-              <DropdownMenuItem key={f} onClick={() => setFilter(f)} className={filter === f ? 'bg-muted/50' : ''}>
-                {f === 'all' ? 'All types' : ARTIFACT_TYPE_LABELS[f]}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-
-      {/* List */}
-      <div className="flex-1 overflow-y-auto py-1.5 px-1.5 flex flex-col gap-0.5">
-        {filteredChatArtifacts.length > 0 && (
-          <>
-            <p className="px-2 pt-1 pb-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-              Chat files
-            </p>
-            {filteredChatArtifacts.map(file => {
-              const isApp = isAppArtifactFile(file)
-              // App directories are openable (the click target points the
-              // detail view at the app's manifest so PR-C can render the
-              // session-scoped iframe). Plain directories stay
-              // non-interactive.
-              const isClickable = !file.isDir || isApp
-              const FileIcon = isApp ? Zap : file.isDir ? Folder : iconForFile(file.name)
-              const subtitle = isApp ? 'App' : file.isDir ? 'Directory' : getRelativeTime(new Date(file.createdAt))
-              const href = isClickable && workspaceId ? buildPath(workspaceId, 'context', { item: isApp ? `${file.path}/desk.app.json` : file.path }) : undefined
-              const content = (
-                <>
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
-                    <FileIcon className="h-4 w-4 text-muted-foreground/70" />
-                  </div>
-                  <div className="flex-1 min-w-0 relative overflow-hidden">
-                    <p className="text-sm font-medium truncate">{file.name}</p>
-                    <p className="text-xs text-muted-foreground truncate">{subtitle}</p>
-                    <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-r from-transparent to-muted/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
-                  </div>
-                </>
-              )
-              const className = `group flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-muted/50 transition-colors ${isClickable ? 'cursor-pointer' : ''}`
-              return href ? (
-                <div key={`artifact-file-${file.path}`} className={className} title={isClickable ? 'Click to open' : file.name}>
-                  <RouterLink
-                    to={href}
-                    className="flex min-w-0 flex-1 items-center gap-3"
-                    onClick={(e) => {
-                      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
-                      onChatArtifactClick?.(file)
-                    }}
-                    aria-label={`Open ${file.name}`}
-                  >
-                    {content}
-                  </RouterLink>
-                  {!file.isDir && (
-                    <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
-                      <button
-                        onClick={e => { e.stopPropagation(); onChatArtifactStage?.(file) }}
-                        title="Add to message"
-                        className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
-                      >
-                        <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
-                      </button>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button
-                            onClick={e => e.stopPropagation()}
-                            className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
-                          >
-                            <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-44" onClick={e => e.stopPropagation()}>
-                          {href ? (
-                            <DropdownMenuItem asChild>
-                              <RouterLink to={href} onClick={() => onChatArtifactClick?.(file)}>
-                                <ExternalLink className="h-3.5 w-3.5 mr-2" />
-                                Open
-                              </RouterLink>
-                            </DropdownMenuItem>
-                          ) : (
-                            <DropdownMenuItem onClick={() => onChatArtifactClick?.(file)}>
-                              <ExternalLink className="h-3.5 w-3.5 mr-2" />
-                              Open
-                            </DropdownMenuItem>
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div
-                  key={`artifact-file-${file.path}`}
-                  onClick={() => isClickable && onChatArtifactClick?.(file)}
-                  onKeyDown={e => {
-                    if (isClickable) activateOnEnterOrSpace(e, () => onChatArtifactClick?.(file))
-                  }}
-                  role={isClickable ? 'button' : undefined}
-                  tabIndex={isClickable ? 0 : undefined}
-                  aria-label={isClickable ? `Open ${file.name}` : undefined}
-                  title={isClickable ? 'Click to open' : file.name}
-                  className={className}
-                >
-                  {content}
-                  {!file.isDir && (
-                    <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
-                      <button
-                        onClick={e => { e.stopPropagation(); onChatArtifactStage?.(file) }}
-                        title="Add to message"
-                        className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
-                      >
-                        <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
-                      </button>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button
-                            onClick={e => e.stopPropagation()}
-                            className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
-                          >
-                            <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-44" onClick={e => e.stopPropagation()}>
-                          <DropdownMenuItem onClick={() => onChatArtifactClick?.(file)}>
-                            <ExternalLink className="h-3.5 w-3.5 mr-2" />
-                            Open
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-            {filtered.length > 0 && (
-              <p className="px-2 pt-2 pb-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                Artifacts
-              </p>
-            )}
-          </>
-        )}
-        {filtered.length === 0 && filteredChatArtifacts.length === 0 ? (
-          <p className="text-xs text-muted-foreground text-center py-8">No results</p>
-        ) : filtered.length === 0 ? null : (
-          filtered.map(artifact => {
-            const Icon = getArtifactIcon(artifact.type)
-            const isSaved = savedArtifactIds.has(artifact.id)
-            const href = workspaceId ? buildPath(workspaceId, 'pinned', { artifact: artifact.id }) : undefined
-            const content = (
-              <>
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
-                  <Icon className="h-4 w-4 text-muted-foreground/70" />
-                </div>
-                <div className="flex-1 min-w-0 relative overflow-hidden">
-                  <p className="text-sm font-medium truncate">{artifact.name}</p>
-                  <p className="text-xs text-muted-foreground">{ARTIFACT_TYPE_LABELS[artifact.type]} · {getRelativeTime(artifact.updatedAt)}</p>
-                  <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-r from-transparent to-muted/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
-                </div>
-              </>
-            )
-            const actions = (
-              <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
-                <button
-                  onClick={e => { e.stopPropagation(); onArtifactStage?.(artifact) }}
-                  title="Add to message"
-                  className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
-                >
-                  <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
-                </button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      onClick={e => e.stopPropagation()}
-                      className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
-                    >
-                      <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-44" onClick={e => e.stopPropagation()}>
-                    {href ? (
-                      <DropdownMenuItem asChild>
-                        <RouterLink to={href} onClick={() => onArtifactClick?.(artifact)}>
-                          <ExternalLink className="h-3.5 w-3.5 mr-2" />
-                          Open
-                        </RouterLink>
-                      </DropdownMenuItem>
-                    ) : (
-                      <DropdownMenuItem onClick={() => onArtifactClick?.(artifact)}>
-                        <ExternalLink className="h-3.5 w-3.5 mr-2" />
-                        Open
-                      </DropdownMenuItem>
-                    )}
-                    {isSaved ? (
-                      <DropdownMenuItem disabled>
-                        <Check className="h-3.5 w-3.5 mr-2" />
-                        In Library
-                      </DropdownMenuItem>
-                    ) : (
-                      <DropdownMenuItem onClick={() => {
-                        onSaveArtifact?.(artifact.id)
-                        toast.success(`"${artifact.name}" moved to your Library`)
-                      }}>
-                        <BookmarkPlus className="h-3.5 w-3.5 mr-2" />
-                        Save to Library
-                      </DropdownMenuItem>
-                    )}
-                    <DropdownMenuItem
-                      className="text-destructive focus:text-destructive"
-                      onClick={() => setDeletingArtifact(artifact)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5 mr-2" />
-                      Delete
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            )
-            if (href) {
-              return (
-                <div
-                  key={artifact.id}
-                  title="Click to open"
-                  className="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
-                >
-                  <RouterLink
-                    to={href}
-                    className="flex min-w-0 flex-1 items-center gap-3"
-                    onClick={(e) => {
-                      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
-                      onArtifactClick?.(artifact)
-                    }}
-                    aria-label={`Open ${artifact.name}`}
-                  >
-                    {content}
-                  </RouterLink>
-                  {actions}
-                </div>
-              )
-            }
-            return (
-              <div
-                key={artifact.id}
-                onClick={() => onArtifactClick?.(artifact)}
-                onKeyDown={e => activateOnEnterOrSpace(e, () => onArtifactClick?.(artifact))}
-                role="button"
-                tabIndex={0}
-                aria-label={`Open ${artifact.name}`}
-                title="Click to open"
-                className="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
-              >
-                {content}
-                <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
-                  <button
-                    onClick={e => { e.stopPropagation(); onArtifactStage?.(artifact) }}
-                    title="Add to message"
-                    className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
-                  >
-                    <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
-                  </button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        onClick={e => e.stopPropagation()}
-                        className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
-                      >
-                        <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-44" onClick={e => e.stopPropagation()}>
-                      <DropdownMenuItem onClick={() => onArtifactClick?.(artifact)}>
-                        <ExternalLink className="h-3.5 w-3.5 mr-2" />
-                        Open
-                      </DropdownMenuItem>
-                      {isSaved ? (
-                        <DropdownMenuItem disabled>
-                          <Check className="h-3.5 w-3.5 mr-2" />
-                          In Library
-                        </DropdownMenuItem>
-                      ) : (
-                        <DropdownMenuItem onClick={() => {
-                          onSaveArtifact?.(artifact.id)
-                          toast.success(`"${artifact.name}" moved to your Library`)
-                        }}>
-                          <BookmarkPlus className="h-3.5 w-3.5 mr-2" />
-                          Save to Library
-                        </DropdownMenuItem>
-                      )}
-                      <DropdownMenuItem
-                        className="text-destructive focus:text-destructive"
-                        onClick={() => setDeletingArtifact(artifact)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5 mr-2" />
-                        Delete
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </div>
-            )
-          })
-        )}
-      </div>
-
-      <AlertDialog
-        open={deletingArtifact !== null}
-        onOpenChange={open => { if (!open) setDeletingArtifact(null) }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Delete "{deletingArtifact?.name}"?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              This artifact will be permanently removed from your Desk. This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                if (deletingArtifact) onDeleteArtifact?.(deletingArtifact)
-                setDeletingArtifact(null)
-              }}
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-  )
-}
-
-// ── Right panel: Files tab ─────────────────────────────────────────────────────
-
 /**
  * "In this chat" panel — user uploads sitting under
  * `.chats/{chatId}/attachments/`. Summary mirrors (`.chats/{id}/notes/`) are
@@ -562,304 +124,6 @@ function ArtifactsPanel({
  * library) so the file is scoped to this chat. Files queued for the next
  * outgoing message live in the chat input's staging tray, not here.
  */
-function FilesPanel({
-  workspaceId,
-  stagedFiles,
-  chatFiles,
-  libraryItems,
-  uploading,
-  onUpload,
-  onAddFromLibrary,
-  onFileClick,
-  onFileStage,
-  onFileRemove,
-}: {
-  workspaceId?: string
-  stagedFiles: UploadedFile[]
-  chatFiles: ServerFile[]
-  libraryItems: ContextItem[]
-  hasRealChatId: boolean
-  uploading: boolean
-  onUpload: (entries: UploadEntry[]) => Promise<void>
-  onAddFromLibrary: (item: ContextItem) => void
-  /** Double-click: open the file in detail view. */
-  onFileClick?: (file: ServerFile) => void
-  /** Single-click (or kebab "Use in chat"): stage the file for the
-   * next outgoing message. */
-  onFileStage?: (file: ServerFile) => void
-  /** Kebab "Remove": unlink the entry from the chat's attachments dir. */
-  onFileRemove?: (file: ServerFile) => void
-}) {
-  const [pickerOpen, setPickerOpen] = useState(false)
-  const [search, setSearch] = useState('')
-  const [pickerSearch, setPickerSearch] = useState('')
-  const [removingFile, setRemovingFile] = useState<ServerFile | null>(null)
-
-  const handleUpload = async (entries: UploadEntry[]) => {
-    await onUpload(entries)
-    setPickerOpen(false)
-  }
-
-  // Staged ids are workspace-relative paths (`serverFile.path`), matching
-  // ContextItem.id, so simple set membership works for the picker filter.
-  const stagedIds = new Set(stagedFiles.map(s => s.id))
-  const available = libraryItems.filter(
-    c => !stagedIds.has(c.id) &&
-    (!pickerSearch || c.name.toLowerCase().includes(pickerSearch.toLowerCase()))
-  )
-
-  const addRef = useCallback((item: ContextItem) => {
-    onAddFromLibrary(item)
-    setPickerOpen(false)
-    setPickerSearch('')
-  }, [onAddFromLibrary])
-
-  const pickerNav = useListKeyboardNav({
-    items: available,
-    enabled: pickerOpen,
-    onSelect: addRef,
-  })
-
-  const filteredChatFiles = chatFiles.filter(f =>
-    !search.trim() || f.name.toLowerCase().includes(search.toLowerCase())
-  )
-  const dropDisabled = uploading
-  const overlayLabel = uploading ? 'Uploading…' : 'Drop to add to chat'
-
-  return (
-    <FileDropZone
-      onFiles={handleUpload}
-      disabled={dropDisabled}
-      overlayLabel={overlayLabel}
-      className="flex flex-col h-full"
-    >
-      {({ openPicker }) => (
-    <div className="flex flex-col h-full">
-      {/* Search + Add row */}
-      <div className="flex items-center gap-2 px-3 py-2.5 border-b shrink-0">
-        <div className="relative flex-1">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search…"
-            className="w-full h-7 pl-6 pr-2 rounded-md border bg-background text-xs outline-none placeholder:text-muted-foreground/50 focus:ring-1 focus:ring-ring/30"
-          />
-        </div>
-        <Popover
-          open={pickerOpen}
-          onOpenChange={open => { setPickerOpen(open); if (!open) setPickerSearch('') }}
-        >
-          <PopoverTrigger asChild>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-xs gap-1.5 shrink-0"
-            >
-              <Plus className="h-3 w-3" />
-              Add
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent
-            align="end"
-            sideOffset={4}
-            className="w-72 p-0 rounded-lg overflow-hidden flex flex-col"
-          >
-            <div className="flex items-center gap-2 px-3 py-2 border-b">
-              <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-              <input
-                autoFocus
-                value={pickerSearch}
-                onChange={e => setPickerSearch(e.target.value)}
-                onKeyDown={pickerNav.handleKeyDown}
-                placeholder="Search files…"
-                className="flex-1 text-xs bg-transparent outline-none placeholder:text-muted-foreground/50"
-              />
-              <button onClick={() => setPickerOpen(false)} className="text-muted-foreground hover:text-foreground">
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-            <div className="border-b">
-              <button
-                onClick={() => {
-                  setPickerOpen(false)
-                  openPicker()
-                }}
-                disabled={dropDisabled}
-                data-testid="files-panel-upload-a-file"
-                className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors text-left text-muted-foreground disabled:opacity-50 disabled:pointer-events-none"
-              >
-                <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                <span>{uploading ? 'Uploading…' : 'Upload a file…'}</span>
-              </button>
-            </div>
-            <div className="overflow-y-auto max-h-52">
-              {available.length === 0 && (
-                <p className="px-3 py-4 text-xs text-muted-foreground text-center">
-                  {pickerSearch ? 'No results' : 'All library items already added'}
-                </p>
-              )}
-              {available.map((item, i) => {
-                const Icon = CONTEXT_ICON[item.type] ?? FileText
-                const isSelected = pickerNav.selectedIndex === i
-                return (
-                  <button
-                    key={item.id}
-                    ref={pickerNav.itemRef(i)}
-                    onClick={() => addRef(item)}
-                    className={`flex items-center gap-2 w-full px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors text-left ${isSelected ? 'bg-muted/50' : ''}`}
-                  >
-                    <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    <span className="truncate">{item.name}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </PopoverContent>
-        </Popover>
-      </div>
-
-      <div className="flex-1 overflow-y-auto py-1.5 px-1.5 flex flex-col gap-2">
-        {/* Persistent chat-files list — uploads under .chats/{id}/attachments/. */}
-        {filteredChatFiles.length > 0 && (
-          <div className="flex flex-col gap-0.5">
-            <p className="px-2 pt-1 pb-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-              In this chat
-            </p>
-            {filteredChatFiles.map(file => {
-              const Icon = iconForFile(file.name, file.mime)
-              const interactive = onFileClick || onFileStage
-              const href = onFileClick && workspaceId ? buildPath(workspaceId, 'context', { item: file.path }) : undefined
-              const className = `group flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-muted/40 transition-colors ${interactive ? 'cursor-pointer' : ''}`
-              const content = (
-                <>
-                  <Icon className="h-4 w-4 shrink-0 text-muted-foreground/60" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm truncate">{file.name}</p>
-                  </div>
-                </>
-              )
-              const actions = (
-                <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        onClick={e => e.stopPropagation()}
-                        className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted shrink-0"
-                      >
-                        <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-44" onClick={e => e.stopPropagation()}>
-                      {onFileStage && (
-                        <DropdownMenuItem onClick={() => onFileStage(file)}>
-                          <Paperclip className="h-3.5 w-3.5 mr-2" />
-                          Use in chat
-                        </DropdownMenuItem>
-                      )}
-                      {onFileClick && (
-                        href ? (
-                          <DropdownMenuItem asChild>
-                            <RouterLink to={href} onClick={() => onFileClick(file)}>
-                              <ExternalLink className="h-3.5 w-3.5 mr-2" />
-                              Open
-                            </RouterLink>
-                          </DropdownMenuItem>
-                        ) : (
-                          <DropdownMenuItem onClick={() => onFileClick(file)}>
-                            <ExternalLink className="h-3.5 w-3.5 mr-2" />
-                            Open
-                          </DropdownMenuItem>
-                        )
-                      )}
-                      {onFileRemove && (
-                        <DropdownMenuItem
-                          className="text-destructive focus:text-destructive"
-                          onClick={() => setRemovingFile(file)}
-                        >
-                          <Trash2 className="h-3.5 w-3.5 mr-2" />
-                          Remove
-                        </DropdownMenuItem>
-                      )}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              )
-              if (href) {
-                return (
-                  <div
-                    key={`chat-${file.path}`}
-                    title="Click to open"
-                    className={className}
-                  >
-                    <RouterLink
-                      to={href}
-                      className="flex min-w-0 flex-1 items-center gap-3"
-                      onClick={(e) => {
-                        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
-                        onFileClick?.(file)
-                      }}
-                    >
-                      {content}
-                    </RouterLink>
-                    {actions}
-                  </div>
-                )
-              }
-              return (
-                <div
-                  key={`chat-${file.path}`}
-                  onClick={interactive ? () => onFileClick?.(file) : undefined}
-                  title="Click to open"
-                  className={className}
-                >
-                  {content}
-                  {actions}
-                </div>
-              )
-            })}
-          </div>
-        )}
-
-        {filteredChatFiles.length === 0 && (
-          search.trim()
-            ? <p className="text-xs text-muted-foreground text-center py-8">No results</p>
-            : <FilesEmptyState />
-        )}
-      </div>
-
-      <AlertDialog
-        open={removingFile !== null}
-        onOpenChange={open => { if (!open) setRemovingFile(null) }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Remove "{removingFile?.label ?? removingFile?.name}" from this chat?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              The file's library entry (if any) will not be affected. Direct chat uploads are removed permanently.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                if (removingFile) onFileRemove?.(removingFile)
-                setRemovingFile(null)
-              }}
-            >
-              Remove
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-      )}
-    </FileDropZone>
-  )
-}
 
 // ── Main ChatView ──────────────────────────────────────────────────────────────
 
@@ -871,7 +135,6 @@ export function ChatView({
   showNewBadge = false,
   savedArtifactIds = new Set(),
   onSaveArtifact,
-  onDeleteArtifact,
   onFirstMessage,
   highlightMessageId,
   onAttachmentClick,
@@ -880,11 +143,10 @@ export function ChatView({
 }: ChatViewProps) {
   const focusInputRef = useRef<(() => void) | null>(null)
   const location = useLocation()
+  const navigate = useNavigate()
   const anchorMessage = startThread
     ? (location.state as { anchorMessage?: ServerMessage } | null)?.anchorMessage ?? null
     : null
-  const rightTabKey = chat.id && chat.id !== NEW_CHAT_ID ? `desk.chat.${chat.id}.rightTab` : null
-  const [rightTab, setRightTab] = usePersistedState<RightTab>(rightTabKey, 'artifacts')
   const rightPanelOpenKey = chat.id && chat.id !== NEW_CHAT_ID ? `desk.chat.${chat.id}.rightPanelOpen` : null
   const [panelOpen, setPanelOpen] = usePersistedState<boolean>(rightPanelOpenKey, shouldOpenChatSidebarsByDefault())
   const isSmallViewport = useIsSmallScreen()
@@ -894,9 +156,60 @@ export function ChatView({
     setPanelOpen(open)
   }, [setPanelOpen])
 
+  // Preview-panel state — when an artifact is open the layout shifts:
+  // the left sidebar collapses, the chat right panel is replaced by
+  // the PreviewPanel at a fixed 35/65 split (Phase 2b adds resize),
+  // and the breadcrumb hides via a Redux flag.
+  const previewArtifact = useAppSelector(selectPreviewArtifact)
+  const previewSplitRatio = useAppSelector(selectPreviewSplitRatio)
+  const isPreviewOpen = previewArtifact !== null
+
+  // Publish the chat-area insets so the global avatar overlay
+  // (AppShell, top-bar row) stays centred over the chat column.
+  // 290 px = AppShell's hardcoded sidebar width on desktop; on small
+  // viewports the sidebar/panel are overlays so insets collapse to 0.
+  // Preview-open: sidebar hidden (left 0), preview takes
+  // `1 - splitRatio` (right). The overlay doesn't transition
+  // horizontally, so these update in place without sliding.
+  const chatAreaLeft = isPreviewOpen || isSmallViewport ? '0px' : '290px'
+  const chatAreaRight = isPreviewOpen
+    ? (isSmallViewport ? '0px' : `${Math.round((1 - previewSplitRatio) * 100)}vw`)
+    : isSmallViewport
+      ? '0px'
+      : panelOpen
+        ? '290px'
+        : '0px'
+  useContentAreaInsets(chatAreaLeft, chatAreaRight)
+
   const isNewChat = chat.id === NEW_CHAT_ID
 
+  // If the current chat is a task surface (thread chat or a
+  // standalone-task chat), resolve the backing Task so the kebab can
+  // show the task action menu instead of the generic chat menu.
+  const backingTask = useTaskForChat({
+    chatId: isNewChat ? undefined : chat.id,
+    workspaceId: chat.workspaceId,
+  })
+  const taskActions = useTaskActions()
+  const handleTaskDeleted = useCallback(() => {
+    if (chat.workspaceId) {
+      navigate(buildPath(chat.workspaceId, 'tasks'))
+    }
+  }, [chat.workspaceId, navigate])
+
   const dispatch = useAppDispatch()
+
+  // The preview panel is scoped to the chat the artifact was opened
+  // from: close it on chat switch AND on unmount, so leaving the chat
+  // surface entirely (e.g. to a library item) doesn't leave
+  // `isPreviewOpen` stuck true in the slice — which would keep the
+  // AppShell sidebar hidden after the user navigates back via the
+  // breadcrumb.
+  useEffect(() => {
+    dispatch(closeArtifact())
+    return () => { dispatch(closeArtifact()) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chat.id])
   const store = useAppStore()
   const [postMessageMutation, postMessageState] = usePostChatMessageMutation()
   const [patchChatMutation] = usePatchChatMutation()
@@ -990,33 +303,7 @@ export function ChatView({
     setPendingFiles(prev => prev.filter(p => p.id !== id))
   }, [])
 
-  // Sidebar Files-tab dropzone funnels into the same in-memory holding —
-  // the distinction between "chat-pane drop" and "Files-tab drop" only
-  // existed because the old code had two separate trays. Both now mean
-  // "attach to the next outgoing message".
-  const handleSidebarUpload = handleUpload
-
-  const [pinChatLibraryRef] = usePinChatLibraryRefMutation()
   const [deleteChatAttachment] = useDeleteChatAttachmentMutation()
-
-  const addStagedFromLibrary = useCallback((item: ContextItem) => {
-    if (hasRealChatId) {
-      pinChatLibraryRef({ chatId: chat.id, path: item.id })
-        .unwrap()
-        .catch(err => {
-          const data = (err as { data?: { message?: string } } | undefined)?.data
-          const status = (err as { status?: number | string } | undefined)?.status
-          const description = data?.message ?? (status !== undefined ? `HTTP ${status}` : undefined)
-          toast.error(`Could not pin ${item.name}`, { description })
-        })
-    } else {
-      // New-chat stub: track as pending so it shows in the Files sidebar.
-      // The pin fires via pinPaths when the first message creates the chat.
-      setPendingChatItems(prev =>
-        prev.some(p => p.id === item.id) ? prev : [...prev, item],
-      )
-    }
-  }, [hasRealChatId, chat.id, pinChatLibraryRef])
 
   const removeStaged = useCallback((id: string) => {
     setStagedFiles(prev => prev.filter(s => s.id !== id))
@@ -1056,16 +343,11 @@ export function ChatView({
       })
   }, [hasRealChatId, chat.id, deleteChatAttachment])
 
-  // Library items for the workspace backing this chat. Used as the pool
-  // for the "Add files to chat" picker in the right panel. If the chat
-  // doesn't carry a workspaceId yet (new-chat stub) we skip the query.
-  const { data: libraryResp } = useGetLibraryQuery(
-    chat.workspaceId ? { workspaceId: chat.workspaceId } : undefined,
-    { skip: !chat.workspaceId },
-  )
-  const libraryItems: ContextItem[] = chat.workspaceId
-    ? (libraryResp?.items ?? []).map((f) => toContextItem(f, chat.workspaceId!))
-    : []
+  // Resolve the workspace filesystem path so the anchor-message preview
+  // below can rewrite sandbox paths in markdown the same way the main
+  // thread does. MessageBubble no longer subscribes on its own.
+  const { data: workspacesForBubble } = useGetWorkspacesQuery()
+  const workspacePathForAnchor = workspacesForBubble?.find(w => w.id === chat.workspaceId)?.path
 
   // Files actually parked in `.chats/{chatId}/`: user uploads + agent
   // artifact files/dirs. Uploads drive the Files-tab "In this chat" list;
@@ -1078,13 +360,11 @@ export function ChatView({
   const chatFiles: ServerFile[] = chatFilesResp ?? []
   // Agent artifacts (`.chats/{id}/artifacts/`) surface in the Artifacts panel
   // under a "Chat files" section. The Files panel only shows real attachments.
-  const chatArtifactFiles = useMemo(() => chatFiles.filter(f => f.kind === 'artifact'), [chatFiles])
-  const chatAttachmentFiles = useMemo(() => chatFiles.filter(f => f.kind !== 'artifact'), [chatFiles])
-  // Merge pending-chat items into the sidebar list without duplicating files
-  // that were already pinned (the server query will include them after the pin).
-  const visibleChatAttachmentFiles = useMemo(() => {
-    if (pendingChatItems.length === 0) return chatAttachmentFiles
-    const pinnedPaths = new Set(chatAttachmentFiles.map(f => f.path.split('/').pop()))
+  // Single list — AI-produced artifacts and user-uploaded attachments are the
+  // same kind of thing in the library, so we show them together here too.
+  const visibleChatFiles = useMemo(() => {
+    if (pendingChatItems.length === 0) return chatFiles
+    const pinnedPaths = new Set(chatFiles.map(f => f.path.split('/').pop()))
     const pendingFiles = pendingChatItems
       .filter(item => !pinnedPaths.has(item.name))
       .map(item => ({
@@ -1095,8 +375,8 @@ export function ChatView({
         createdAt: item.addedAt.toISOString(),
         kind: 'attachment' as const,
       }))
-    return [...chatAttachmentFiles, ...pendingFiles]
-  }, [chatAttachmentFiles, pendingChatItems])
+    return [...chatFiles, ...pendingFiles]
+  }, [chatFiles, pendingChatItems])
 
   const { developerMode } = usePrefs()
 
@@ -1112,6 +392,10 @@ export function ChatView({
   const agentName =
     agents?.find(a => a.id === chat.agentId)?.name ?? 'Agent'
 
+  // The avatar stack is now a global overlay rendered by AppShell. This
+  // view only publishes the chat-area insets (the `--content-area-*`
+  // CSS vars set in the effect above) so the global overlay narrows in
+  // sync when the Files/Tasks panel or the preview panel is open.
   return (
     <div className="relative flex w-full max-w-full flex-1 min-w-0 min-h-0 overflow-hidden">
 
@@ -1129,29 +413,16 @@ export function ChatView({
         {({ openPicker }) => (
       <div className="flex flex-1 flex-col min-w-0 min-h-0 w-full max-w-full overflow-hidden">
 
-        {/* Header */}
-        <PageHeader
-          breadcrumb={<span className="text-sm font-semibold truncate">{chat.title}</span>}
-          actions={
-            <>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-8 w-8">
-                    <MoreHorizontal className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-40">
-                  <ChatMenuItems chatId={chat.id} onDelete={(id) => onDeleteChat?.(id)} />
-                </DropdownMenuContent>
-              </DropdownMenu>
-
-              {!panelOpen && (
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setPanelOpenFromUser(true)}>
-                  <PanelRight className="h-4 w-4" />
-                </Button>
-              )}
-            </>
-          }
+        {/* Chat actions render into the global TopBar via portal. */}
+        <RoomTopBarActions
+          chatId={chat.id}
+          onDeleteChat={(id) => onDeleteChat?.(id)}
+          panelOpen={panelOpen}
+          onTogglePanel={() => setPanelOpenFromUser(!panelOpen)}
+          showPanelToggle={!isPreviewOpen}
+          task={backingTask}
+          taskActions={taskActions}
+          onTaskDeleted={handleTaskDeleted}
         />
 
         {/* Messages + Input via shared ChatThread */}
@@ -1163,7 +434,10 @@ export function ChatView({
           developerMode={developerMode}
           isSending={postMessageState.isLoading}
           highlightMessageId={highlightMessageId}
-          innerClassName={`${CHAT_GUTTER_CLASS} py-8 space-y-6`}
+          headerSlot={
+            !isNewChat ? <ThreadParentChip chatId={chat.id} /> : null
+          }
+          innerClassName={`transition-[padding] duration-300 ${isPreviewOpen ? CHAT_GUTTER_PREVIEW : panelOpen ? CHAT_GUTTER_OPEN : CHAT_GUTTER_CLOSED} pt-8 pb-16 space-y-3`}
           messageClassName={message => {
             if (message.content.type !== 'artifactRef') return CHAT_COLUMN_CLASS
             return CHAT_COLUMN_CLASS
@@ -1179,6 +453,7 @@ export function ChatView({
                 <MessageBubble
                   message={anchorMessage}
                   workspaceId={anchorMessage.chatId ? chat.workspaceId : undefined}
+                  workspacePath={anchorMessage.chatId ? workspacePathForAnchor : undefined}
                 />
               </div>
             ) : (
@@ -1221,11 +496,11 @@ export function ChatView({
           ) : undefined}
           footerSlot={
             <div
-              className="border-t shrink-0 min-w-0 max-w-full overflow-hidden"
+              className="shrink-0 min-w-0 max-w-full overflow-hidden"
               style={{ paddingRight: 'var(--chat-thread-scrollbar-width, 0px)' }}
             >
-              <div className={`w-full min-w-0 ${CHAT_GUTTER_CLASS} py-4`}>
-                <div className={CHAT_COLUMN_CLASS}>
+              <div className={`w-full min-w-0 transition-[padding] duration-300 ${isPreviewOpen ? CHAT_GUTTER_PREVIEW : panelOpen ? CHAT_GUTTER_OPEN : CHAT_GUTTER_CLOSED} pt-2 pb-6`}>
+                <div className={CHAT_COMPOSER_CLASS}>
                   <ChatInput
                     focusRef={focusInputRef}
                     onSend={(msg, uploads, options) => {
@@ -1264,6 +539,10 @@ export function ChatView({
                         pinPaths.length > 0 ? pinPaths : undefined,
                       )
                     } else {
+                      // For kind='task' the server posts the anchor here
+                      // and auto-creates a thread chat — task_runs and
+                      // follow-up replies land in that thread, not in this
+                      // chat. The user stays put.
                       postMessageMutation({
                         chatId: chat.id,
                         content: msg,
@@ -1319,96 +598,71 @@ export function ChatView({
         )}
       </FileDropZone>
 
-      {/* ── Right panel: full-height, parallel to the entire left column ── */}
-      <div className={chatRightPanelClassName(panelOpen, isSmallViewport)}>
-        {panelOpen && (
-          <>
-          {/* Panel header — same height as the main header */}
-          <div className="h-[52px] flex items-center justify-between px-3 border-b shrink-0">
-            <div className="flex items-center h-8 bg-muted rounded-full p-0.5">
-              {(['artifacts', 'files'] as RightTab[]).map(tab => (
-                <button
-                  key={tab}
-                  onClick={() => setRightTab(tab)}
-                  className={`rounded-full px-3 text-xs font-medium capitalize transition-colors h-full flex items-center ${
-                    rightTab === tab
-                      ? 'bg-background text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  {tab === 'files' ? 'Files' : 'Artifacts'}
-                </button>
-              ))}
-            </div>
-            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => setPanelOpenFromUser(false)}>
-              <PanelRightClose className="h-4 w-4" />
-            </Button>
-          </div>
-
-          {/* Tab content */}
-          <div className="flex-1 overflow-hidden flex flex-col">
-            {rightTab === 'artifacts' && (
-              <ArtifactsPanel
-                chatId={chat.id}
-                workspaceId={chat.workspaceId}
-                artifacts={artifacts}
-                chatArtifactFiles={chatArtifactFiles}
-                onArtifactClick={onArtifactClick}
-                onArtifactStage={(artifact) => {
-                  // Workspace artifacts come from the library list — find the
-                  // matching ContextItem so addStagedFromLibrary can stage AND
-                  // pin (symlink into `.chats/{id}/attachments/`).
-                  const item = libraryItems.find(c => c.id === artifact.id)
-                  if (item) addStagedFromLibrary(item)
-                }}
-                onChatArtifactClick={(file) => {
-                  // For a `<name>.app/` chat artifact, route the click at the
-                  // app's `desk.app.json`; ContextDetail uses AppPreview to
-                  // issue a scoped app session and render `/apps/chat/...`.
-                  if (isAppArtifactFile(file)) {
-                    onAttachmentClick?.({
-                      path: `${file.path}/desk.app.json`,
-                      name: file.label ?? file.name,
-                      mime: 'application/json',
-                      size: file.size,
-                    })
-                    return
-                  }
-                  onAttachmentClick?.({
-                    path: file.path,
-                    name: file.label ?? file.name,
-                    mime: file.mime,
-                    size: file.size,
-                  })
-                }}
-                onChatArtifactStage={addStagedChatFile}
-                onPrefillInput={(text) => setPrefillText(text)}
-                savedArtifactIds={savedArtifactIds}
-                onSaveArtifact={onSaveArtifact}
-                onDeleteArtifact={onDeleteArtifact}
-              />
-            )}
-            {rightTab === 'files' && (
-              <FilesPanel
-                workspaceId={chat.workspaceId}
-                stagedFiles={stagedFiles}
-                chatFiles={visibleChatAttachmentFiles}
-                libraryItems={libraryItems}
-                hasRealChatId={hasRealChatId}
-                uploading={false}
-                onUpload={handleSidebarUpload}
-                onAddFromLibrary={addStagedFromLibrary}
-                onFileClick={(file) =>
-                  onAttachmentClick?.({ path: file.path, name: file.name, mime: file.mime, size: file.size })
-                }
-                onFileStage={addStagedChatFile}
-                onFileRemove={hasRealChatId ? removeChatFile : undefined}
-              />
-            )}
-          </div>
-          </>
-        )}
-        </div>
+      {/* ── Right column ─────────────────────────────────────────────
+          When the preview panel is open, ChatView doesn't render its
+          own right column — the `PreviewPanel` mounts at AppShell
+          level so it sits side-by-side with (not under) the top bar.
+          Otherwise the regular ChatRightPanel (Files + Tasks) mounts
+          here. Desktop docks it as a 290 px flex sibling that animates
+          its width; small screens slide it in from the right as an
+          overlay with a solid background + shadow so the chat input
+          underneath stays covered. Mirrors the file-chat overlay in
+          `ContextDetail`. */}
+      {!isPreviewOpen && (() => {
+        const panel = (
+          <ChatRightPanel
+            chatId={chat.id}
+            workspaceId={chat.workspaceId}
+            files={visibleChatFiles}
+            onFileClick={(file) => {
+              if (isAppArtifactFile(file)) {
+                onAttachmentClick?.({
+                  path: `${file.path}/desk.app.json`,
+                  name: file.label ?? file.name,
+                  mime: 'application/json',
+                  size: file.size,
+                })
+                return
+              }
+              onAttachmentClick?.({
+                path: file.path,
+                name: file.label ?? file.name,
+                mime: file.mime,
+                size: file.size,
+              })
+            }}
+            onFileStage={addStagedChatFile}
+            onFileRemove={hasRealChatId ? removeChatFile : undefined}
+          />
+        )
+        return (
+          <AnimatePresence initial={false}>
+            {panelOpen && (isSmallViewport ? (
+              <motion.div
+                key="chat-right-overlay"
+                initial={{ opacity: 0, x: '100%' }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: '100%' }}
+                transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+                className="absolute inset-y-0 right-0 z-40 flex w-full max-w-[290px] flex-col bg-background shadow-xl"
+              >
+                {panel}
+              </motion.div>
+            ) : (
+              <motion.div
+                key="chat-right"
+                initial={{ width: 0 }}
+                animate={{ width: 290 }}
+                exit={{ width: 0 }}
+                transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+                className="shrink-0 flex flex-col overflow-hidden"
+              >
+                {panel}
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        )
+      })()}
 
     </div>
   )

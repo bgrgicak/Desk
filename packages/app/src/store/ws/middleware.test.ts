@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { configureStore } from '@reduxjs/toolkit'
-import { applyEventToCache, logEntryFromWsPayload, wsMiddleware } from './middleware'
-import { bumpFileChangeCounter, bumpWorkspaceChangeCounter, markChatRunning, markChatIdle, markChatFailed } from '../slices/derivedSlice'
+import { __flushWsBatchForTest, applyEventToCache, logEntryFromWsPayload, wsMiddleware } from './middleware'
+import { bumpFileChangeCounter, bumpWorkspaceChangeCounter } from '../slices/derivedSlice'
 import { api } from '../api'
 
 describe('applyEventToCache', () => {
@@ -28,6 +28,7 @@ describe('applyEventToCache', () => {
       await store.dispatch(api.util.upsertQueryData('getChatMessages', { chatId: 'cht_1', full: false }, {
         items: [{
           id: 'msg_turn', chatId: 'cht_1', role: 'system', state: 'running',
+          kind: 'chat',
           content: { type: 'agent_turn', userMessageId: 'msg_user' },
           createdAt: new Date().toISOString(),
         }],
@@ -41,6 +42,7 @@ describe('applyEventToCache', () => {
           line: JSON.stringify({ type: 'tool_use', part: { tool: 'bash' } }),
         },
       }, 'cht_1', store.getState)
+      __flushWsBatchForTest(store.dispatch, store.getState)
 
       const entry = api.endpoints.getChatMessages.select({ chatId: 'cht_1', full: false })(store.getState())
       expect(entry.data?.items[0].progressLog).toEqual([
@@ -62,10 +64,15 @@ describe('applyEventToCache', () => {
           line: JSON.stringify({ type: 'tool_use', part: { tool: 'read' } }),
         },
       }, 'cht_1', store.getState)
+      // Drain the rAF batch — without this the entry sits in the per-frame
+      // buffer and never reaches pendingProgressLogByMessageId, so the
+      // subsequent cache hydration has nothing to merge.
+      __flushWsBatchForTest(store.dispatch, store.getState)
 
       await store.dispatch(api.util.upsertQueryData('getChatMessages', { chatId: 'cht_1', full: false }, {
         items: [{
           id: 'msg_turn_late_cache', chatId: 'cht_1', role: 'system', state: 'running',
+          kind: 'chat',
           content: { type: 'agent_turn', userMessageId: 'msg_user' },
           createdAt: new Date().toISOString(),
         }],
@@ -139,6 +146,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_1', chatId: 'cht_1', role: 'agent',
+          kind: 'chat',
           content: { type: 'text', text: 'hello' },
           createdAt: new Date().toISOString(),
         },
@@ -159,6 +167,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_2', chatId: 'cht_1', role: 'system',
+          kind: 'chat',
           content: { type: 'agent_turn', userMessageId: 'msg_1' },
           createdAt: new Date().toISOString(),
         },
@@ -181,6 +190,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_3', chatId: 'cht_1', role: 'agent',
+          kind: 'chat',
           content: { type: 'summary', body: '# Summary' },
           createdAt: new Date().toISOString(),
         },
@@ -201,6 +211,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_ar', chatId: 'cht_1', role: 'agent',
+          kind: 'chat',
           content: { type: 'artifactRef', path: 'artifacts/test.md', name: 'test.md' },
           createdAt: new Date().toISOString(),
         },
@@ -242,6 +253,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_vc', chatId: 'cht_viewed', role: 'agent',
+          kind: 'chat',
           content: { type: 'text', text: 'hello from agent' },
           createdAt: new Date().toISOString(),
         },
@@ -262,6 +274,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_nv', chatId: 'cht_other', role: 'agent',
+          kind: 'chat',
           content: { type: 'text', text: 'hello from agent' },
           createdAt: new Date().toISOString(),
         },
@@ -285,6 +298,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_error', chatId: 'cht_1', role: 'agent',
+          kind: 'chat',
           content: {
             type: 'events',
             log: [
@@ -318,6 +332,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_skill', chatId: 'cht_1', role: 'agent',
+          kind: 'chat',
           content: {
             type: 'events',
             log: [
@@ -343,6 +358,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_skill', chatId: 'cht_1', role: 'agent',
+          kind: 'chat',
           content: {
             type: 'events',
             log: [
@@ -371,7 +387,7 @@ describe('applyEventToCache', () => {
         applyEventToCache(dispatch, {
           type: 'message.appended',
           payload: {
-            id: 'msg_qm', chatId: 'cht_viewed', role: 'agent',
+            id: 'msg_qm', chatId: 'cht_viewed', role: 'agent', kind: 'chat',
             content: { type: 'events', log: [{ kind: 'stderr', line: 'hi' }] },
             createdAt: new Date().toISOString(),
           },
@@ -405,12 +421,14 @@ describe('applyEventToCache', () => {
       await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
         {
           id: 'cht_viewed', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Viewed',
-          updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z', unread: false,
           kind: 'chat', running: false, failed: false,
         },
         {
           id: 'cht_other', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Other',
-          updatedAt: '2099-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
+          createdAt: '2099-01-01T00:00:00.000Z',
+          updatedAt: '2099-01-01T00:00:00.000Z', unread: false,
           kind: 'chat', running: false, failed: false,
         },
       ]))
@@ -422,6 +440,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_vc_bump', chatId: 'cht_viewed', role: 'user',
+          kind: 'chat',
           content: { type: 'text', text: 'push me up' },
           createdAt: messageCreatedAt,
         },
@@ -438,89 +457,14 @@ describe('applyEventToCache', () => {
       expect(hasChatInvalidation).toBe(false)
     })
 
-    it('clears the cached failed flag when a new user message is appended', async () => {
-      const store = configureStore({
-        reducer: { [api.reducerPath]: api.reducer },
-        middleware: (getDefault) => getDefault().concat(api.middleware),
-      })
-
-      await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
-        {
-          id: 'cht_failed', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Failed',
-          updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
-          kind: 'chat', running: false, failed: true,
-        },
-      ]))
-
-      applyEventToCache(store.dispatch, {
-        type: 'message.appended',
-        payload: {
-          id: 'msg_retry', chatId: 'cht_failed', role: 'user',
-          content: { type: 'text', text: 'try again' },
-          createdAt: '2026-01-01T00:01:00.000Z',
-        },
-      }, 'cht_failed', store.getState)
-
-      const entry = api.endpoints.getChats.select({ workspaceId: 'wks_1' })(store.getState())
-      expect(entry.data?.find((chat) => chat.id === 'cht_failed')?.failed).toBe(false)
-    })
-
-    it('clears the cached failed flag when a fresh agent turn starts', async () => {
-      const store = configureStore({
-        reducer: { [api.reducerPath]: api.reducer },
-        middleware: (getDefault) => getDefault().concat(api.middleware),
-      })
-
-      await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
-        {
-          id: 'cht_failed', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Failed',
-          updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
-          kind: 'chat', running: false, failed: true,
-        },
-      ]))
-
-      applyEventToCache(store.dispatch, {
-        type: 'message.appended',
-        payload: {
-          id: 'msg_turn', chatId: 'cht_failed', role: 'system', state: 'running',
-          content: { type: 'agent_turn', userMessageId: 'msg_retry' },
-          createdAt: '2026-01-01T00:01:00.000Z',
-        },
-      }, 'cht_failed', store.getState)
-
-      const entry = api.endpoints.getChats.select({ workspaceId: 'wks_1' })(store.getState())
-      expect(entry.data?.find((chat) => chat.id === 'cht_failed')?.failed).toBe(false)
-    })
-
-    it('shows the chat as running and clears cached failure when output streams', async () => {
-      const store = configureStore({
-        reducer: { [api.reducerPath]: api.reducer },
-        middleware: (getDefault) => getDefault().concat(api.middleware),
-      })
-
-      await store.dispatch(api.util.upsertQueryData('getChats', { workspaceId: 'wks_1' }, [
-        {
-          id: 'cht_failed', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Failed',
-          updatedAt: '2026-01-01T00:00:00.000Z', awaitingUser: false, unread: false,
-          kind: 'chat', running: false, failed: true,
-        },
-      ]))
-
-      const dispatched: unknown[] = []
-      const dispatch = (action: unknown) => {
-        dispatched.push(action)
-        return store.dispatch(action as never)
-      }
-
-      applyEventToCache(dispatch, {
-        type: 'message.streaming',
-        payload: { chatId: 'cht_failed', messageId: 'msg_agent', delta: 'hello' },
-      }, null, store.getState)
-
-      expect(dispatched).toContainEqual(markChatRunning('cht_failed'))
-      const entry = api.endpoints.getChats.select({ workspaceId: 'wks_1' })(store.getState())
-      expect(entry.data?.find((chat) => chat.id === 'cht_failed')?.failed).toBe(false)
-    })
+    // The three "clears the cached failed flag" tests that used to
+    // live here exercised the now-removed client-side inference path
+    // (the message.appended handler dispatching markChat* and patching
+    // chat.failed in the cache). The same end-to-end behaviour is now
+    // covered by the server emitting chat.updated with the live
+    // running/failed values — see the chat.updated suite below for
+    // the cache-application path, and the server tests for the emit
+    // contract.
 
     it('uses getState to patch workspace-scoped caches when unscoped cache is empty', () => {
       const dispatched: unknown[] = []
@@ -536,7 +480,7 @@ describe('applyEventToCache', () => {
           queries: {
             'getChats({"workspaceId":"wks_1"})': {
               data: [
-                { id: 'cht_viewed', workspaceId: 'wks_1', unread: true, title: 'Test', agentId: 'agt_1', updatedAt: new Date().toISOString(), awaitingUser: false },
+                { id: 'cht_viewed', workspaceId: 'wks_1', unread: true, title: 'Test', agentId: 'agt_1', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
               ],
             },
           },
@@ -547,7 +491,7 @@ describe('applyEventToCache', () => {
         applyEventToCache(dispatch, {
           type: 'message.appended',
           payload: {
-            id: 'msg_gs', chatId: 'cht_viewed', role: 'agent',
+            id: 'msg_gs', chatId: 'cht_viewed', role: 'agent', kind: 'chat',
             content: { type: 'events', log: [{ kind: 'event', event: { type: 'text', part: { text: 'hi' } } }] },
             createdAt: new Date().toISOString(),
           },
@@ -572,6 +516,7 @@ describe('applyEventToCache', () => {
         type: 'message.appended',
         payload: {
           id: 'msg_4', chatId: 'cht_1', role: 'system',
+          kind: 'chat',
           content: { type: 'summary_request' },
           createdAt: new Date().toISOString(),
         },
@@ -594,8 +539,9 @@ describe('applyEventToCache', () => {
         type: 'chat.updated',
         payload: {
           id: 'cht_viewed', workspaceId: 'wks_1', agentId: 'agt_1',
-          title: 'Test', updatedAt: new Date().toISOString(),
-          awaitingUser: false, unread: true,
+          title: 'Test', createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          unread: true,
         },
       }, 'cht_viewed')
 
@@ -619,8 +565,9 @@ describe('applyEventToCache', () => {
         type: 'chat.updated',
         payload: {
           id: 'cht_viewed', workspaceId: 'wks_1', agentId: 'agt_1',
-          title: 'Test', updatedAt: new Date().toISOString(),
-          awaitingUser: false, unread: true,
+          title: 'Test', createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          unread: true,
         },
       }, 'cht_viewed')
 
@@ -639,8 +586,9 @@ describe('applyEventToCache', () => {
         type: 'chat.updated',
         payload: {
           id: 'cht_other', workspaceId: 'wks_1', agentId: 'agt_1',
-          title: 'Other', updatedAt: new Date().toISOString(),
-          awaitingUser: false, unread: true,
+          title: 'Other', createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          unread: true,
         },
       }, 'cht_viewed')
       expect(dispatched.length).toBeGreaterThan(nonViewedDispatched.length)
@@ -660,8 +608,9 @@ describe('applyEventToCache', () => {
           type: 'chat.updated',
           payload: {
             id: 'cht_viewed', workspaceId: 'wks_1', agentId: 'agt_1',
-            title: 'Test', updatedAt: new Date().toISOString(),
-            awaitingUser: false, unread: false,
+            title: 'Test', createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            unread: false,
           },
         }, 'cht_viewed')
 
@@ -679,8 +628,9 @@ describe('applyEventToCache', () => {
         type: 'chat.updated',
         payload: {
           id: 'cht_other', workspaceId: 'wks_1', agentId: 'agt_1',
-          title: 'Other Chat', updatedAt: new Date().toISOString(),
-          awaitingUser: false, unread: true,
+          title: 'Other Chat', createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          unread: true,
         },
       }, 'cht_viewed')
 
@@ -689,113 +639,13 @@ describe('applyEventToCache', () => {
     })
   })
 
-  describe('running chat tracking', () => {
-    it('dispatches markChatRunning for a pending agent_turn', () => {
-      const dispatched: unknown[] = []
-      const dispatch = (action: unknown) => { dispatched.push(action); return action }
-
-      applyEventToCache(dispatch, {
-        type: 'message.appended',
-        payload: {
-          id: 'msg_at1', chatId: 'cht_1', role: 'system',
-          content: { type: 'agent_turn', userMessageId: 'msg_u1' },
-          state: 'pending',
-          createdAt: new Date().toISOString(),
-        },
-      })
-
-      expect(dispatched).toContainEqual(markChatRunning('cht_1'))
-    })
-
-    it('dispatches markChatRunning for a running agent_turn', () => {
-      const dispatched: unknown[] = []
-      const dispatch = (action: unknown) => { dispatched.push(action); return action }
-
-      applyEventToCache(dispatch, {
-        type: 'message.updated',
-        payload: {
-          id: 'msg_at1', chatId: 'cht_1', role: 'system',
-          content: { type: 'agent_turn', userMessageId: 'msg_u1' },
-          state: 'running',
-          createdAt: new Date().toISOString(),
-        },
-      })
-
-      expect(dispatched).toContainEqual(markChatRunning('cht_1'))
-    })
-
-    it('dispatches markChatIdle when agent_turn succeeds', () => {
-      const dispatched: unknown[] = []
-      const dispatch = (action: unknown) => { dispatched.push(action); return action }
-
-      applyEventToCache(dispatch, {
-        type: 'message.updated',
-        payload: {
-          id: 'msg_at1', chatId: 'cht_1', role: 'system',
-          content: { type: 'agent_turn', userMessageId: 'msg_u1' },
-          state: 'succeeded',
-          createdAt: new Date().toISOString(),
-        },
-      })
-
-      expect(dispatched).toContainEqual(markChatIdle('cht_1'))
-    })
-
-    it('dispatches markChatFailed when agent_turn fails', () => {
-      const dispatched: unknown[] = []
-      const dispatch = (action: unknown) => { dispatched.push(action); return action }
-
-      applyEventToCache(dispatch, {
-        type: 'message.updated',
-        payload: {
-          id: 'msg_at1', chatId: 'cht_1', role: 'system',
-          content: { type: 'agent_turn', userMessageId: 'msg_u1' },
-          state: 'failed',
-          createdAt: new Date().toISOString(),
-        },
-      })
-
-      expect(dispatched).toContainEqual(markChatFailed('cht_1'))
-    })
-
-    it('does not dispatch running actions for non-agent_turn messages', () => {
-      const dispatched: unknown[] = []
-      const dispatch = (action: unknown) => { dispatched.push(action); return action }
-
-      applyEventToCache(dispatch, {
-        type: 'message.appended',
-        payload: {
-          id: 'msg_t1', chatId: 'cht_1', role: 'agent',
-          content: { type: 'text', text: 'hello' },
-          state: 'succeeded',
-          createdAt: new Date().toISOString(),
-        },
-      })
-
-      const hasRunning = dispatched.some(
-        (a) => (a as { type?: string }).type?.includes('markChat'),
-      )
-      expect(hasRunning).toBe(false)
-    })
-  })
-
-  describe('chat deletion cleans up running state', () => {
-    it('dispatches markChatIdle when a chat is deleted', () => {
-      const dispatched: unknown[] = []
-      const dispatch = (action: unknown) => { dispatched.push(action); return action }
-
-      applyEventToCache(dispatch, {
-        type: 'chat.deleted',
-        payload: { chatId: 'cht_1', workspaceId: 'ws_1' },
-      })
-
-      const idleActions = dispatched.filter(
-        (a) => (a as { type?: string }).type === 'derived/markChatIdle',
-      )
-      expect(idleActions).toHaveLength(1)
-      expect((idleActions[0] as { payload: string }).payload).toBe('cht_1')
-    })
-  })
+  // The previous `running chat tracking` and `chat deletion cleans up
+  // running state` suites covered the removed client-side inference
+  // of running/failed from agent_turn message events. Those derivations
+  // are gone — the server now emits chat.updated with running/failed
+  // computed live from the latest agent_turn (queries/chats.ts), and
+  // the chat.updated handler above applies it directly. The end-to-end
+  // behaviour is covered by the chat.updated suite + server tests.
 
   describe('artifact.created', () => {
     it('dispatches pushArtifactUpdate with the artifact details', () => {

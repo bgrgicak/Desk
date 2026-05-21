@@ -1,31 +1,25 @@
-import { type ReactNode } from 'react'
+import { memo, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
+import { Link } from 'react-router-dom'
 import {
-  Bot,
-  Download,
-  FolderPlus,
   MessageSquarePlus,
   MoreHorizontal,
-  Pencil,
-  Pin,
-  PinOff,
-  Trash2,
 } from 'lucide-react'
 import {
   Button,
   Checkbox,
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@agent-desk/ui'
 import type { ContextItem } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 import { iconForItem } from '@/data/file-kind'
+import { FileActionMenuItems } from '@/components/library/FileActionMenuItems'
 
 export const DRAG_TYPE_LIBRARY_ITEM = 'application/x-library-item'
 export const DRAG_TYPE_PINNED_ITEM  = 'application/x-pinned-item'
+export const DRAG_TYPE_CHAT         = 'application/x-chat'
 
 export type LibraryCardLayout = 'list' | 'grid'
 
@@ -39,6 +33,12 @@ interface LibraryCardProps {
   selected?: boolean
   hasSelection?: boolean
   onSelectChange?: (selected: boolean) => void
+  /** When set, the clickable surface is rendered as a react-router `<Link>`
+   *  so middle-click / cmd+click opens the destination in a new tab. With
+   *  `href` provided the `<Link>` handles SPA navigation itself and the
+   *  `onClick` callback is ignored — callers should make sure `href` already
+   *  leads to the desired destination. */
+  href?: string
   onClick?: () => void
   onUseInChat?: () => void
   onDownload?: () => void
@@ -56,7 +56,7 @@ interface LibraryCardProps {
  * rendered here — callers handle folder rows separately because their
  * navigation semantics differ from leaf items.
  */
-export function LibraryCard({
+export const LibraryCard = memo(function LibraryCard({
   item,
   layout,
   index = 0,
@@ -64,6 +64,7 @@ export function LibraryCard({
   selected = false,
   hasSelection = false,
   onSelectChange,
+  href,
   onClick,
   onUseInChat,
   onDownload,
@@ -76,14 +77,20 @@ export function LibraryCard({
   isDraggable,
 }: LibraryCardProps) {
   const Icon = iconForItem(item)
-  const showAgent = item.uploadedBy === 'ai'
-  const agentLabel = item.agentName ?? 'AI'
 
   const handleDragStart = (e: unknown) => {
-    const dragEvent = e as React.DragEvent<HTMLDivElement>
+    const dragEvent = e as React.DragEvent<HTMLElement>
     dragEvent.dataTransfer.effectAllowed = 'move'
     dragEvent.dataTransfer.setData(DRAG_TYPE_LIBRARY_ITEM, item.id)
   }
+
+  // Anchors are draggable by default and would otherwise initiate a URL drag
+  // when the user grabs the card. When the row should be draggable for the
+  // pin/move workflow we re-attach the library-item drag handler to the link
+  // itself; when it shouldn't be draggable we explicitly opt out.
+  const linkDragProps = isDraggable
+    ? { draggable: true as const, onDragStart: handleDragStart }
+    : { draggable: false as const }
 
   const menu = (
     <DropdownMenu>
@@ -103,59 +110,42 @@ export function LibraryCard({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-40">
-        {onUseInChat && (
-          <DropdownMenuItem onClick={onUseInChat}>
-            <MessageSquarePlus className="h-4 w-4 mr-2" />
-            Use in chat
-          </DropdownMenuItem>
-        )}
-        {(onPin || onUnpin) && (
-          <DropdownMenuItem onClick={isPinned ? onUnpin : onPin}>
-            {isPinned
-              ? <><PinOff className="h-4 w-4 mr-2" />Unpin</>
-              : <><Pin className="h-4 w-4 mr-2" />Pin</>
-            }
-          </DropdownMenuItem>
-        )}
-        {onDownload && (
-          <DropdownMenuItem onClick={onDownload}>
-            <Download className="h-4 w-4 mr-2" />
-            Download
-          </DropdownMenuItem>
-        )}
-        {onRename && (
-          <DropdownMenuItem onClick={onRename}>
-            <Pencil className="h-4 w-4 mr-2" />
-            Rename
-          </DropdownMenuItem>
-        )}
-        {onMove && (
-          <DropdownMenuItem onClick={onMove}>
-            <FolderPlus className="h-4 w-4 mr-2" />
-            Move to folder
-          </DropdownMenuItem>
-        )}
-        {onDelete && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={onDelete}>
-              <Trash2 className="h-4 w-4 mr-2" />
-              Delete
-            </DropdownMenuItem>
-          </>
-        )}
+        <FileActionMenuItems
+          onUseInChat={onUseInChat}
+          isPinned={isPinned}
+          onPin={onPin}
+          onUnpin={onUnpin}
+          onDownload={onDownload}
+          onRename={onRename}
+          onMove={onMove}
+          onDelete={onDelete}
+        />
       </DropdownMenuContent>
     </DropdownMenu>
   )
 
   if (layout === 'list') {
+    const nameContent = (
+      <>
+        <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-foreground truncate">{item.name}</p>
+          {item.usedBy.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Used by {item.usedBy.join(', ')}
+              {item.lastAccessed && ` · ${getRelativeTime(item.lastAccessed)}`}
+            </p>
+          )}
+        </div>
+      </>
+    )
     return (
       <motion.div
         initial={{ opacity: 0, y: 5 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: index * 0.02 }}
-        draggable={isDraggable ? true : undefined}
-        onDragStart={isDraggable ? handleDragStart : undefined}
+        draggable={!href && isDraggable ? true : undefined}
+        onDragStart={!href && isDraggable ? handleDragStart : undefined}
         className={`flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors group cursor-pointer ${
           selected ? 'bg-primary/5 border border-primary/10' : 'hover:bg-muted/50 border border-transparent'
         } ${isDraggable ? 'active:cursor-grabbing' : ''}`}
@@ -168,24 +158,24 @@ export function LibraryCard({
             onClick={(e) => e.stopPropagation()}
           />
         )}
-        <div className="flex items-center gap-3 flex-1 min-w-0" onClick={onClick}>
-          <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-foreground truncate">{item.name}</p>
-            {showAgent && (
-              <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                <Bot className="h-3 w-3 shrink-0" />
-                <span className="truncate">{agentLabel}</span>
-              </p>
-            )}
-            {item.usedBy.length > 0 && (
-              <p className="text-xs text-muted-foreground">
-                Used by {item.usedBy.join(', ')}
-                {item.lastAccessed && ` · ${getRelativeTime(item.lastAccessed)}`}
-              </p>
-            )}
+        {href ? (
+          // When the parent supplies an href the `<Link>` itself handles SPA
+          // navigation on plain left-click and lets the browser open a new
+          // tab on middle / cmd / ctrl click. The legacy `onClick` callback
+          // only navigates (no other side effects), so it would otherwise
+          // double-push a history entry — we intentionally skip it here.
+          <Link
+            to={href}
+            className="flex items-center gap-3 flex-1 min-w-0 no-underline text-inherit"
+            {...linkDragProps}
+          >
+            {nameContent}
+          </Link>
+        ) : (
+          <div className="flex items-center gap-3 flex-1 min-w-0" onClick={onClick}>
+            {nameContent}
           </div>
-        </div>
+        )}
         <span className="hidden text-xs text-muted-foreground shrink-0 w-20 text-right capitalize sm:block">
           {item.type}
         </span>
@@ -213,17 +203,38 @@ export function LibraryCard({
   }
 
   // Grid layout
+  const gridBody = thumbnail ? (
+    <>
+      {thumbnail}
+      <div className="p-4 pt-3">
+        <p className="text-sm font-medium text-foreground truncate mb-1">{item.name}</p>
+        <p className="flex items-center gap-1 text-xs text-muted-foreground">
+          {getRelativeTime(item.addedAt)}
+        </p>
+      </div>
+    </>
+  ) : (
+    <div className="flex flex-col items-center text-center p-4 pt-6 pb-3">
+      <Icon className="h-8 w-8 text-muted-foreground/40 mb-3" />
+      <p className="text-sm font-medium text-foreground line-clamp-2 break-all mb-1 w-full">
+        {item.name}
+      </p>
+      <p className="text-xs text-muted-foreground flex items-center gap-1">
+        {getRelativeTime(item.addedAt)}
+      </p>
+    </div>
+  )
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       transition={{ delay: index * 0.03 }}
-      draggable={isDraggable ? true : undefined}
-      onDragStart={isDraggable ? handleDragStart : undefined}
+      draggable={!href && isDraggable ? true : undefined}
+      onDragStart={!href && isDraggable ? handleDragStart : undefined}
       className={`group relative rounded-xl border bg-background cursor-pointer hover:shadow-sm transition-all overflow-hidden ${
         selected ? 'ring-2 ring-primary/30 border-primary/20' : 'border-border'
       }`}
-      onClick={onClick}
+      onClick={href ? undefined : onClick}
     >
       {onSelectChange && (
         <div
@@ -255,41 +266,20 @@ export function LibraryCard({
         )}
         {menu}
       </div>
-      {thumbnail ? (
-        <>
-          {thumbnail}
-          <div className="p-4 pt-3">
-            <p className="text-sm font-medium text-foreground truncate mb-1">{item.name}</p>
-            <p className="flex items-center gap-1 text-xs text-muted-foreground">
-              {showAgent && (
-                <>
-                  <Bot className="h-3 w-3 shrink-0" />
-                  <span className="truncate max-w-[8rem]">{agentLabel}</span>
-                  <span aria-hidden>·</span>
-                </>
-              )}
-              {getRelativeTime(item.addedAt)}
-            </p>
-          </div>
-        </>
+      {href ? (
+        // See list-layout comment: the `<Link>` handles SPA navigation
+        // itself, and the parent's `onClick` would be a redundant second
+        // history push.
+        <Link
+          to={href}
+          className="block no-underline text-inherit"
+          {...linkDragProps}
+        >
+          {gridBody}
+        </Link>
       ) : (
-        <div className="flex flex-col items-center text-center p-4 pt-6 pb-3">
-          <Icon className="h-8 w-8 text-muted-foreground/40 mb-3" />
-          <p className="text-sm font-medium text-foreground line-clamp-2 break-all mb-1 w-full">
-            {item.name}
-          </p>
-          <p className="text-xs text-muted-foreground flex items-center gap-1">
-            {showAgent && (
-              <>
-                <Bot className="h-3 w-3 shrink-0" />
-                <span className="truncate max-w-[8rem]">{agentLabel}</span>
-                <span aria-hidden>·</span>
-              </>
-            )}
-            {getRelativeTime(item.addedAt)}
-          </p>
-        </div>
+        gridBody
       )}
     </motion.div>
   )
-}
+})

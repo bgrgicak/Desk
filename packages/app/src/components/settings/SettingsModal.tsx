@@ -18,8 +18,8 @@ import {
   CommandList,
   Button,
   Input,
-  Textarea,
   Switch,
+  Textarea,
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -131,7 +131,10 @@ function describeLocalSourceReason(kind: string, reason: string | undefined): st
   return 'Not detected on this machine.'
 }
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
+import { WorkspaceForm, type WorkspaceFormValues } from '@/components/workspace/WorkspaceForm'
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
+import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'
+import { initialsOf } from '@/lib/initials'
 import { PreferenceRow } from '@/components/settings/shared'
 import { describeApiError } from '@/components/settings/errors'
 
@@ -159,24 +162,6 @@ function OpenAILogo({ className }: { className?: string }) {
   )
 }
 
-// ── Color + emoji options (mirrored from WorkspaceBar) ──────────────────────
-
-const EMOJI_OPTIONS = [
-  '🏡','💼','🎨','📚','🚀','💡','🌿','⚡',
-  '🎯','🔬','💻','🎵','🌍','⭐','🏆','🔒',
-  '🌊','🦋','🍀','🔥','🧠','🌸','🎭','🐝',
-]
-
-const COLOR_OPTIONS = [
-  { value: '#fef3c7', label: 'Amber'  },
-  { value: '#dbeafe', label: 'Blue'   },
-  { value: '#fce7f3', label: 'Pink'   },
-  { value: '#d1fae5', label: 'Green'  },
-  { value: '#ede9fe', label: 'Purple' },
-  { value: '#ffedd5', label: 'Orange' },
-  { value: '#fee2e2', label: 'Red'    },
-  { value: '#ccfbf1', label: 'Teal'   },
-]
 
 // ── Nav sections ─────────────────────────────────────────────────────────────
 
@@ -184,7 +169,7 @@ type NavSection = 'workspace' | 'agents' | 'connections' | 'preferences'
 
 const NAV: { id: NavSection; label: string; icon: typeof Settings2 }[] = [
   { id: 'workspace',   label: 'Workspace',   icon: Settings2 },
-  { id: 'agents',      label: 'Agents',      icon: Bot       },
+  { id: 'agents',      label: 'Models',      icon: Bot       },
   { id: 'connections', label: 'Connections', icon: Plug      },
   { id: 'preferences', label: 'Preferences', icon: Sliders   },
 ]
@@ -487,90 +472,21 @@ function WorkspaceSection({
   onUpdate: (ws: WorkspaceInfo) => void
   onDelete: () => void
 }) {
-  const [name, setName]               = useState(workspace.name)
-  const [emoji, setEmoji]             = useState(workspace.emoji)
-  const [color, setColor]             = useState(workspace.bg)
-  const [description, setDescription] = useState(workspace.description)
-  const [deleteOpen, setDeleteOpen]   = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
 
-  const isDirty =
-    name !== workspace.name ||
-    emoji !== workspace.emoji ||
-    color !== workspace.bg ||
-    description !== workspace.description
-
-  const { ref: scrollRef, scrolledUnder } = useScrolledUnder()
+  const handleSubmit = async (vals: WorkspaceFormValues): Promise<string | undefined> => {
+    onUpdate({ ...workspace, name: vals.name, bg: vals.color, description: vals.description })
+    return workspace.id
+  }
 
   return (
-    <div className="flex-1 flex min-w-0 flex-col min-h-0 overflow-hidden">
-      <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4 space-y-4">
-        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
-          <div
-            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-2xl select-none"
-            style={{ backgroundColor: color }}
-          >
-            {emoji}
-          </div>
-          <Input
-            placeholder="Workspace name"
-            value={name}
-            onChange={e => setName(e.target.value)}
-            className="w-full min-w-0 sm:flex-1"
-          />
-        </div>
-
-        <div>
-          <p className="text-xs font-medium text-muted-foreground mb-2">Color</p>
-          <div className="flex min-w-0 flex-wrap gap-2">
-            {COLOR_OPTIONS.map(({ value, label }) => (
-              <button
-                key={value}
-                title={label}
-                onClick={() => setColor(value)}
-                className={`h-6 w-6 rounded-full transition-all ${
-                  color === value ? 'ring-2 ring-offset-2 ring-foreground/40 scale-110' : 'hover:scale-110'
-                }`}
-                style={{ backgroundColor: value }}
-              />
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <p className="text-xs font-medium text-muted-foreground mb-2">Icon</p>
-          <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(2rem,1fr))] gap-1">
-            {EMOJI_OPTIONS.map(e => (
-              <button
-                key={e}
-                onClick={() => setEmoji(e)}
-                className={`mx-auto flex h-8 w-8 items-center justify-center rounded-md text-lg transition-colors ${
-                  emoji === e ? 'bg-muted ring-1 ring-ring/40' : 'hover:bg-muted'
-                }`}
-              >
-                {e}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <p className="text-xs font-medium text-muted-foreground mb-2">Description</p>
-          <Textarea
-            placeholder="What's this workspace for?"
-            value={description}
-            onChange={e => setDescription(e.target.value)}
-            rows={2}
-            className="resize-none"
-          />
-        </div>
-      </div>
-
-      <div
-        className={cn(
-          'shrink-0 p-4 flex min-w-0 flex-col items-stretch gap-2 border-t border-transparent sm:flex-row sm:items-center sm:justify-between',
-          scrolledUnder && 'border-border',
-        )}
-      >
+    <WorkspaceForm
+      mode="edit"
+      workspaceId={workspace.id}
+      initial={{ name: workspace.name, description: workspace.description, color: workspace.bg }}
+      submitLabel="Save changes"
+      onSubmit={handleSubmit}
+      footerStart={
         <Popover open={deleteOpen} onOpenChange={o => canDelete && setDeleteOpen(o)}>
           <PopoverTrigger asChild>
             <Button
@@ -578,7 +494,7 @@ function WorkspaceSection({
               size="sm"
               disabled={!canDelete}
               title={canDelete ? undefined : "You need at least one workspace. Create another before deleting this one."}
-              className="w-full min-w-0 justify-start text-destructive hover:text-destructive gap-1.5 disabled:text-muted-foreground disabled:hover:text-muted-foreground sm:w-auto"
+              className="min-w-0 justify-start text-destructive hover:text-destructive gap-1.5 disabled:text-muted-foreground disabled:hover:text-muted-foreground"
             >
               <Trash2 className="h-3.5 w-3.5" />
               Delete workspace
@@ -604,17 +520,8 @@ function WorkspaceSection({
             </div>
           </PopoverContent>
         </Popover>
-
-        <Button
-          size="sm"
-          disabled={!name.trim() || !isDirty}
-          onClick={() => onUpdate({ ...workspace, name: name.trim(), emoji, bg: color, description })}
-          className="w-full shrink-0 sm:w-auto"
-        >
-          Save changes
-        </Button>
-      </div>
-    </div>
+      }
+    />
   )
 }
 
@@ -694,18 +601,18 @@ function AgentsList({
   if (agents.length === 0) {
     return (
       <EmptyState
-        title="No agents yet"
-        body="Every workspace should start with a default opencode agent. If one is missing, refresh this panel; you can change its model here once it appears."
+        title="No models yet"
+        body="Every workspace should start with a default opencode model. If one is missing, refresh this panel; you can change its model here once it appears."
         action={
           <Button size="sm" className="gap-1.5" onClick={onAdd}>
-            <Plus className="h-3.5 w-3.5" />Add agent
+            <Plus className="h-3.5 w-3.5" />Add model
           </Button>
         }
       />
     )
   }
   if (filtered.length === 0) {
-    return <EmptyState title="No matches" body={q ? `No agents match “${q}”.` : 'No agents in this filter.'} />
+    return <EmptyState title="No matches" body={q ? `No models match “${q}”.` : 'No models in this filter.'} />
   }
 
   return (
@@ -889,13 +796,13 @@ function AgentDetail({
               <PopoverTrigger asChild>
                 <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive gap-1.5">
                   <Trash2 className="h-3.5 w-3.5" />
-                  Delete agent
+                  Delete model
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-64 p-4" align="start">
                 <p className="text-sm font-medium mb-1">Delete {existing.name}?</p>
                 <p className="text-xs text-muted-foreground mb-3">
-                  Any chats assigned to this agent will lose it. This can't be undone.
+                  Any chats assigned to this model will lose it. This can't be undone.
                 </p>
                 <div className="flex gap-2">
                   <Button
@@ -917,7 +824,7 @@ function AgentDetail({
         <div className="flex min-w-0 items-center gap-2 sm:justify-end">
           <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={onCancel} disabled={busy}>Cancel</Button>
           <Button size="sm" className="flex-1 sm:flex-none" onClick={handleSave} disabled={!canSave || busy}>
-            {focus.mode === 'new' ? (busy ? 'Adding…' : 'Add agent') : (busy ? 'Saving…' : 'Save')}
+            {focus.mode === 'new' ? (busy ? 'Adding…' : 'Add model') : (busy ? 'Saving…' : 'Save')}
           </Button>
         </div>
       </div>
@@ -1674,6 +1581,7 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<NavSection>(initialSection ?? 'workspace')
   const isCompactViewport = useCompactViewport()
+  const workspaceIcon = useWorkspaceIconUrl(workspace.id)
 
   useEffect(() => {
     if (open && initialSection) setActiveSection(initialSection)
@@ -2007,19 +1915,19 @@ export function SettingsModal({
       const leafLabel = agentsFocus === null
         ? null
         : agentsFocus.mode === 'new'
-          ? 'New agent'
-          : agents.find(a => a.id === agentsFocus.id)?.name ?? 'Agent'
+          ? 'New model'
+          : agents.find(a => a.id === agentsFocus.id)?.name ?? 'Model'
 
       return (
         <Breadcrumb className="min-w-0">
           <BreadcrumbList>
             <BreadcrumbItem>
               {leafLabel === null ? (
-                <BreadcrumbPage className={pageClass}>Agents</BreadcrumbPage>
+                <BreadcrumbPage className={pageClass}>Models</BreadcrumbPage>
               ) : (
                 <BreadcrumbLink asChild className={pageClass}>
                   <button type="button" onClick={() => { setAgentsFocus(null); setAgentsSearch('') }}>
-                    Agents
+                    Models
                   </button>
                 </BreadcrumbLink>
               )}
@@ -2127,12 +2035,20 @@ export function SettingsModal({
           <div className={cn('shrink-0 flex flex-col bg-muted/30', isCompactViewport ? 'w-full border-b' : 'h-full w-52 border-r')}>
             <div className={cn('px-4', isCompactViewport ? 'pt-4 pb-2 pr-12' : 'pt-5 pb-3 pr-4')}>
               <div className="flex items-center gap-2">
-                <div
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-sm"
-                  style={{ backgroundColor: workspace.bg }}
-                >
-                  {workspace.emoji}
-                </div>
+                {workspaceIcon ? (
+                  <img
+                    src={workspaceIcon}
+                    alt={workspace.name}
+                    className="h-7 w-7 shrink-0 rounded-lg object-cover"
+                  />
+                ) : (
+                  <div
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-sm font-semibold text-white"
+                    style={{ backgroundColor: workspace.bg }}
+                  >
+                    {workspace.emoji || initialsOf(workspace.name)}
+                  </div>
+                )}
                 <span className="text-sm font-semibold truncate">{workspace.name}</span>
               </div>
             </div>
@@ -2233,7 +2149,7 @@ export function SettingsModal({
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <StatusFilterPills value={agentsStatusFilter} onChange={setAgentsStatusFilter} />
                         <div className="flex w-full min-w-0 max-w-full items-center gap-2 sm:w-auto">
-                          <SearchInput value={agentsSearch} onChange={setAgentsSearch} placeholder="Search agents…" />
+                          <SearchInput value={agentsSearch} onChange={setAgentsSearch} placeholder="Search models…" />
                           <Button size="sm" className="gap-1.5" onClick={() => setAgentsFocusAndReset({ mode: 'new' })}>
                             <Plus className="h-3.5 w-3.5" />Add
                           </Button>

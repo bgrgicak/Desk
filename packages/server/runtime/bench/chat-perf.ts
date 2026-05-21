@@ -6,6 +6,10 @@
 // Run from repo root: npx tsx packages/server/runtime/bench/chat-perf.ts
 // Needs Docker + the desk/sandbox:v1 image. Uses opencode/big-pickle
 // (free, no API key).
+//
+// console.* is intentional in this one-off CLI benchmark — operators
+// run it ad-hoc and expect plain stdout, not structured JSON.
+/* eslint-disable no-console */
 
 import * as fs from "node:fs/promises";
 import * as os from "node:os";

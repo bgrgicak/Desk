@@ -85,7 +85,7 @@ describe("WorkspaceSchema", () => {
 });
 
 describe("ChatSchema", () => {
-  const valid = { id: "cht_abc", workspaceId: "wks_abc", agentId: "agt_abc", title: "Chat 1", updatedAt: now, awaitingUser: false, unread: true };
+  const valid = { id: "cht_abc", workspaceId: "wks_abc", agentId: "agt_abc", title: "Chat 1", createdAt: now, updatedAt: now, unread: true };
 
   it("parses a valid chat", () => {
     expect(ChatSchema.parse(valid)).toEqual(valid);
@@ -95,8 +95,8 @@ describe("ChatSchema", () => {
     expect(ChatSchema.parse({ ...valid, goal: "Do stuff" })).toMatchObject({ goal: "Do stuff" });
   });
 
-  it("rejects wrong awaitingUser type", () => {
-    expect(() => ChatSchema.parse({ ...valid, awaitingUser: "yes" })).toThrow();
+  it("rejects wrong unread type", () => {
+    expect(() => ChatSchema.parse({ ...valid, unread: "yes" })).toThrow();
   });
 
   it("round-trips through JSON", () => {
@@ -249,6 +249,25 @@ describe("MessageContent summary / summary_request", () => {
   it("rejects a summary with non-string body", () => {
     expect(() =>
       MessageSchema.parse({ ...base, role: "agent", content: { type: "summary", body: 123 } }),
+    ).toThrow();
+  });
+
+  it("parses feedback content", () => {
+    const msg = {
+      ...base,
+      role: "system",
+      content: { type: "feedback", rating: "up", targetMessageId: "msg_target" },
+    };
+    expect(MessageSchema.parse(msg)).toEqual(msg);
+  });
+
+  it("rejects feedback with an unknown rating", () => {
+    expect(() =>
+      MessageSchema.parse({
+        ...base,
+        role: "system",
+        content: { type: "feedback", rating: "meh", targetMessageId: "msg_target" },
+      }),
     ).toThrow();
   });
 });
