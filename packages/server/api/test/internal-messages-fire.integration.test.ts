@@ -412,13 +412,13 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     expect(JSON.parse(outputRows[0].content).type).toBe("events");
   });
 
-  it("POST /run moves a plain user task parent to Active durably", async () => {
+  it("POST /run fires a plain user task without mutating the parent", async () => {
     const mid = await insertPlainUserTask({ type: "text", text: "manual active" });
 
     const res = await userRequest("POST", `/chats/${chatId}/messages/${mid}/run`);
     expect(res.status).toBe(200);
     expect((res.body as { kind: string; state: string }).kind).toBe("task");
-    expect((res.body as { state: string }).state).toBe("running");
+    expect((res.body as { state: string }).state).toBe("pending");
 
     for (let i = 0; i < 50; i++) {
       const { rows } = await pool.query<{ state: string }>(
@@ -430,7 +430,7 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     }
 
     const parent = await queries.messages.findById(pool, mid);
-    expect(parent?.state).toBe("running");
+    expect(parent?.state).toBe("pending");
 
     const { rows } = await pool.query<{ state: string }>(
       `SELECT state FROM messages WHERE parent_id = ? AND kind = 'task_run'`,
@@ -440,13 +440,13 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     expect(rows[0].state).toBe("succeeded");
   });
 
-  it("POST /run keeps a manually activated agent task Active when the run fails", async () => {
+  it("POST /run fires a plain agent task without mutating the parent when the run fails", async () => {
     const mid = await insertPlainAgentTask({ type: "text", text: "missing attachment failure" });
 
     const res = await userRequest("POST", `/chats/${chatId}/messages/${mid}/run`);
     expect(res.status).toBe(200);
     expect((res.body as { kind: string; state: string }).kind).toBe("task");
-    expect((res.body as { state: string }).state).toBe("running");
+    expect((res.body as { state: string }).state).toBe("pending");
 
     for (let i = 0; i < 50; i++) {
       const { rows } = await pool.query<{ state: string }>(
@@ -458,7 +458,7 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     }
 
     const parent = await queries.messages.findById(pool, mid);
-    expect(parent?.state).toBe("running");
+    expect(parent?.state).toBe("pending");
 
     const { rows } = await pool.query<{ state: string }>(
       `SELECT state FROM messages WHERE parent_id = ? AND kind = 'task_run'`,

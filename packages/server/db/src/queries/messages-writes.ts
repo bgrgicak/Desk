@@ -140,6 +140,7 @@ export async function insert(
     contentType === "agent_turn" ||
     contentType === "summary_request" ||
     contentType === "summary" ||
+    contentType === "feedback" ||
     kind === "summary";
   if (!isInternal) {
     const setUnread = data.role === "agent" ? ", unread = 1" : "";

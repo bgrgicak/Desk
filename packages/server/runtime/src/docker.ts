@@ -81,11 +81,20 @@ export interface SandboxHandle {
  *
  * The numbers were measured from real sandbox baseline (5 PIDs / ~50 MB
  * idle, ~20 PIDs / 300-400 MB during a chat run, ~50-100 PIDs / ~1 GB
- * for site/app work with firefox). 512 / 512 MB is comfortably above
- * idle, ~50 % headroom for chat work, and growth handles the rest.
+ * for site/app work with firefox).
+ *
+ * Memory baseline raised from 512 MiB → 1 GiB after chaos-test data
+ * (CHAOS_TESTING.md) showed the previous baseline was consistently
+ * exceeded during cold-start when N concurrent chats hit a single
+ * workspace daemon simultaneously: each chat creates its own opencode
+ * session inside the shared `opencode serve` daemon, and the per-chat
+ * session state (model context, tool registrations, MCP clients) adds
+ * up faster than the auto-grow loop can react. The grow path still
+ * exists for genuinely-large workloads, but 1 GiB makes the cold-start
+ * failure mode disappear for typical 4-6 concurrent chats per workspace.
  */
 const SANDBOX_BASELINE_PIDS = 512;
-const SANDBOX_BASELINE_MEMORY_BYTES = 512 * 1024 * 1024;
+const SANDBOX_BASELINE_MEMORY_BYTES = 1024 * 1024 * 1024;
 const SANDBOX_MAX_PIDS = 4096;
 const SANDBOX_MAX_MEMORY_BYTES = 8 * 1024 * 1024 * 1024;
 const SANDBOX_TMPFS: Record<string, string> = { "/tmp": "size=512m" };
