@@ -4,11 +4,14 @@
  * because the provider config (API keys, registered providers) is what
  * pi inside the container can see.
  *
- * Pi prints one `<provider>/<model>` id per line. We parse those into
- * `ModelRef`s; verbose context-window metadata is omitted (pi has no
- * --verbose equivalent yet, and Desk's UI only requires the id + provider).
+ * Pi prints a fixed-width column table with a `provider model context
+ * max-out thinking images` header. We parse rows back into `ModelRef`s
+ * keyed by `<provider>/<model>`. When pi has no authenticated provider
+ * it prints a human-readable "No models available" message instead of
+ * the table; in that case we yield an empty list.
  */
 
+import { randomUUID } from "node:crypto";
 import { execInSandbox } from "./sandboxExec.js";
 
 export interface ModelRef {
@@ -47,6 +50,10 @@ export class SandboxExecError extends Error {
 }
 
 const FAKE_DRIVER_MODELS: ModelRef[] = [
+  // `opencode/big-pickle` is pi's free tier (OpenCode Zen) — always
+  // listed in the fake driver so route-coverage tests don't need a real
+  // sandbox to assert "the listing surfaces at least one free model".
+  { id: "opencode/big-pickle", provider: "opencode", contextWindow: 200_000, outputLimit: 128_000 },
   { id: "anthropic/claude-haiku-4-5", provider: "anthropic", contextWindow: 200_000, outputLimit: 64_000 },
 ];
 
@@ -61,9 +68,15 @@ export async function listModels(
       : FAKE_DRIVER_MODELS;
   }
 
-  const argv = ["pi", "--list-models"];
-  if (opts.provider) argv.push("--provider", opts.provider);
-
+  // Pi authenticates OAuth providers (openai-codex, anthropic-pro, …)
+  // from `$PI_CODING_AGENT_DIR/auth.json` on disk — it does not read the
+  // OAuth blob from the env directly. The chat-turn path in piClient.ts
+  // base64-decodes `PI_AUTH_JSON_BASE64` into a per-invocation agent dir
+  // before exec'ing pi; the model-listing path has to do the same or
+  // pi only sees env-var-based providers (e.g. ANTHROPIC_API_KEY) and
+  // every OAuth-backed channel — including the Codex/ChatGPT
+  // subscription — vanishes from the listing.
+  const argv = piListModelsArgv(opts);
   const result = await execInSandbox(workspaceId, workspaceSlug, {
     argv,
     timeoutMs: opts.timeoutMs ?? 15_000,
@@ -79,23 +92,69 @@ export async function listModels(
     );
   }
 
-  return parseModelsOutput(result.stdout);
+  // Pi writes the model table to stderr, not stdout, with exit code 0. We
+  // concatenate both streams so the parser works regardless of which one
+  // future pi versions choose; the header sentinel makes false matches in
+  // unrelated stderr noise vanishingly unlikely.
+  return parseModelsOutput(`${result.stdout}\n${result.stderr}`);
 }
 
 /**
- * Parses pi's `--list-models` output. Each non-empty line is one
- * `<provider>/<model>` id; lines without a slash are skipped.
+ * Builds the argv for invoking `pi --list-models` inside the sandbox.
+ * When `PI_AUTH_JSON_BASE64` is present in `opts.env`, the argv is
+ * actually a `sh -c '…'` wrapper that base64-decodes the blob into a
+ * per-invocation `$PI_CODING_AGENT_DIR/auth.json` and then `exec`s pi
+ * against that dir. Without the wrapper, OAuth-backed providers (Codex/
+ * ChatGPT, Claude Pro) silently disappear from the listing because pi
+ * reads auth from disk, not env. Mirrors the seed logic in
+ * `piClient.ts` so the listing path can never drift from the run path.
  */
-export function parseModelsOutput(stdout: string): ModelRef[] {
+function piListModelsArgv(opts: ListModelsOptions): string[] {
+  const piArgs = ["pi", "--list-models"];
+  if (opts.provider) piArgs.push("--provider", opts.provider);
+
+  if (!opts.env?.PI_AUTH_JSON_BASE64) return piArgs;
+
+  const agentDir = `/tmp/pi-list-${randomUUID()}/agent`;
+  const piCmd = piArgs.map(shSingleQuote).join(" ");
+  const script = [
+    `mkdir -p ${shSingleQuote(agentDir)}`,
+    `printf '%s' "$PI_AUTH_JSON_BASE64" | base64 -d > ${shSingleQuote(`${agentDir}/auth.json`)}`,
+    `chmod 600 ${shSingleQuote(`${agentDir}/auth.json`)}`,
+    `PI_CODING_AGENT_DIR=${shSingleQuote(agentDir)} exec ${piCmd}`,
+  ].join(" && ");
+  return ["sh", "-c", script];
+}
+
+function shSingleQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Parses pi's `--list-models` output. The CLI prints a `provider model
+ * context max-out thinking images` header followed by one row per model
+ * with whitespace-separated columns. We take the first two columns and
+ * synthesize the canonical `<provider>/<model>` id. Lines before the
+ * header (and any non-tabular noise such as the empty-state message) are
+ * skipped.
+ */
+const TOKEN = /^[A-Za-z0-9_.-]+$/;
+
+export function parseModelsOutput(output: string): ModelRef[] {
   const models: ModelRef[] = [];
-  for (const raw of stdout.split("\n")) {
+  let inTable = false;
+  for (const raw of output.split("\n")) {
     const line = raw.trim();
     if (!line) continue;
-    const slash = line.indexOf("/");
-    if (slash <= 0) continue;
-    const provider = line.slice(0, slash);
-    if (!line.slice(slash + 1)) continue;
-    models.push({ id: line, provider });
+    const cols = line.split(/\s+/);
+    if (!inTable) {
+      if (cols[0] === "provider" && cols[1] === "model") inTable = true;
+      continue;
+    }
+    if (cols.length < 2) continue;
+    const [provider, model] = cols;
+    if (!TOKEN.test(provider) || !TOKEN.test(model)) continue;
+    models.push({ id: `${provider}/${model}`, provider });
   }
   return models;
 }

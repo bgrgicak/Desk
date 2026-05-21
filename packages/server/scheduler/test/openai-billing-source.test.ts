@@ -1,15 +1,11 @@
 /**
  * Unit tests for the run-time model resolver.
  *
- * `resolveModelForRun` translates Desk-only `codex/*` ids back to
- * opencode-serve's `openai/*`, strips `OPENAI_API_KEY` only when the
- * OAuth path is actually available, and — the part this file pins for
- * regression — falls back to the free `FALLBACK_MODEL` whenever the
- * requested model's provider has no live auth at all. Without that
- * fallback, a chat whose agent still says `codex/X` or `openai/X`
- * after the user disables every provider in Settings stalls on a
- * `ProviderModelNotFoundError` or silently rides a stale OAuth blob
- * the daemon cached from a previous spawn.
+ * `resolveModelForRun` translates Desk-only `codex/*` ids back to pi's
+ * provider channels: `openai-codex/*` when the ChatGPT OAuth bridge is
+ * available, or `openai/*` when only an API key is configured. Models
+ * outside the codex prefix pass through unchanged. Missing-auth is
+ * handled by pi itself — Desk no longer substitutes a fallback model.
  *
  * `resolveOpenAiBillingSource` is kept as a thin compatibility shim;
  * the original test cases below still exercise it to lock the
@@ -19,10 +15,12 @@ import { describe, it, expect } from "vitest";
 import {
   resolveOpenAiBillingSource,
   resolveModelForRun,
-  FALLBACK_MODEL,
 } from "../src/runs.js";
 
-const oauth = { OPENCODE_AUTH_CONTENT: "{\"openai\":{\"type\":\"oauth\"}}" };
+// Pi consumes the OAuth blob via PI_AUTH_JSON_BASE64 — the legacy
+// OPENCODE_AUTH_CONTENT key is still emitted by localSources/codex.ts as
+// the "is OAuth available" signal the resolver reads from.
+const oauth = { OPENCODE_AUTH_CONTENT: "{\"openai-codex\":{\"type\":\"oauth\"}}" };
 
 describe("resolveOpenAiBillingSource", () => {
   it("passes through non-codex model ids and keys untouched", () => {
@@ -32,21 +30,18 @@ describe("resolveOpenAiBillingSource", () => {
     expect(out.providerKeys).toBe(keys);
   });
 
-  it("rewrites codex/* → openai/* and strips OPENAI_API_KEY when OAuth is present", () => {
+  it("rewrites codex/* → openai-codex/* when OAuth is present (keys untouched)", () => {
     const out = resolveOpenAiBillingSource(
       "codex/gpt-5.4",
       { OPENAI_API_KEY: "sk-xxx", ANTHROPIC_API_KEY: "sk-ant" },
       oauth,
     );
-    expect(out.runtimeModel).toBe("openai/gpt-5.4");
-    expect(out.providerKeys).toEqual({ ANTHROPIC_API_KEY: "sk-ant" });
-    expect(out.providerKeys.OPENAI_API_KEY).toBeUndefined();
+    expect(out.runtimeModel).toBe("openai-codex/gpt-5.4");
+    expect(out.providerKeys.OPENAI_API_KEY).toBe("sk-xxx");
+    expect(out.providerKeys.ANTHROPIC_API_KEY).toBe("sk-ant");
   });
 
-  it("rewrites codex/* but KEEPS OPENAI_API_KEY when OAuth is NOT available", () => {
-    // The user disabled the codex local source — no OPENCODE_AUTH_CONTENT
-    // in extraEnv. Without this fallback, an agent whose model still
-    // says codex/X strands the run with no auth at all.
+  it("rewrites codex/* → openai/* when OAuth is NOT available but an API key is", () => {
     const out = resolveOpenAiBillingSource(
       "codex/gpt-5.4",
       { OPENAI_API_KEY: "sk-xxx", ANTHROPIC_API_KEY: "sk-ant" },
@@ -63,74 +58,45 @@ describe("resolveOpenAiBillingSource", () => {
       { OPENAI_API_KEY: "sk-xxx" },
       { OPENCODE_AUTH_CONTENT: "" },
     );
-    expect(out.providerKeys.OPENAI_API_KEY).toBe("sk-xxx");
+    expect(out.runtimeModel).toBe("openai/gpt-5.4");
   });
 
-  it("handles codex/* when no OPENAI_API_KEY is set", () => {
+  it("handles codex/* when no OPENAI_API_KEY is set (OAuth path)", () => {
     const out = resolveOpenAiBillingSource("codex/gpt-5.4-mini", {}, oauth);
-    expect(out.runtimeModel).toBe("openai/gpt-5.4-mini");
+    expect(out.runtimeModel).toBe("openai-codex/gpt-5.4-mini");
     expect(out.providerKeys).toEqual({});
   });
 
   it("preserves the suffix verbatim — including dots and dashes", () => {
     const out = resolveOpenAiBillingSource("codex/gpt-4o-2024-11-20", {}, oauth);
-    expect(out.runtimeModel).toBe("openai/gpt-4o-2024-11-20");
+    expect(out.runtimeModel).toBe("openai-codex/gpt-4o-2024-11-20");
   });
 });
 
-describe("resolveModelForRun — fallback when no provider auth is live", () => {
-  it("falls back to FALLBACK_MODEL when codex/* has neither OAuth nor an API key", () => {
-    // The user-reported scenario: agent.model = codex/X, user disabled
-    // Codex AND OPENAI_API_KEY in Settings. Before the fallback the
-    // run would either fail with `ProviderModelNotFoundError` or — if
-    // the daemon's stale auth file still held an OAuth blob — silently
-    // run against a "disabled" provider. With the fallback it just
-    // runs on the free default.
-    const out = resolveModelForRun("codex/gpt-5.5-fast", {}, {});
-    expect(out.runtimeModel).toBe(FALLBACK_MODEL);
-    expect(out.reason).toBe("no-auth-fallback");
+describe("resolveModelForRun — auth-missing surfaces to pi (no Desk-side substitution)", () => {
+  it("keeps codex/* on the openai-codex channel even when neither OAuth nor an API key is set, so pi raises a clear error", () => {
+    // Previously Desk substituted a FALLBACK_MODEL when no auth was
+    // live; that masked the real problem (missing connection). Now we
+    // route to pi's expected channel and let pi report which provider
+    // it can't authenticate.
+    const out = resolveModelForRun("codex/gpt-5.5", {}, {});
+    expect(out.runtimeModel).toBe("openai-codex/gpt-5.5");
+    expect(out.reason).toBeNull();
   });
 
-  it("falls back when openai/* is requested but OPENAI_API_KEY is empty/missing", () => {
+  it("passes openai/* through even when OPENAI_API_KEY is missing", () => {
     const out = resolveModelForRun("openai/gpt-5", {}, {});
-    expect(out.runtimeModel).toBe(FALLBACK_MODEL);
-    expect(out.reason).toBe("no-auth-fallback");
-  });
-
-  it("keeps openai/* when OPENAI_API_KEY is set", () => {
-    const out = resolveModelForRun("openai/gpt-5", { OPENAI_API_KEY: "sk" }, {});
     expect(out.runtimeModel).toBe("openai/gpt-5");
     expect(out.reason).toBeNull();
   });
 
-  it("keeps openai/* when only Codex OAuth is available (OAuth covers the openai provider)", () => {
-    // OPENCODE_AUTH_CONTENT registers an `openai` auth in opencode-
-    // serve, so an `openai/<name>` model picked from the Desk UI can
-    // still run via OAuth even with no API key set.
-    const out = resolveModelForRun("openai/gpt-5", {}, oauth);
-    expect(out.runtimeModel).toBe("openai/gpt-5");
-    expect(out.reason).toBeNull();
-  });
-
-  it("falls back when anthropic/* is requested but ANTHROPIC_API_KEY is missing", () => {
+  it("passes anthropic/* through even when ANTHROPIC_API_KEY is missing", () => {
     const out = resolveModelForRun("anthropic/claude-3-5-sonnet", {}, {});
-    expect(out.runtimeModel).toBe(FALLBACK_MODEL);
-    expect(out.reason).toBe("no-auth-fallback");
-  });
-
-  it("keeps anthropic/* when its key is present", () => {
-    const out = resolveModelForRun(
-      "anthropic/claude-3-5-sonnet",
-      { ANTHROPIC_API_KEY: "sk-ant" },
-      {},
-    );
     expect(out.runtimeModel).toBe("anthropic/claude-3-5-sonnet");
     expect(out.reason).toBeNull();
   });
 
-  it("passes free opencode/* models through unchanged regardless of provider state", () => {
-    // Free models don't need auth, so they always run as-is even when
-    // every cloud provider is disabled.
+  it("passes opencode/* through unchanged regardless of provider state", () => {
     const out = resolveModelForRun("opencode/big-pickle", {}, {});
     expect(out.runtimeModel).toBe("opencode/big-pickle");
     expect(out.reason).toBeNull();
@@ -138,17 +104,23 @@ describe("resolveModelForRun — fallback when no provider auth is live", () => 
 
   it("flags the codex-OAuth path with the right reason for logging", () => {
     const out = resolveModelForRun("codex/gpt-5", { OPENAI_API_KEY: "sk" }, oauth);
-    expect(out.runtimeModel).toBe("openai/gpt-5");
+    expect(out.runtimeModel).toBe("openai-codex/gpt-5");
     expect(out.reason).toBe("codex-oauth");
-    expect(out.providerKeys.OPENAI_API_KEY).toBeUndefined();
+    expect(out.providerKeys.OPENAI_API_KEY).toBe("sk");
   });
 
   it("flags the codex-API-key fallback path with the right reason", () => {
     const out = resolveModelForRun("codex/gpt-5", { OPENAI_API_KEY: "sk" }, {});
     expect(out.runtimeModel).toBe("openai/gpt-5");
     expect(out.reason).toBe("codex-fallback-api-key");
-    // The API key STAYS in providerKeys here — without it the daemon
-    // couldn't authenticate the openai provider at all.
     expect(out.providerKeys.OPENAI_API_KEY).toBe("sk");
+  });
+
+  it("passes raw openai-codex/* through unchanged", () => {
+    // Agents persisted with the raw pi provider id should reach pi
+    // verbatim — no extra translation, no fallback.
+    const out = resolveModelForRun("openai-codex/gpt-5.5", {}, oauth);
+    expect(out.runtimeModel).toBe("openai-codex/gpt-5.5");
+    expect(out.reason).toBeNull();
   });
 });

@@ -79,70 +79,27 @@ export interface RunManagerOptions {
 }
 
 /**
- * Always-available default the runtime falls back to when the agent's
- * configured model has no live auth in the current run env. `opencode/*`
- * models are free and require zero provider keys, so this never lands a
- * chat in a broken "no auth at all" state.
- */
-export const FALLBACK_MODEL = "anthropic/claude-haiku-4-5";
-
-/**
- * Ordered list of fallback model ids the per-turn pi runner cycles
- * through when the agent's primary model errors out with a provider-
- * shaped failure (rate limit, quota, 5xx, auth, model-not-found).
- *
- * Configured via `DESK_FALLBACK_MODELS` env (comma-separated). Empty by
- * default — agent picks its primary model and we don't substitute on
- * failure. A future agent-row column can replace the env hop without
- * changing the runtime contract.
- *
- * Exported for direct unit testing.
- */
-export function resolveFallbackModels(env: NodeJS.ProcessEnv = process.env): string[] {
-  const raw = env.DESK_FALLBACK_MODELS;
-  if (!raw) return [];
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-}
-
-/**
  * Reasons `resolveModelForRun` returned a model other than the requested
  * one. `null` means "the requested model was used as-is".
  */
 export type ModelResolutionReason =
   | null
-  | "codex-oauth"            // codex/* → openai/* via OAuth path (Codex enabled)
-  | "codex-fallback-api-key" // codex/* → openai/* via API-key fallback (Codex disabled, OPENAI key present)
-  | "no-auth-fallback";      // requested provider has no available auth → free default
+  | "codex-oauth"             // codex/* → openai-codex/* via OAuth path (Codex enabled)
+  | "codex-fallback-api-key"; // codex/* → openai/* via API-key fallback (Codex disabled, OPENAI key present)
 
 /**
- * Pick the model that should actually run, and the provider key map to
- * forward into the daemon. Handles three concerns at once:
+ * Translate a Desk model id to pi's view of the world.
  *
- *  1. Codex translation: `codex/X` is a Desk-only relabel — opencode-
- *     serve only knows the `openai` provider. When Codex (OAuth) is
- *     available we route through it AND strip `OPENAI_API_KEY` so
- *     opencode picks the OAuth path instead of the cloud key. When
- *     Codex is disabled but `OPENAI_API_KEY` is present, we still
- *     unwrap the prefix and let the API key handle the call — so the
- *     user doesn't lose their chat to a toggle.
+ * Desk exposes Codex (ChatGPT-subscription) OpenAI models under a UI
+ * relabel `codex/<name>`; pi's actual provider id for that channel is
+ * `openai-codex`. So a saved agent with `model: "codex/gpt-5.5"` needs
+ * to land at pi as `openai-codex/gpt-5.5` when the OAuth bridge is on,
+ * or as `openai/gpt-5.5` when only an API key is configured.
  *
- *  2. Hard fallback: when the requested model's provider has no auth
- *     at all (Codex disabled AND no `OPENAI_API_KEY`; or `anthropic/X`
- *     with no `ANTHROPIC_API_KEY`; or any future cloud provider whose
- *     key got disabled in Settings), substitute `FALLBACK_MODEL`. The
- *     run keeps going on the free `opencode/*` model instead of dying
- *     with a `ProviderModelNotFoundError` or — worse — silently using
- *     a stale auth blob the daemon still has cached.
- *
- *  3. No change for free models: `opencode/*` always runs as-is.
- *
- * Callers should forward the returned `runtimeModel` to BOTH the agent
- * file (so the daemon's startup cache picks the fallback up) AND the
- * driver's per-message `providerID/modelID`, and forward
- * `providerKeys` into the sandbox env. `reason` is for logging.
+ * Other models pass through unchanged. When the requested provider has
+ * no live auth, pi itself surfaces the error to the user — Desk no
+ * longer substitutes a fallback. This matches pi's CLI semantics: pick
+ * a model, get a clear error if its auth is missing.
  */
 export function resolveModelForRun(
   model: string,
@@ -154,37 +111,21 @@ export function resolveModelForRun(
   reason: ModelResolutionReason;
 } {
   const hasOpenAiKey = isNonEmpty(providerKeys.OPENAI_API_KEY);
-  const hasAnthropicKey = isNonEmpty(providerKeys.ANTHROPIC_API_KEY);
   const oauthAvailable = isNonEmpty(extraEnv?.OPENCODE_AUTH_CONTENT);
 
   if (model.startsWith("codex/")) {
-    const bare = `openai/${model.slice("codex/".length)}`;
+    const suffix = model.slice("codex/".length);
     if (oauthAvailable) {
-      // Codex enabled: OAuth path. Strip the cloud key so opencode
-      // doesn't accidentally pick the API-key path on a tie-break.
-      const { OPENAI_API_KEY: _strip, ...withoutOpenAiApiKey } = providerKeys;
-      return { runtimeModel: bare, providerKeys: withoutOpenAiApiKey, reason: "codex-oauth" };
+      return { runtimeModel: `openai-codex/${suffix}`, providerKeys, reason: "codex-oauth" };
     }
     if (hasOpenAiKey) {
-      return { runtimeModel: bare, providerKeys, reason: "codex-fallback-api-key" };
+      return { runtimeModel: `openai/${suffix}`, providerKeys, reason: "codex-fallback-api-key" };
     }
-    return { runtimeModel: FALLBACK_MODEL, providerKeys, reason: "no-auth-fallback" };
+    // Neither channel is live. Let pi raise its own "No API key found
+    // for openai-codex" — clearer than substituting a different model.
+    return { runtimeModel: `openai-codex/${suffix}`, providerKeys, reason: null };
   }
 
-  if (model.startsWith("openai/")) {
-    if (hasOpenAiKey || oauthAvailable) return { runtimeModel: model, providerKeys, reason: null };
-    return { runtimeModel: FALLBACK_MODEL, providerKeys, reason: "no-auth-fallback" };
-  }
-
-  if (model.startsWith("anthropic/")) {
-    if (hasAnthropicKey) return { runtimeModel: model, providerKeys, reason: null };
-    return { runtimeModel: FALLBACK_MODEL, providerKeys, reason: "no-auth-fallback" };
-  }
-
-  // Free `opencode/*` and any other provider Desk doesn't gatekeep
-  // explicitly pass through. opencode-serve still applies its own
-  // validation against the model registry — a typo there will surface
-  // as a daemon-side error rather than as a silent fallback.
   return { runtimeModel: model, providerKeys, reason: null };
 }
 
@@ -566,41 +507,12 @@ export function createRunManager(opts: RunManagerOptions) {
         // actually handled the run, which may be a freshly-created one if
         // the chat had none or the stored id was stale on the daemon.
         let opencodeSessionId = await queries.chats.getOpencodeSessionId(pool, msg.chatId);
-        // `resolveModelForRun` settles three concerns at once: it
-        // translates `codex/<name>` to opencode-serve's `openai/<name>`
-        // and strips `OPENAI_API_KEY` when the OAuth path is the
-        // intended one; it falls back to the cloud key when Codex is
-        // disabled; and — critically — it substitutes the free
-        // `FALLBACK_MODEL` when no auth at all is available for the
-        // requested provider. Without the last branch, a chat whose
-        // agent still points at `codex/X` or `openai/X` after the user
-        // disabled every model provider stalls on a daemon-side
-        // `ProviderModelNotFoundError` or, worse, silently rides a
-        // stale OAuth blob that opencode-serve cached from a previous
-        // spawn.
+        // Translate the Desk model id into pi's view: `codex/<n>` →
+        // `openai-codex/<n>` when OAuth is live, `openai/<n>` when only
+        // an API key is. Other models pass through. Missing-auth is
+        // handled by pi itself, which raises a clear "No API key found
+        // for <provider>" message — no Desk-side substitution.
         const billing = resolveModelForRun(agentFileInput.model, providerKeys, extraEnv);
-        if (billing.reason === "no-auth-fallback") {
-          // Surface the downgrade so the user sees what changed.
-          //
-          // Important caveat we name explicitly: the free fallback runs
-          // through opencode.ai's zen endpoint and that tier has
-          // historically been intermittently available — deprecated
-          // model ids, rate limits, regional outages. When zen is
-          // down, the daemon resolves the sendMessage call cleanly
-          // with an `info.error` payload (no HTTP exception) and the
-          // driver reports it via the upstream-error stderr line.
-          // Setting expectations here so the user reads "enable a
-          // provider" as the fix path, not "try again."
-          await onLog({
-            runId,
-            seq: 0,
-            kind: "stderr",
-            payload:
-              `No live auth for ${agentFileInput.model}; falling back to the free ${billing.runtimeModel}. ` +
-              `Free fallback can be rate-limited or unavailable upstream — ` +
-              `enable a model provider in Settings → Connections to restore the picked model reliably.`,
-          });
-        }
         const runtimeAgentInput: AgentFileInput =
           billing.runtimeModel === agentFileInput.model
             ? agentFileInput
@@ -646,7 +558,6 @@ export function createRunManager(opts: RunManagerOptions) {
                 extraEnv,
                 mountPlan,
                 opencodeSessionId,
-                fallbackModels: resolveFallbackModels(),
                 onLog: onLogWithStderrCapture,
               });
             } catch (err) {
