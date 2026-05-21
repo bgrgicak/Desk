@@ -37,6 +37,27 @@ const ENGINE_COMMAND_TIMEOUT_MS = parseInt(
   10,
 );
 const REMOVE_IN_PROGRESS_POLL_MS = 100;
+/**
+ * RootlessKit / userland port-forwarder retries. Measured: the prior
+ * binding clears in 50-300 ms on a quiet host, occasionally up to ~1.5 s
+ * when several containers were torn down in quick succession. Three
+ * attempts at 200 / 600 / 1500 ms cover the long tail without delaying
+ * a non-rootless engine where the first attempt always wins.
+ */
+const PORT_BIND_RETRY_ATTEMPTS = 3;
+const PORT_BIND_RETRY_BACKOFF_MS = [200, 600, 1500];
+
+function isPortPublishConflict(stderrLower: string): boolean {
+  // Two surface forms we've actually observed:
+  //   - "rootlesskit portmanager.addport(): listen tcp4 127.0.0.1:NNNN: bind: address already in use"
+  //   - "failed to set up container networking: ... bind: address already in use"
+  // The combination of "bind" + "address already in use" is specific
+  // enough that name conflicts (which read "container name … is already
+  // in use by container …") don't false-match.
+  return stderrLower.includes("bind: address already in use") ||
+    (stderrLower.includes("rootlesskit") && stderrLower.includes("already in use")) ||
+    (stderrLower.includes("port is already allocated"));
+}
 
 export type EngineName = "docker" | "nerdctl";
 
@@ -162,11 +183,73 @@ export interface EngineConflictError extends Error {
   conflict: true;
 }
 
+/**
+ * Rootless Docker (via RootlessKit's userland port forwarder) sometimes
+ * refuses to bind a freshly-allocated host port because the previous
+ * container's `docker-proxy` hasn't released it yet. Surfaces as
+ *   `error while calling RootlessKit PortManager.AddPort():
+ *    listen tcp4 127.0.0.1:NNNN: bind: address already in use`
+ * during `docker run` (or a subsequent `docker start`). Recoverable by
+ * retrying with backoff — the proxy releases asynchronously. Engine
+ * implementations throw this so callers can distinguish a port-forwarding
+ * race from a real "name in use" container conflict.
+ */
+export class PortPublishConflictError extends Error {
+  readonly engine: "docker" | "nerdctl" | "unknown";
+  readonly originalStderr: string;
+  constructor(engine: "docker" | "nerdctl" | "unknown", originalStderr: string) {
+    super(
+      `host port binding refused by ${engine} (RootlessKit / port-forwarder did not release ` +
+        `the prior binding yet): ${originalStderr.trim()}`,
+    );
+    this.name = "PortPublishConflictError";
+    this.engine = engine;
+    this.originalStderr = originalStderr;
+  }
+}
+
 export class ContainerRuntimeUnavailableError extends DeskError {
   constructor(message: string) {
     super("RUNTIME_UNAVAILABLE", message);
     this.name = "ContainerRuntimeUnavailableError";
   }
+}
+
+/**
+ * Builds a safe error message for a failed engine command. Hides the
+ * `--env KEY=VALUE` pairs (which often carry provider keys, OAuth
+ * tokens, and the per-spawn OPENCODE_SERVER_PASSWORD) but keeps the
+ * engine name, subcommand, target id, exit code, and full stderr —
+ * everything an operator needs to triage without leaking the secrets
+ * that the chaos test surfaced were going through into chat messages.
+ *
+ * Env values are replaced with `<REDACTED>`; the env *keys* stay
+ * visible so the operator can still see "GITHUB_TOKEN was set" vs
+ * "GITHUB_TOKEN was empty" by inspecting the redacted form's key list.
+ */
+export function formatEngineErrorMessage(
+  engineName: string,
+  args: readonly string[],
+  stderr: string,
+  exitCode: number | string | undefined,
+): string {
+  const safeArgs: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--env" && i + 1 < args.length) {
+      const pair = args[i + 1];
+      const eq = pair.indexOf("=");
+      const key = eq >= 0 ? pair.slice(0, eq) : pair;
+      safeArgs.push("--env", `${key}=<REDACTED>`);
+      i++;
+      continue;
+    }
+    safeArgs.push(a);
+  }
+  const exitFrag = exitCode !== undefined ? ` (exit ${exitCode})` : "";
+  const stderrTrim = stderr.trim();
+  const stderrFrag = stderrTrim ? `\n${stderrTrim}` : "";
+  return `${engineName} ${safeArgs.join(" ")} failed${exitFrag}${stderrFrag}`;
 }
 
 /** Caller-facing surface. Pure shell-out under the hood. */
@@ -256,13 +339,40 @@ class CliEngine implements Engine {
     args: string[],
     opts?: { timeoutMs?: number },
   ): Promise<{ stdout: string; stderr: string }> {
-    const { stdout, stderr } = await execFileAsync(this.name, args, {
-      env: engineEnv(this.name),
-      maxBuffer: 8 * 1024 * 1024,
-      timeout: opts?.timeoutMs ?? ENGINE_COMMAND_TIMEOUT_MS,
-      killSignal: "SIGKILL",
-    });
-    return { stdout, stderr };
+    try {
+      const { stdout, stderr } = await execFileAsync(this.name, args, {
+        env: engineEnv(this.name),
+        maxBuffer: 8 * 1024 * 1024,
+        timeout: opts?.timeoutMs ?? ENGINE_COMMAND_TIMEOUT_MS,
+        killSignal: "SIGKILL",
+      });
+      return { stdout, stderr };
+    } catch (err) {
+      // Node's execFile reject sets `.message` to the full command line
+      // including every `--env KEY=VALUE` pair we pass into `docker
+      // exec`. Those env values frequently carry secrets — provider API
+      // keys, the per-spawn OPENCODE_SERVER_PASSWORD, the Codex/ChatGPT
+      // OAuth blob, GitHub PATs — and the message gets propagated up
+      // into emitLog("stderr") in driver.ts, where it ends up in a chat
+      // message visible to the user (and any log shipper that reads the
+      // pino stream). Rewrite the message into a safe shape that keeps
+      // the operationally-useful bits (engine name, subcommand, exit
+      // code, stderr tail) but scrubs the env values.
+      const e = err as { message?: string; stderr?: string; code?: number | string; stdout?: string };
+      const stderr = typeof e.stderr === "string" ? e.stderr : "";
+      const safeMessage = formatEngineErrorMessage(this.name, args, stderr, e.code);
+      const wrapped = new Error(safeMessage) as Error & {
+        stderr: string;
+        stdout: string;
+        code: number | string | undefined;
+        cause: unknown;
+      };
+      wrapped.stderr = stderr;
+      wrapped.stdout = typeof e.stdout === "string" ? e.stdout : "";
+      wrapped.code = e.code;
+      wrapped.cause = err;
+      throw wrapped;
+    }
   }
 
   /** Capture-or-null: returns null if stderr matches "no such" pattern. */
@@ -385,22 +495,77 @@ class CliEngine implements Engine {
     args.push(spec.image);
     // The image's CMD is what we want (sandbox image runs `sleep infinity`),
     // so don't append anything after it.
-    try {
-      const { stdout } = await this.run(args);
-      return stdout.trim();
-    } catch (err) {
-      const stderr = ((err as { stderr?: string }).stderr ?? "").toLowerCase();
-      if (stderr.includes("already in use") || stderr.includes("conflict")) {
-        const e = new Error(`container name ${spec.name} already in use`) as EngineConflictError;
-        e.conflict = true;
-        throw e;
+    //
+    // Two failure modes get classified here, before bubbling to callers:
+    //   - Name conflict (the workspace serializer's loser, or a stale
+    //     container that wasn't reaped yet): EngineConflictError.
+    //   - RootlessKit / port-forwarder hasn't released the prior host port
+    //     binding yet: PortPublishConflictError. The userland proxy is
+    //     async; the prior container's `docker-proxy` can stay listening
+    //     for hundreds of ms after the container is gone. We retry with
+    //     short backoff inside `create` so callers see at most one of
+    //     these per real failure rather than every transient race.
+    let lastPortConflict: PortPublishConflictError | null = null;
+    for (let attempt = 0; attempt < PORT_BIND_RETRY_ATTEMPTS; attempt++) {
+      try {
+        const { stdout } = await this.run(args);
+        return stdout.trim();
+      } catch (err) {
+        const stderrRaw = (err as { stderr?: string }).stderr ?? "";
+        const stderr = stderrRaw.toLowerCase();
+        if (isPortPublishConflict(stderr)) {
+          // Name was registered before `docker run` failed at the network
+          // step. Without removing it, the next attempt sees "already in
+          // use" and we never get past the conflict. `remove --force` is
+          // idempotent on a name with no live container.
+          await this.remove(spec.name, true).catch(() => {});
+          lastPortConflict = new PortPublishConflictError(this.name, stderrRaw);
+          if (attempt < PORT_BIND_RETRY_ATTEMPTS - 1) {
+            await delay(PORT_BIND_RETRY_BACKOFF_MS[attempt]);
+            continue;
+          }
+          throw lastPortConflict;
+        }
+        if (stderr.includes("already in use") || stderr.includes("conflict")) {
+          const e = new Error(`container name ${spec.name} already in use`) as EngineConflictError;
+          e.conflict = true;
+          throw e;
+        }
+        throw err;
       }
-      throw err;
     }
+    // Loop exit without success — only reachable if PORT_BIND_RETRY_ATTEMPTS
+    // is zero, which would be a code change. Surface the last conflict so
+    // callers can route to the recovery path.
+    throw lastPortConflict ?? new Error(`${this.name} run failed after retries`);
   }
 
   async start(nameOrId: string): Promise<void> {
-    await this.run(["start", nameOrId]);
+    // `docker start` on a container that already failed at the network
+    // step can hit the same RootlessKit port-bind race as `create`. The
+    // existing `--restart=no` containers won't auto-retry; we do it here
+    // so transient port conflicts during create-then-start sequences
+    // self-heal at the engine layer.
+    let lastPortConflict: PortPublishConflictError | null = null;
+    for (let attempt = 0; attempt < PORT_BIND_RETRY_ATTEMPTS; attempt++) {
+      try {
+        await this.run(["start", nameOrId]);
+        return;
+      } catch (err) {
+        const stderrRaw = (err as { stderr?: string }).stderr ?? "";
+        const stderr = stderrRaw.toLowerCase();
+        if (isPortPublishConflict(stderr)) {
+          lastPortConflict = new PortPublishConflictError(this.name, stderrRaw);
+          if (attempt < PORT_BIND_RETRY_ATTEMPTS - 1) {
+            await delay(PORT_BIND_RETRY_BACKOFF_MS[attempt]);
+            continue;
+          }
+          throw lastPortConflict;
+        }
+        throw err;
+      }
+    }
+    throw lastPortConflict ?? new Error(`${this.name} start failed after retries`);
   }
 
   async stop(nameOrId: string, graceSeconds = 10): Promise<void> {

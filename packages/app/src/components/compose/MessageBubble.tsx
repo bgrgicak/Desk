@@ -9,7 +9,7 @@ import { humanSize } from '@/store/selectors/library'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { InlineArtifactPreview, UnsupportedFileCard } from '@/components/shared/InlineArtifactPreview'
 import { TaskResultCard } from './TaskResultCard'
-import { useDeleteLibraryFileMutation, useGetSummaryHistoryQuery } from '@/store/api'
+import { useDeleteLibraryFileMutation, useGetSummaryHistoryQuery, usePostMessageFeedbackMutation } from '@/store/api'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { openArtifact, selectIsArtifactInPanel } from '@/store/slices/previewPanelSlice'
 import { diffLines, type DiffSegment } from '@/lib/summary-diff'
@@ -73,11 +73,23 @@ export const MessageBubble = memo(function MessageBubble({
   const hasAttachments = !!message.attachments && message.attachments.length > 0
   const showThread = isRegularMessageVisible(message) && !!workspaceId
     && message.threadChatId !== currentChatId
+    // ArtifactRef messages render as inline previews (chat-forms fragments,
+    // app embeds). The thread-button sibling forces the preview into a
+    // narrower flex column, which is what kept fragment iframes from
+    // reaching the full chat-column width. Threading still works through
+    // the surrounding turn — just not from the artifactRef row itself.
+    && message.content.type !== 'artifactRef'
 
   // A task definition (the AI creating a task, or one surfaced in the
   // conversation) renders as an inline Task result card regardless of
-  // author.
+  // author — except when we're already inside that task's own thread,
+  // where the same anchor message renders as the thread's header
+  // (title + full description, no status badge or View button) so it
+  // doesn't visually duplicate the "you are in this task" affordance.
   if (message.kind === 'task') {
+    if (message.threadChatId && message.threadChatId === currentChatId) {
+      return <TaskAnchorHeader message={message} />
+    }
     return <TaskResultCard message={message} workspaceId={workspaceId} />
   }
 
@@ -94,6 +106,7 @@ export const MessageBubble = memo(function MessageBubble({
                 key={att.path}
                 attachment={att}
                 workspaceId={workspaceId}
+                chatId={message.chatId}
                 align="right"
                 onClick={onAttachmentClick ? () => onAttachmentClick(att) : undefined}
               />
@@ -140,7 +153,7 @@ export const MessageBubble = memo(function MessageBubble({
       {hasAttachments && (
         <div className="flex w-full min-w-0 max-w-full flex-col items-start gap-1.5 overflow-hidden mb-1.5">
           {message.attachments!.map(att => (
-            <AttachmentCard key={att.path} attachment={att} workspaceId={workspaceId} />
+            <AttachmentCard key={att.path} attachment={att} workspaceId={workspaceId} chatId={message.chatId} />
           ))}
         </div>
       )}
@@ -189,16 +202,28 @@ function AgentMessageActions({
   showThread,
 }: AgentMessageActionsProps) {
   const [feedback, setFeedback] = useState<'up' | 'down' | null>(null)
+  const [postFeedback] = usePostMessageFeedbackMutation()
 
   const handleCopy = () => copyMessageToClipboard(message)
 
   const handleFeedback = (kind: 'up' | 'down') => {
+    if (feedback === kind) return
+    const previous = feedback
     setFeedback(kind)
     toast.success(
       kind === 'up'
         ? 'Thanks for the positive feedback'
         : "Thanks for the feedback — we'll do better",
     )
+    // The reaction is persisted as a system message so the workspace's
+    // daily reflection can see which replies the user marked helpful
+    // or unhelpful. Roll back the local active state if the request
+    // fails so the icons match server truth.
+    postFeedback({ chatId: message.chatId, messageId: message.id, rating: kind })
+      .unwrap()
+      .catch(() => {
+        setFeedback(previous)
+      })
   }
 
   const hasThread = !!message.threadChatId
@@ -380,6 +405,7 @@ function MessageContentView({
       return (
         <ArtifactRefRow
           workspaceId={content.workspaceId ?? workspaceId}
+          chatId={chatId}
           path={content.path}
           name={content.name}
           mime={content.mime}
@@ -524,7 +550,7 @@ function plainLeftClick(e: MouseEvent<HTMLAnchorElement>) {
   return e.button === 0 && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
 }
 
-function ArtifactRefRow({ workspaceId, path, name, mime, params, onClick }: { workspaceId?: string; path: string; name?: string; mime?: string | null; params?: Record<string, string>; onClick?: () => void }) {
+function ArtifactRefRow({ workspaceId, chatId, path, name, mime, params, onClick }: { workspaceId?: string; chatId?: string; path: string; name?: string; mime?: string | null; params?: Record<string, string>; onClick?: () => void }) {
   const label = name ?? basenamePath(path)
   const href = artifactRefHref(workspaceId, path, mime, params)
   const dispatch = useAppDispatch()
@@ -570,10 +596,15 @@ function ArtifactRefRow({ workspaceId, path, name, mime, params, onClick }: { wo
       onDelete={handleDelete}
     />
   )
-  if (!workspaceId) return fallback
+  // Global app previews (path starts with /opt/desk-apps/) don't need a
+  // workspaceId — only a chatId — so allow rendering without workspaceId
+  // in that case. Other previews still require a workspaceId.
+  const isGlobalPreviewPath = appAttachmentToPreview(path)?.scope === 'global'
+  if (!workspaceId && !isGlobalPreviewPath) return fallback
   return (
     <InlineArtifactPreview
       workspaceId={workspaceId}
+      chatId={chatId}
       path={path}
       name={label}
       mime={mime}
@@ -589,11 +620,13 @@ function ArtifactRefRow({ workspaceId, path, name, mime, params, onClick }: { wo
 function AttachmentCard({
   attachment,
   workspaceId,
+  chatId,
   align = 'left',
   onClick,
 }: {
   attachment: AttachmentRef
   workspaceId?: string
+  chatId?: string
   align?: AttachmentAlignment
   onClick?: () => void
 }) {
@@ -618,11 +651,15 @@ function AttachmentCard({
   )
   const effectiveWorkspaceId = attachment.workspaceId ?? workspaceId
   const href = artifactRefHref(effectiveWorkspaceId, attachment.path, attachment.mime, attachment.params)
-  if (appPreview && effectiveWorkspaceId) {
+  const canRenderAppPreview = appPreview && (
+    appPreview.scope === 'global' ? !!chatId : !!effectiveWorkspaceId
+  )
+  if (canRenderAppPreview) {
     return (
       <div className={`max-w-full ${attachmentAlignmentClass(align)}`}>
         <InlineArtifactPreview
           workspaceId={effectiveWorkspaceId}
+          chatId={chatId}
           path={attachment.path}
           name={attachment.name}
           mime={attachment.mime}
@@ -679,6 +716,39 @@ type AttachmentAlignment = 'left' | 'right'
 
 export function attachmentAlignmentClass(align: AttachmentAlignment) {
   return align === 'right' ? 'self-end ml-auto' : 'self-start mr-auto'
+}
+
+/** The task anchor rendered as the first item of its own thread —
+ *  a quiet bordered block with the task title and full description.
+ *  No status badge, no View button, no kebab: the user is already
+ *  inside the task's thread so the action surface lives on the
+ *  Tasks page card and the right-panel header above the messages. */
+function TaskAnchorHeader({ message }: { message: ServerMessage }) {
+  const title = message.title?.trim()
+    || (message.content.type === 'text' ? message.content.text.split('\n')[0].trim() : '')
+    || 'Task'
+  let body: string | undefined
+  if (message.content.type === 'text') {
+    const text = message.content.text.trim()
+    if (message.title && text === message.title.trim()) {
+      body = undefined
+    } else if (message.title && text.startsWith(`${message.title.trim()}\n`)) {
+      body = text.slice(message.title.trim().length).trim()
+    } else if (message.title) {
+      body = text
+    } else {
+      const [, ...rest] = text.split('\n')
+      body = rest.join('\n').trim() || undefined
+    }
+  }
+  return (
+    <div className="rounded-lg border border-foreground/10 bg-foreground/5 px-4 py-3">
+      <div className="text-sm font-medium text-foreground">{title}</div>
+      {body ? (
+        <div className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{body}</div>
+      ) : null}
+    </div>
+  )
 }
 
 function TaskRunChip({ prompt }: { prompt: string }) {

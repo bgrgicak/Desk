@@ -162,8 +162,24 @@ test("moves a folder (with contents) into another folder", async ({
   await loggedInPage.getByRole("menuitem", { name: /^Move to folder$/ }).click();
   await loggedInPage.getByRole("button", { name: new RegExp(`^${dst}$`) }).click();
 
-  // src should now live under dst; its old location disappears.
-  await expect(loggedInPage.getByText(`${dst}/${src}`).first()).toBeVisible({
-    timeout: 10_000,
-  });
+  // src should now live under dst. The library list is folder-scoped:
+  // the root view stops showing `src` once the move lands, and clicking
+  // into `dst` reveals it nested there. Verify via the server (the
+  // listing endpoint is the source of truth that the dialog drives) so
+  // the test doesn't have to know the exact folder-row markup.
+  await expect.poll(async () => {
+    const res = await fetch(
+      `${serverUrl}/library?workspaceId=${encodeURIComponent(ws[0].id)}&path=${encodeURIComponent(dst)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) return [];
+    const body = (await res.json()) as {
+      items?: Array<{ path: string }>;
+      folders?: Array<{ path: string }>;
+    };
+    return [
+      ...(body.items ?? []).map((i) => i.path),
+      ...(body.folders ?? []).map((f) => f.path),
+    ];
+  }, { timeout: 10_000 }).toContain(`${dst}/${src}`);
 });

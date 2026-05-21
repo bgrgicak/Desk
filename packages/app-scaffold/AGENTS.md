@@ -106,6 +106,11 @@ Fragment rules:
 
 - Each fragment lives in `fragments/<name>/` and has `Component.tsx`,
   `main.tsx`, `index.html`, `desk.fragment.json`, and `skill.md`.
+- Fragment names must be **kebab-case** matching `^[a-z][a-z0-9-]{0,62}$`
+  (lowercase letter, then letters/digits/hyphens). Underscores are not
+  allowed — they break the serve-time URL matcher. Use `add-todo`, not
+  `add_todo`; `yes-no`, not `yes_no`. Same constraint applies to the app
+  directory name (`<name>.app`).
 - Each real fragment must be listed in `desk.app.json`; no unregistered real
   fragment should be left behind as dead code.
 - The fragment's `Component.tsx` is the only implementation of that surface.
@@ -228,6 +233,37 @@ browser-device-local storage.
 Storage-backed UI must handle loading and errors. Do not call storage at module
 scope or unguarded during render; use effects, event handlers, or explicit async
 actions with error handling.
+
+## Posting back to the chat
+
+Use `window.desk.chat.sendMessage(text, opts?)` to bubble a user choice back
+into the chat as a new user message — the agent reads it on its next turn.
+Required for any fragment that asks the user a question via UI controls
+(yes/no, radio, checkbox, form) instead of expecting a free-text reply.
+
+```ts
+await window.desk.chat.sendMessage('Yes')
+await window.desk.chat.sendMessage('Yes', { artifactRefMessageId: '<msgId>' })
+```
+
+Rules:
+
+- Declare `chats.write` in both `desk.app.json` and the calling fragment's
+  `desk.fragment.json`. Without it the bridge rejects the call.
+- `text` is a plain string (≤ 4000 chars). It lands in the chat exactly as
+  typed — keep it short and structured. For a yes/no question, send `"Yes"`
+  or `"No"`. For multi-select, send a single line like `"red, blue"`.
+- After the call resolves, disable the affected UI controls and show a
+  small "Submitted: …" line so the user sees their choice was recorded.
+  Don't allow re-submission within the same iframe lifetime; if the user
+  reloads the chat the fragment re-mounts and that's expected.
+- Read fragment props (e.g. the question text) from
+  `new URLSearchParams(window.location.search)`. Declare them in
+  `desk.fragment.json` `params`.
+
+This bridge is only for chat replies. Anything else (storing records,
+reading files) still goes through the storage bridge or workspace-scoped
+APIs.
 
 ## App and fragment skills
 

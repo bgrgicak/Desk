@@ -7,7 +7,8 @@
     "packages/app",
     "packages/app-scaffold",
     "packages/agent-desk-cli",
-    "packages/ui"
+    "packages/ui",
+    "packages/desk-apps"
   ],
   "scripts": {
     "preinstall": "node -e \"const want='23';const got=process.versions.node;if(got.split('.')[0]!==want){console.error('\\n  Desk requires Node '+want+'.x (pinned by .nvmrc + engines). Found: '+got+'.\\n  Install via nvm/fnm/mise/asdf, then re-run npm install. The .nvmrc pin will pick up automatically.\\n');process.exit(1)}\"",

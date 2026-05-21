@@ -143,12 +143,6 @@ export interface ServerFile {
   isDir?: boolean;
   /** Optional human-friendly label rendered alongside the raw file name. */
   label?: string;
-  /** ID of the agent that last created or edited this file, if known. */
-  agentId?: string;
-  /** ID of the agent that *originally* created this file. Stays stable
-   * even after subsequent edits, so the Library UI can show a durable
-   * "by AI" provenance label. */
-  creatorAgentId?: string;
   /** Whether this file is pinned in the workspace's Pinned view. */
   pinned?: boolean;
 }
@@ -175,9 +169,25 @@ export interface ListMessagesResponse extends Cursor {
   prevCursor?: string;
 }
 
-export interface ListLibraryResponse extends Cursor {
+export interface ListLibraryResponse {
   items: ServerFile[];
   folders: ServerFolder[];
+}
+
+/** Folders-only recursive tree — returned by `GET /library/folders`. */
+export interface ListLibraryFoldersResponse {
+  folders: ServerFolder[];
+}
+
+/**
+ * Library search result. `truncated` flags that the server hit its result
+ * cap; the UI should prompt for a more specific query rather than imply
+ * the empty tail means "no more matches."
+ */
+export interface SearchLibraryResponse {
+  items: ServerFile[];
+  folders: ServerFolder[];
+  truncated: boolean;
 }
 
 /** Cross-chat message listing query (/messages). */

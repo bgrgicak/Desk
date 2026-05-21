@@ -28,6 +28,7 @@ import {
   pruneDriftedContainers,
   refreshSandboxConnections,
   resolveLocalSourceEnv,
+  writeBuiltinApps,
   writeGoalSkillFiles,
 } from "@agent-desk/runtime";
 import { createApp } from "./app.js";
@@ -151,6 +152,7 @@ async function main(): Promise<void> {
   }
   await ensureLayout(DESK_HOME);
   await writeGoalSkillFiles(DESK_HOME);
+  await writeBuiltinApps(DESK_HOME);
   // Per-user hub auto-create. Runs before the workspace layout backfill
   // so a fresh hub immediately has its on-disk tree. Idempotent — does
   // nothing for users that already have a hub.

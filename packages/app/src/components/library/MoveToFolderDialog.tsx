@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { Folder as FolderIcon } from 'lucide-react'
 import {
   Button,
@@ -24,23 +25,41 @@ export interface MoveToFolderDialogProps {
   onMove: (destFolderId: string | null) => void
 }
 
-export function MoveToFolderDialog({
+export function MoveToFolderDialog(props: MoveToFolderDialogProps) {
+  // Don't mount the dialog (or compute its folder list) until the user
+  // actually opens it. The previous unconditional render filtered + sorted
+  // the workspace folder list on every commit while closed, which the
+  // profile pinned at ~500ms self time during a route change.
+  if (props.targets === null) return null
+  return <MoveToFolderDialogOpen {...props} targets={props.targets} />
+}
+
+function MoveToFolderDialogOpen({
   targets,
   folders,
   onClose,
   onMove,
-}: MoveToFolderDialogProps) {
+}: MoveToFolderDialogProps & { targets: MoveTarget[] }) {
+  const candidateFolders = useMemo(() => (
+    folders
+      .filter((f) => {
+        for (const t of targets) {
+          if (t.path === f.id) return false
+          if (f.id.startsWith(`${t.path}/`)) return false
+        }
+        return true
+      })
+      .sort((a, b) => a.id.localeCompare(b.id))
+  ), [folders, targets])
+
   return (
-    <Dialog
-      open={targets !== null}
-      onOpenChange={(open) => { if (!open) onClose() }}
-    >
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {targets && targets.length === 1
+            {targets.length === 1
               ? `Move "${targets[0].name}"`
-              : `Move ${targets?.length ?? 0} items`}
+              : `Move ${targets.length} items`}
           </DialogTitle>
           <DialogDescription>Pick a destination folder.</DialogDescription>
         </DialogHeader>
@@ -52,27 +71,16 @@ export function MoveToFolderDialog({
             <FolderIcon className="h-4 w-4 mr-2 inline" />
             Library (root)
           </button>
-          {folders
-            // Can't move an item into itself or one of its descendants.
-            .filter((f) => {
-              if (!targets) return true
-              for (const t of targets) {
-                if (t.path === f.id) return false
-                if (f.id.startsWith(`${t.path}/`)) return false
-              }
-              return true
-            })
-            .sort((a, b) => a.id.localeCompare(b.id))
-            .map((f) => (
-              <button
-                key={f.id}
-                className="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-muted"
-                onClick={() => onMove(f.id)}
-              >
-                <FolderIcon className="h-4 w-4 mr-2 inline" />
-                {f.id}
-              </button>
-            ))}
+          {candidateFolders.map((f) => (
+            <button
+              key={f.id}
+              className="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-muted"
+              onClick={() => onMove(f.id)}
+            >
+              <FolderIcon className="h-4 w-4 mr-2 inline" />
+              {f.id}
+            </button>
+          ))}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>

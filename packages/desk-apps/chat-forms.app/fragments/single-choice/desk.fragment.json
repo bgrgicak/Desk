@@ -1,0 +1,15 @@
+{
+  "name": "single-choice",
+  "description": "Renders a question with N radio options. Agents attach with --param question=\"...\" --param options=\"a,b,c\" to ask the user to pick exactly one option via UI instead of free-text.",
+  "capabilities": ["chats.write"],
+  "params": {
+    "question": {
+      "type": "string",
+      "description": "The question to display."
+    },
+    "options": {
+      "type": "string",
+      "description": "Comma-separated list of option labels, or a JSON-encoded string array."
+    }
+  }
+}

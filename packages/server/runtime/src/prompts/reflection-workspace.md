@@ -29,6 +29,16 @@ Base the journal only on yesterday's chat activity. Do not copy facts
 from prior journals into today's journal unless they were part of
 yesterday's activity too.
 
+Some activity rows are user 👍 / 👎 reactions the user left on
+specific agent replies via the thumbs buttons in the chat. They appear
+as `User reacted 👍 helpful…` / `User reacted 👎 not helpful…` lines
+and are persisted as `feedback` system messages — treat them as
+explicit user verdicts on the reply they reference. Use them to weight
+what to keep or change: thumbs-up signals a pattern worth holding onto;
+thumbs-down signals something to call out as a correction or open thread
+and, when the cause is durable, to capture as a memory edit so the same
+mistake isn't repeated.
+
 Write a very short reflection that is concrete first and lightly atmospheric
 second. Name actual work, decisions, corrections, and open threads from the
 activity. It may sound quiet, poetic, and AI-reflective, but never pad the entry

@@ -39,11 +39,11 @@ import {
   buildOutputContent,
   computeNextRun,
   errorLogLines,
-  isNonEmpty,
   isUnscheduledTask,
   outputContentTypeFor,
   readLogEntries,
   reflectionOutcomeText,
+  resolveModelForRun,
   type SummaryModelTokenLimits,
 } from "./runs-helpers.js";
 import { withModule } from "@agent-desk/shared/logger";
@@ -78,56 +78,13 @@ export interface RunManagerOptions {
   summaryModelContextWindowFn?: (chatId: string, modelId: string) => Promise<number | SummaryModelTokenLimits | null>;
 }
 
-/**
- * Reasons `resolveModelForRun` returned a model other than the requested
- * one. `null` means "the requested model was used as-is".
- */
-export type ModelResolutionReason =
-  | null
-  | "codex-oauth"             // codex/* → openai-codex/* via OAuth path (Codex enabled)
-  | "codex-fallback-api-key"; // codex/* → openai/* via API-key fallback (Codex disabled, OPENAI key present)
-
-/**
- * Translate a Desk model id to pi's view of the world.
- *
- * Desk exposes Codex (ChatGPT-subscription) OpenAI models under a UI
- * relabel `codex/<name>`; pi's actual provider id for that channel is
- * `openai-codex`. So a saved agent with `model: "codex/gpt-5.5"` needs
- * to land at pi as `openai-codex/gpt-5.5` when the OAuth bridge is on,
- * or as `openai/gpt-5.5` when only an API key is configured.
- *
- * Other models pass through unchanged. When the requested provider has
- * no live auth, pi itself surfaces the error to the user — Desk no
- * longer substitutes a fallback. This matches pi's CLI semantics: pick
- * a model, get a clear error if its auth is missing.
- */
-export function resolveModelForRun(
-  model: string,
-  providerKeys: Record<string, string>,
-  extraEnv?: Record<string, string>,
-): {
-  runtimeModel: string;
-  providerKeys: Record<string, string>;
-  reason: ModelResolutionReason;
-} {
-  const hasOpenAiKey = isNonEmpty(providerKeys.OPENAI_API_KEY);
-  const oauthAvailable = isNonEmpty(extraEnv?.OPENCODE_AUTH_CONTENT);
-
-  if (model.startsWith("codex/")) {
-    const suffix = model.slice("codex/".length);
-    if (oauthAvailable) {
-      return { runtimeModel: `openai-codex/${suffix}`, providerKeys, reason: "codex-oauth" };
-    }
-    if (hasOpenAiKey) {
-      return { runtimeModel: `openai/${suffix}`, providerKeys, reason: "codex-fallback-api-key" };
-    }
-    // Neither channel is live. Let pi raise its own "No API key found
-    // for openai-codex" — clearer than substituting a different model.
-    return { runtimeModel: `openai-codex/${suffix}`, providerKeys, reason: null };
-  }
-
-  return { runtimeModel: model, providerKeys, reason: null };
-}
+// Re-export the model resolver from runs-helpers so existing callers
+// keep working. The implementation lives in helpers so reflection.ts
+// can use it without creating a runs ↔ reflection import cycle.
+export {
+  resolveModelForRun,
+  type ModelResolutionReason,
+} from "./runs-helpers.js";
 
 /**
  * @deprecated Kept for backwards-compatibility with existing tests
@@ -145,6 +102,14 @@ export function resolveOpenAiBillingSource(
 export interface FireMessageOptions {
   /** Manual task fires create a run now without consuming the task's schedule. */
   manual?: boolean;
+  /**
+   * For task kinds: the id of a task_run row the caller already inserted
+   * (via `beginTaskRun`) and emitted `message.appended` for. When set,
+   * fireMessage skips its own `startTaskRun` and executes the agent against
+   * the supplied run. Lets a caller surface an "active" task_run in its
+   * own response before the long exec begins.
+   */
+  preStartedRunId?: string;
 }
 
 /**
@@ -172,6 +137,26 @@ export function createRunManager(opts: RunManagerOptions) {
 
   let inFlight = 0;
   const MAX_CONCURRENT = parseInt(process.env.DESK_SCHEDULER_MAX_CONCURRENT ?? "10", 10);
+
+  /**
+   * Emit a `message.updated` for the row we just wrote, and — when the
+   * row is an `agent_turn` — also emit `chat.updated` for its chat.
+   *
+   * The chat's `running`/`failed` flags are computed live from the
+   * latest agent_turn (see queries/chats.ts), so every agent_turn
+   * state transition can shift them. Shipping a fresh `chat.updated`
+   * means the client never has to infer those flags from message
+   * events — it just applies the payload.
+   *
+   * The chat fetch is one extra query per state write; we accept that
+   * cost as the price of a single source of truth.
+   */
+  async function emitMessageAndMaybeChat(msg: Message): Promise<void> {
+    emit({ type: "message.updated", payload: msg });
+    if (msg.content?.type !== "agent_turn") return;
+    const chat = await queries.chats.findById(pool, msg.chatId);
+    if (chat) emit({ type: "chat.updated", payload: chat });
+  }
 
   async function getDefaultAgentId(): Promise<string> {
     const agents = await queries.agents.list(pool);
@@ -242,6 +227,43 @@ export function createRunManager(opts: RunManagerOptions) {
   }
 
   /**
+   * Synchronously insert a task_run row for an unscheduled task and emit
+   * its `message.appended`. Used by the sandbox auto-fire path so the HTTP
+   * response carries an `active` task_run before the long exec starts —
+   * otherwise the UI's status selector (which only marks a task active
+   * when a child run is `running`) sees an empty runs list and shows
+   * `todo` until the SSE event arrives.
+   *
+   * Returns the inserted run, or `null` when the message is missing,
+   * isn't a task, or another run is already in flight (e.g. a concurrent
+   * scheduler tick beat us to it; the caller should fall back to the
+   * regular `fireMessage` path which can detect the same condition).
+   */
+  async function beginTaskRun(messageId: string): Promise<Message | null> {
+    const msg = await queries.messages.findById(pool, messageId);
+    if (!msg || msg.kind !== "task") return null;
+    const executionChatId = msg.threadChatId ?? msg.chatId;
+    const { rows } = await pool.query<{ workspace_id: string }>(
+      `SELECT workspace_id FROM chats WHERE id = ?`,
+      [executionChatId],
+    );
+    const workspaceId = rows[0]?.workspace_id;
+    const newRunId = generateId("message");
+    const run = await queries.messages.startTaskRun(pool, {
+      runId: newRunId,
+      taskId: messageId,
+      chatId: executionChatId,
+      role: msg.role,
+      content: msg.content,
+      agentId: msg.agentId ?? null,
+      model: msg.model ?? null,
+    });
+    if (!run) return null;
+    emit({ type: "message.appended", payload: run, workspaceId });
+    return run;
+  }
+
+  /**
    * Fires a scheduled message. Behaviour branches on `kind`:
    *
    *   - `task`: inserts a fresh `task_run` child of the task and runs the
@@ -279,7 +301,7 @@ export function createRunManager(opts: RunManagerOptions) {
       try {
         await queries.messages.finalizeExecution(pool, messageId, "failed");
         const failed = await queries.messages.findById(pool, messageId);
-        if (failed) emit({ type: "message.updated", payload: failed });
+        if (failed) await emitMessageAndMaybeChat(failed);
       } catch (fallbackErr) {
         log.error({ messageId, fallbackErr }, "fireMessage failure-finalize also threw");
       }
@@ -290,9 +312,18 @@ export function createRunManager(opts: RunManagerOptions) {
   async function fireMessageImpl(messageId: string, fireOptions: FireMessageOptions = {}): Promise<{ fired: boolean; childIds: string[] }> {
     const msg = await queries.messages.findById(pool, messageId);
     if (!msg) return { fired: false, childIds: [] };
+    // Task model: a task anchor lives in the source chat (kind='task',
+    // carries the schedule). Its run output — task_runs, agent child
+    // replies, opencode session, logs — lands in the anchor's thread
+    // chat so the source chat stays clean and the task list opens an
+    // isolated transcript. Legacy task anchors without a thread fall
+    // back to the source chat (no behaviour change). All other kinds
+    // (chat, summary) keep firing in their own chat.
+    const executionChatId =
+      msg.kind === "task" && msg.threadChatId ? msg.threadChatId : msg.chatId;
     const { rows: fireChatRows } = await pool.query<{ workspace_id: string }>(
       `SELECT workspace_id FROM chats WHERE id = ?`,
-      [msg.chatId],
+      [executionChatId],
     );
     const eventWorkspaceId = fireChatRows[0]?.workspace_id;
 
@@ -301,29 +332,49 @@ export function createRunManager(opts: RunManagerOptions) {
     // kinds, it's the message itself.
     let runId: string;
     if (msg.kind === "task") {
-      const newRunId = generateId("message");
-      const run = await queries.messages.startTaskRun(pool, {
-        runId: newRunId,
-        taskId: messageId,
-        chatId: msg.chatId,
-        role: msg.role,
-        content: msg.content,
-        agentId: msg.agentId ?? null,
-        model: msg.model ?? null,
-      });
-      if (!run) return { fired: false, childIds: [] };
-      runId = run.id;
-      emit({ type: "message.appended", payload: run, workspaceId: eventWorkspaceId });
-      // The task_run child is the authoritative agent-owned Active signal. The
-      // parent is emitted only when a lifecycle policy below changes it.
+      if (fireOptions.preStartedRunId) {
+        // The caller (sandbox auto-fire dispatcher) already inserted the
+        // task_run row via `beginTaskRun` and emitted the appended event.
+        // Re-running startTaskRun would hit its in-flight guard and refuse,
+        // so just adopt the run and proceed to exec.
+        runId = fireOptions.preStartedRunId;
+      } else {
+        const newRunId = generateId("message");
+        const run = await queries.messages.startTaskRun(pool, {
+          runId: newRunId,
+          taskId: messageId,
+          chatId: executionChatId,
+          role: msg.role,
+          content: msg.content,
+          agentId: msg.agentId ?? null,
+          model: msg.model ?? null,
+        });
+        if (!run) return { fired: false, childIds: [] };
+        runId = run.id;
+        emit({ type: "message.appended", payload: run, workspaceId: eventWorkspaceId });
+        // The task_run child is the authoritative agent-owned Active signal.
+        // For agent-authored unscheduled tasks (sandbox sub-tasks), also flip
+        // the parent state to `running` so the kanban badge stays Active past
+        // the run-terminate gap. Covers manual re-runs from the board (e.g.
+        // retrying a failed sub-task) and any path where fireMessage was
+        // entered without a pre-started run; the dispatcher's auto-fire
+        // covers the inline case. Guarded to `pending` so a concurrent
+        // user-issued cancel (state='cancelled') wins.
+        if (msg.role === "agent" && isUnscheduledTask(msg)) {
+          const promoted = await queries.messages.updateMessageIfState(
+            pool,
+            messageId,
+            { state: "running" },
+            ["pending"],
+          );
+          if (promoted) emit({ type: "message.updated", payload: promoted });
+        }
+      }
     } else {
       const claimed = await queries.messages.claimPending(pool, messageId);
       if (!claimed) return { fired: false, childIds: [] };
       runId = messageId;
-      emit({
-        type: "message.updated",
-        payload: (await queries.messages.findById(pool, messageId))!,
-      });
+      await emitMessageAndMaybeChat((await queries.messages.findById(pool, messageId))!);
     }
 
     // All post-claim work is wrapped in a single try/catch so any failure
@@ -377,7 +428,7 @@ export function createRunManager(opts: RunManagerOptions) {
          JOIN workspaces w ON w.id = c.workspace_id
          LEFT JOIN users u ON u.id = w.user_id
          WHERE c.id = ?`,
-        [msg.chatId],
+        [executionChatId],
       );
       const ctxRow = ctxRows[0];
       const workspaceId = ctxRow?.workspace_id ?? (await firstWorkspaceId());
@@ -399,7 +450,7 @@ export function createRunManager(opts: RunManagerOptions) {
           ? (rawGoal as GoalKey)
           : null;
 
-      const logDir = await ensureLogDir(workspaceSlug, msg.chatId);
+      const logDir = await ensureLogDir(workspaceSlug, executionChatId);
       logFile = path.join(logDir, `${runId}.log`);
       // `flags: "w"` so a manual re-fire of a previously-failed
       // chat/summary message starts with a clean log instead of
@@ -441,7 +492,7 @@ export function createRunManager(opts: RunManagerOptions) {
         model: agent?.model ?? "anthropic/claude-haiku-4-5",
         userName,
         userTimezone,
-        chatId: msg.chatId,
+        chatId: executionChatId,
         goal: chatGoal,
         runMode: outputKind === "summary" ? "summary" : (msg.kind === "task" && (msg.executeAt || msg.cron) ? "scheduled-task" : "chat"),
         workspaceKind,
@@ -506,7 +557,7 @@ export function createRunManager(opts: RunManagerOptions) {
         // pass it into the runtime; the runtime returns the session that
         // actually handled the run, which may be a freshly-created one if
         // the chat had none or the stored id was stale on the daemon.
-        let opencodeSessionId = await queries.chats.getOpencodeSessionId(pool, msg.chatId);
+        let opencodeSessionId = await queries.chats.getOpencodeSessionId(pool, executionChatId);
         // Translate the Desk model id into pi's view: `codex/<n>` →
         // `openai-codex/<n>` when OAuth is live, `openai/<n>` when only
         // an API key is. Other models pass through. Missing-auth is
@@ -551,7 +602,7 @@ export function createRunManager(opts: RunManagerOptions) {
                 workspaceId,
                 workspaceSlug,
                 workspaceKind,
-                chatId: msg.chatId,
+                chatId: executionChatId,
                 agent: runtimeAgentInput,
                 attachments,
                 providerKeys: billing.providerKeys,
@@ -586,7 +637,7 @@ export function createRunManager(opts: RunManagerOptions) {
             // so the model's context across attempts stays consistent.
             const nextSessionId = (result as { opencodeSessionId?: string }).opencodeSessionId;
             if (nextSessionId && nextSessionId !== opencodeSessionId) {
-              await queries.chats.setOpencodeSessionId(pool, msg.chatId, nextSessionId);
+              await queries.chats.setOpencodeSessionId(pool, executionChatId, nextSessionId);
               opencodeSessionId = nextSessionId;
             }
           }
@@ -638,16 +689,10 @@ export function createRunManager(opts: RunManagerOptions) {
       // producing one duplicate reply per preempted send when the user
       // types faster than the model.
       if (await isAlreadyCancelled(pool, runId)) {
-        emit({
-          type: "message.updated",
-          payload: (await queries.messages.findById(pool, runId))!,
-        });
+        await emitMessageAndMaybeChat((await queries.messages.findById(pool, runId))!);
         return { fired: true, childIds: [] };
       }
-      emit({
-        type: "message.updated",
-        payload: (await queries.messages.findById(pool, runId))!,
-      });
+      await emitMessageAndMaybeChat((await queries.messages.findById(pool, runId))!);
       await afterTaskRun(msg, terminal, fireOptions);
 
       const entries = await readLogEntries(logFile);
@@ -661,14 +706,14 @@ export function createRunManager(opts: RunManagerOptions) {
             `SELECT id, content FROM messages
              WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary'
              ORDER BY created_at DESC LIMIT 1`,
-            [msg.chatId],
+            [executionChatId],
           );
           if (prev.rows[0]) {
             // SQLite returns JSON columns as TEXT; parse before reading.
             const prevRow = prev.rows[0] as { id: string; content: string };
             const parsed = JSON.parse(prevRow.content) as { body?: string };
             if (typeof parsed.body === "string") {
-              await snapshotSummary(home, workspaceSlug, msg.chatId, prevRow.id, parsed.body).catch(() => { /* best-effort */ });
+              await snapshotSummary(home, workspaceSlug, executionChatId, prevRow.id, parsed.body).catch(() => { /* best-effort */ });
             }
           }
         }
@@ -678,7 +723,7 @@ export function createRunManager(opts: RunManagerOptions) {
         const childKind = outputKind === "summary" ? "summary" : undefined;
         const child = await queries.messages.insert(pool, {
           id: generateId("message"),
-          chatId: msg.chatId,
+          chatId: executionChatId,
           role: "agent",
           content,
           parentId: runId,
@@ -692,7 +737,7 @@ export function createRunManager(opts: RunManagerOptions) {
         // source of truth.
         if (content.type === "summary") {
           const { materializeSummary } = await import("@agent-desk/storage");
-          await materializeSummary(home, workspaceSlug, msg.chatId, child.id, content.body).catch(() => { /* best-effort */ });
+          await materializeSummary(home, workspaceSlug, executionChatId, child.id, content.body).catch(() => { /* best-effort */ });
         }
         emit({ type: "message.appended", payload: child, workspaceId });
         emit({ type: "workspace.synced", payload: { workspaceId } });
@@ -736,7 +781,7 @@ export function createRunManager(opts: RunManagerOptions) {
       }
       await queries.messages.finalizeExecution(pool, runId, "failed");
       const failedMsg = await queries.messages.findById(pool, runId);
-      if (failedMsg) emit({ type: "message.updated", payload: failedMsg });
+      if (failedMsg) await emitMessageAndMaybeChat(failedMsg);
       await afterTaskRun(msg, "failed", fireOptions);
       if (!logFile) return { fired: true, childIds: [] };
       const entries = await readLogEntries(logFile);
@@ -749,7 +794,7 @@ export function createRunManager(opts: RunManagerOptions) {
       const errorChildKind = outputContentTypeFor(msg) === "summary" ? "summary" : undefined;
       const child = await queries.messages.insert(pool, {
         id: generateId("message"),
-        chatId: msg.chatId,
+        chatId: executionChatId,
         role: "agent",
         content,
         parentId: runId,
@@ -765,6 +810,32 @@ export function createRunManager(opts: RunManagerOptions) {
    * occurrence and stay pending; successful one-shot tasks transition to done
    * and clear execute_at. Failed one-shot runs clear the missed occurrence but
    * keep the parent task pending so an error does not count as completion.
+   *
+   * Unscheduled agent-authored tasks are sandbox-issued sub-tasks: the
+   * agent ran `desk-agent task schedule` to spin off work, the auto-fire
+   * path in /sandbox/messages promoted the parent to `running` so the
+   * kanban badge reads Active, and the run has now ended. Two outcomes:
+   *
+   *   - Run failed: mirror to `state='failed'` so the user sees the
+   *     surfaced failure (folded into Open by the UI selector — failure
+   *     is internal-only) instead of stale Active. Guarded against an
+   *     existing terminal state so a `task complete` that already ran
+   *     from inside the agent isn't overwritten.
+   *
+   *   - Run succeeded: leave the parent in `running` (Active). The
+   *     canonical close is `desk-agent task complete`, called either
+   *     from inside the agent during the run or by a later caller
+   *     (main-thread agent, user gesture). If the agent forgot to call
+   *     it, the agent's reply has likely landed in the thread chat
+   *     (chat.unread=1), which the rich selector reads as Needs input —
+   *     the user opens the thread to inspect and either closes the task
+   *     manually or asks the agent to continue. Auto-completing here
+   *     would steal that hand-off signal AND break callers that expect
+   *     to issue task complete after the run terminates.
+   *
+   * Unscheduled *user-authored* tasks remain sticky on the kanban — the
+   * user placed them in a column explicitly, and a single agent run
+   * should not silently move them out of it.
    */
   async function afterTaskRun(
     task: Message,
@@ -798,7 +869,18 @@ export function createRunManager(opts: RunManagerOptions) {
       if (updated) emit({ type: "message.updated", payload: updated });
       return;
     }
-    if (isUnscheduledTask(task)) return;
+    if (isUnscheduledTask(task)) {
+      if (task.role !== "agent") return;
+      if (terminal !== "failed") return;
+      const updated = await queries.messages.updateMessageIfState(
+        pool,
+        task.id,
+        { state: "failed" },
+        ["pending", "running"],
+      );
+      if (updated) emit({ type: "message.updated", payload: updated });
+      return;
+    }
     const updated = await queries.messages.updateMessage(pool, task.id, {
       state: terminal === "failed" ? "pending" : terminal,
       executeAt: null,
@@ -895,7 +977,7 @@ export function createRunManager(opts: RunManagerOptions) {
     await runtimeCancelRun(messageId);
     await queries.messages.updateMessage(pool, messageId, { state: "cancelled" });
     const msg = await queries.messages.findById(pool, messageId);
-    if (msg) emit({ type: "message.updated", payload: msg });
+    if (msg) await emitMessageAndMaybeChat(msg);
   }
 
   /**
@@ -1014,6 +1096,7 @@ export function createRunManager(opts: RunManagerOptions) {
 
   return {
     fireMessage,
+    beginTaskRun,
     tickScheduled,
     startPolling,
     sweepIdleSandboxes,

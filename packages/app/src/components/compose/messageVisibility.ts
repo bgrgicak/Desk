@@ -1,9 +1,33 @@
 import type { AgentEvent, AgentLogEntry, MessageContent, ServerMessage } from '@/store/types'
 
+/**
+ * Latest agent_turn whose state is still `pending` or `running`, or
+ * null if the most recent agent_turn has terminated (succeeded / failed
+ * / cancelled / paused) or there is none.
+ *
+ * This is the chat-view's loader signal — the sidebar reuses it via
+ * `selectIsChatRunning` so the two surfaces can't disagree on whether
+ * a turn is in flight.
+ */
+export function findActiveAgentTurn(items: ServerMessage[]): ServerMessage | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const m = items[i]
+    if (m.content.type === 'agent_turn') {
+      return m.state === 'pending' || m.state === 'running' ? m : null
+    }
+  }
+  return null
+}
+
 const HIDDEN_FROM_STREAM: ReadonlySet<MessageContent['type']> = new Set([
   'agent_turn',
   'summary_request',
   'reflection_request',
+  // `feedback` rows are user 👍 / 👎 reactions persisted as system
+  // messages so reflections can see them. They're plumbing, not chat
+  // content — the thumb button's active state is the user-facing
+  // signal in the timeline.
+  'feedback',
 ])
 
 const TOOL_CONTENT_TYPES: ReadonlySet<MessageContent['type']> = new Set([

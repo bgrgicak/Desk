@@ -20,6 +20,7 @@ import {
   workspaceRootPath,
   type VirtualLibraryMount,
 } from "./layout.js";
+import { invalidateLibraryListCache } from "./library-cache.js";
 import { ID_PREFIXES } from "@agent-desk/shared";
 
 /**
@@ -60,12 +61,6 @@ export interface FileRef {
   createdAt: string;
   /** Last-modified time as a Unix millisecond timestamp string — used as an ETag. */
   updatedAtMs: string;
-  /** ID of the agent that *last* created or edited this file, if known. */
-  agentId?: string;
-  /** ID of the agent that *originally* created this file, if known. Stays
-   * stable even after subsequent human or agent edits — used by the
-   * Library UI to show a "by AI" provenance label. */
-  creatorAgentId?: string;
   /** Whether this file is pinned in the workspace's Pinned view. */
   pinned?: boolean;
   /** True when the entry is a directory rather than a regular file. Set
@@ -219,6 +214,12 @@ export async function uploadArtifact(
 
   const stat = await fs.stat(destPath);
   const relPath = path.relative(workspaceRootPath(ctx.home, input.workspaceSlug), destPath);
+
+  // Chat-scoped uploads land under `.chats/{chatId}/attachments/` and don't
+  // affect the library listing, so skip the invalidation in that case.
+  if (!input.chatId) {
+    invalidateLibraryListCache(input.workspaceSlug);
+  }
 
   return {
     path: relPath.split(path.sep).join("/"),
@@ -383,6 +384,7 @@ export async function overwriteFile(
     await fs.unlink(tmpPath).catch(() => {});
     throw err;
   }
+  invalidateLibraryListCache(slug);
   return fileRefFromDisk(ctx.home, slug, relPath, virtualMounts);
 }
 
@@ -586,6 +588,7 @@ export async function saveChatAttachmentToLibrary(
   // the file via `listAttachments`. If the symlink can't be created the
   // save still succeeded — the chat sidebar will just lose the row.
   await fs.symlink(relativeSymlinkTarget(srcAbs, destAbs), srcAbs).catch(() => {});
+  invalidateLibraryListCache(slug);
 
   const relPath = path.relative(root, destAbs).split(path.sep).join("/");
   return fileRefFromDisk(ctx.home, slug, relPath);
@@ -885,6 +888,7 @@ export async function replaceLibraryAppFromChat(
 
   await fs.rename(srcAbs, destAbs);
   await pruneAppVersionTrash(ctx.home);
+  invalidateLibraryListCache(slug);
 
   const newStat = await fs.stat(destAbs);
   const relPath = path.relative(root, destAbs).split(path.sep).join("/");
@@ -957,6 +961,7 @@ export async function deleteLibraryApp(
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const trashTarget = path.join(versionsRoot, `${baseName}-${stamp}`);
   await fs.rename(target, trashTarget);
+  invalidateLibraryListCache(slug);
 }
 
 /**
@@ -979,6 +984,7 @@ export async function moveFile(
     // If the symlink can't be created (e.g. parent dir gone), swallow — the
     // move still succeeded; references to the old path will fail-fast.
   });
+  invalidateLibraryListCache(slug);
   return fileRefFromDisk(ctx.home, slug, toRel);
 }
 
@@ -1004,6 +1010,7 @@ export async function deleteFile(
   const stamp = Date.now();
   const trashPath = path.join(trash, `${stamp}-${path.basename(abs)}`);
   await fs.rename(abs, trashPath);
+  invalidateLibraryListCache(slug);
 }
 
 /**

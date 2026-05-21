@@ -432,6 +432,103 @@ export async function findLibraryItems(
     results.push(result);
   }
 
+  // Global apps live at ${DESK_HOME}/.apps/ on the host and are mounted at
+  // /opt/desk-apps/ inside every sandbox. They appear in every workspace's
+  // library — agents reach them through the same `desk-agent find library`
+  // pathway as user-authored apps and attach them with the same
+  // `desk-agent chat attach-artifact <path>` command using the in-sandbox
+  // path embedded in the hit.
+  const globalItems = await collectGlobalAppLibraryItems(storage, query);
+  for (const item of globalItems) {
+    if (wantedKind && item.kind !== wantedKind) continue;
+    const key = `${item.workspaceSlug}:${item.kind}:${item.path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    results.push(item);
+  }
+
   results.sort((a, b) => b.score - a.score || (a.lastModified < b.lastModified ? 1 : -1));
   return results.slice(0, limit);
+}
+
+/** Sentinel slug used on `LibraryItemSearchResult.workspaceSlug` for global apps.
+ *  Built-ins aren't workspace-scoped; this lets the result shape stay uniform
+ *  while still being distinguishable from any real workspace slug. */
+const GLOBAL_APPS_SLUG = "_desk_apps";
+const GLOBAL_APPS_SANDBOX_PREFIX = "/opt/desk-apps";
+const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
+
+function matchesQuery(query: string, name: string, description: string): boolean {
+  if (!query) return true;
+  const needle = query.toLowerCase();
+  return name.toLowerCase().includes(needle) || description.toLowerCase().includes(needle);
+}
+
+async function collectGlobalAppLibraryItems(
+  storage: StorageContext,
+  query: string,
+): Promise<LibraryItemSearchResult[]> {
+  const appsRoot = path.join(storage.home, ".apps");
+  let entries: string[];
+  try {
+    entries = await fs.readdir(appsRoot);
+  } catch {
+    return [];
+  }
+  const out: LibraryItemSearchResult[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".app")) continue;
+    const appName = entry.slice(0, -".app".length);
+    if (!APP_NAME_PATTERN.test(appName)) continue;
+    const appDir = path.join(appsRoot, entry);
+    const appStat = await fs.stat(appDir).catch(() => null);
+    if (!appStat?.isDirectory()) continue;
+    const appManifest = await readManifest(path.join(appDir, "desk.app.json"), "app") as AppManifest | null;
+    if (!appManifest) continue;
+    const appLastModified = new Date(appStat.mtimeMs).toISOString();
+    const appDescription = appManifest.description ?? "";
+    if (matchesQuery(query, appManifest.name, appDescription)) {
+      out.push({
+        kind: "app",
+        path: `${GLOBAL_APPS_SANDBOX_PREFIX}/${entry}`,
+        name: appManifest.name,
+        description: appDescription,
+        workspaceSlug: GLOBAL_APPS_SLUG,
+        lastModified: appLastModified,
+        score: query ? 1 : 0.5,
+        ...(appManifest.params ? { params_schema: appManifest.params } : {}),
+      });
+    }
+    const fragmentsDir = path.join(appDir, "fragments");
+    let fragments: string[] = [];
+    try {
+      fragments = await fs.readdir(fragmentsDir);
+    } catch {
+      continue;
+    }
+    for (const fragment of fragments) {
+      if (!APP_NAME_PATTERN.test(fragment)) continue;
+      const fragmentDir = path.join(fragmentsDir, fragment);
+      const fragmentStat = await fs.stat(fragmentDir).catch(() => null);
+      if (!fragmentStat?.isDirectory()) continue;
+      const fragmentManifest = await readManifest(
+        path.join(fragmentDir, "desk.fragment.json"),
+        "fragment",
+      ) as FragmentManifest | null;
+      if (!fragmentManifest) continue;
+      const description = fragmentManifest.description ?? "";
+      if (!matchesQuery(query, fragmentManifest.name, description)) continue;
+      out.push({
+        kind: "fragment",
+        path: `${GLOBAL_APPS_SANDBOX_PREFIX}/${entry}/dist/fragments/${fragment}`,
+        name: fragmentManifest.name,
+        description,
+        workspaceSlug: GLOBAL_APPS_SLUG,
+        lastModified: new Date(fragmentStat.mtimeMs).toISOString(),
+        score: query ? 1 : 0.5,
+        ...(fragmentManifest.params ? { params_schema: fragmentManifest.params } : {}),
+      });
+    }
+  }
+  return out;
 }

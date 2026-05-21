@@ -9,8 +9,7 @@ import {
   CommandList,
   CommandSeparator,
 } from '@agent-desk/ui'
-import { useGetLibraryQuery, useGetWorkspacesQuery, useSearchQuery } from '@/store/api'
-import { useAppSelector } from '@/store/hooks'
+import { useGetWorkspacesQuery, useSearchQuery } from '@/store/api'
 import { useGlobalPalette } from './GlobalPaletteProvider'
 import { useGlobalChats } from './globalChatStore'
 import {
@@ -57,13 +56,6 @@ export function GlobalPaletteSearch({
   const isSearching = trimmed.length > 0
 
   const globalChats = useGlobalChats()
-  const savedArtifactIds = useAppSelector(s => s.ui.savedArtifactIds)
-
-  const { data: libraryResp } = useGetLibraryQuery(
-    activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
-    { skip: !activeWorkspaceId },
-  )
-  const libraryFiles = libraryResp?.items ?? []
 
   const { data: workspaces = [] } = useGetWorkspacesQuery()
 
@@ -82,16 +74,15 @@ export function GlobalPaletteSearch({
       .slice(0, 8)
   }, [isSearching, globalChats])
 
-  // "Recently viewed" — saved artifacts only (sorted by createdAt desc).
-  const recentArtifacts = useMemo<ServerFile[] | null>(() => {
-    if (isSearching) return null
-    const saved = new Set(savedArtifactIds)
-    return libraryFiles
-      .filter(f => saved.has(f.path))
-      .slice()
-      .sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime())
-      .slice(0, 8)
-  }, [isSearching, libraryFiles, savedArtifactIds])
+  // "Recently viewed" used to cross-reference the workspace-wide library
+  // listing against locally-marked savedArtifactIds. That listing is no
+  // longer fetched eagerly — folder-scoped listing replaced it — so the
+  // section is hidden until a server-side recent-artifacts endpoint
+  // lands. Keeping the typed slot lets us re-enable without changes
+  // elsewhere in this file.
+  // Annotated as ServerFile[] | null so the conditional render below
+  // type-checks even though the value is always null today.
+  const recentArtifacts = null as ServerFile[] | null
 
   const workspaceMatches = useMemo(() => filterWorkspaceTargets(trimmed), [trimmed])
   const settingsMatches  = useMemo(() => filterSettingsTargets(trimmed), [trimmed])

@@ -372,7 +372,7 @@ async function createOrReuseImpl(
   if (existing) {
     const currentImageId = await engine.imageId(sandboxImage(workspaceKind));
     const imageMatches = currentImageId !== null && existing.imageId === currentImageId;
-    const mountsMatch = bindsEqual(existing.binds, expectedBindStrings);
+    const mountsMatch = bindsSatisfy(existing.binds, expectedBindStrings);
     const userMatches = existing.user === expectedUser;
     const resourcesMatch = existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL] === expectedResourceProfile;
     const agentUserMatches = existing.labels[SANDBOX_AGENT_USER_LABEL] === agentUser;
@@ -618,12 +618,23 @@ export async function sandboxUser(engine?: Engine): Promise<string> {
   return `${uid}:${gid}`;
 }
 
-/** Order-insensitive equality for bind-mount strings. */
-function bindsEqual(actual: string[] | undefined, expected: string[]): boolean {
-  if ((actual?.length ?? 0) !== expected.length) return false;
-  const a = [...(actual ?? [])].sort();
-  const e = [...expected].sort();
-  for (let i = 0; i < a.length; i++) if (a[i] !== e[i]) return false;
+/**
+ * Subset semantics for bind-mount drift checks: actual must include every
+ * expected mount, but extras (mounts a previous caller asked for) are fine.
+ *
+ * Equality was rejected because two callers with different but-overlapping
+ * mount plans cause an infinite recreate ping-pong: each call fails the
+ * exact-match drift check, recreates the container with its plan, then the
+ * next call from the other caller sees missing mounts and recreates again.
+ * Subset is the correct invariant: "the caller's required mounts must be
+ * live; extras the previous caller asked for are harmless."
+ */
+export function bindsSatisfy(actual: string[] | undefined, expected: string[]): boolean {
+  if (expected.length === 0) return true;
+  const have = new Set(actual ?? []);
+  for (const e of expected) {
+    if (!have.has(e)) return false;
+  }
   return true;
 }
 
