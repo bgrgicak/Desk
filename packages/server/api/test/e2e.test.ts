@@ -1399,7 +1399,11 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
     const report = parentItems.find((m) => m.role === "agent" && m.parentId === spawn.message.id);
     expect(report).toBeDefined();
     expect(report!.content?.text).toBe("Task done — agent said DONE.");
-  }, 360_000);
+    // The poll budget alone (180 × 2s = 360s) consumes the test's
+    // wall-clock if budget=360s; cold container spin-up + model warm-up
+    // can add another 60-120s on a CI runner. 10 min gives headroom
+    // without disguising real hangs.
+  }, 600_000);
 });
 
 async function rmTempTreeWithRetry(targetPath: string): Promise<void> {
