@@ -843,12 +843,25 @@ export function createRunManager(opts: RunManagerOptions) {
    *
    * Unscheduled agent-authored tasks are sandbox-issued sub-tasks: the
    * agent ran `desk-agent task schedule` to spin off work, the auto-fire
-   * path in /sandbox/messages already promoted the parent to `running`
-   * (so the kanban badge reads Active), and now the run has ended. Mirror
-   * the run's terminal state onto the parent so the card lands in Done /
-   * Failed instead of stale Active. Guarded against an existing terminal
-   * state so a `task complete` that already ran from inside the agent
-   * (race: agent posts complete, then process exits) is not overwritten.
+   * path in /sandbox/messages promoted the parent to `running` so the
+   * kanban badge reads Active, and the run has now ended. Two outcomes:
+   *
+   *   - Run failed: mirror to `state='failed'` so the user sees the
+   *     surfaced failure (folded into Open by the UI selector — failure
+   *     is internal-only) instead of stale Active. Guarded against an
+   *     existing terminal state so a `task complete` that already ran
+   *     from inside the agent isn't overwritten.
+   *
+   *   - Run succeeded: leave the parent in `running` (Active). The
+   *     canonical close is `desk-agent task complete`, called either
+   *     from inside the agent during the run or by a later caller
+   *     (main-thread agent, user gesture). If the agent forgot to call
+   *     it, the agent's reply has likely landed in the thread chat
+   *     (chat.unread=1), which the rich selector reads as Needs input —
+   *     the user opens the thread to inspect and either closes the task
+   *     manually or asks the agent to continue. Auto-completing here
+   *     would steal that hand-off signal AND break callers that expect
+   *     to issue task complete after the run terminates.
    *
    * Unscheduled *user-authored* tasks remain sticky on the kanban — the
    * user placed them in a column explicitly, and a single agent run
@@ -888,10 +901,11 @@ export function createRunManager(opts: RunManagerOptions) {
     }
     if (isUnscheduledTask(task)) {
       if (task.role !== "agent") return;
+      if (terminal !== "failed") return;
       const updated = await queries.messages.updateMessageIfState(
         pool,
         task.id,
-        { state: terminal },
+        { state: "failed" },
         ["pending", "running"],
       );
       if (updated) emit({ type: "message.updated", payload: updated });

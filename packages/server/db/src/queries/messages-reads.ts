@@ -392,14 +392,18 @@ export async function listCrossChat(
   // is technically redundant but kept as a belt-and-braces guard against
   // any legacy rows. Internal rows such as chat summaries are ignored for
   // the latest-message check so background compaction does not create or
-  // clear user-facing badges.
+  // clear user-facing badges. Artifact references are intentionally NOT
+  // treated as internal: they are visible agent output (the user sees a
+  // card for the new artifact) and a chat whose latest agent message is
+  // an artifactRef should still surface as unread — matching the writes
+  // side, which flips chat.unread on artifactRef inserts.
   // SQLite stores BOOLEAN as INTEGER 0/1.
   const nonInternalClause = `(NOT (
-    (json_valid(m.content) AND json_extract(m.content, '$.type') IN ('agent_turn', 'summary_request', 'summary', 'artifactRef'))
+    (json_valid(m.content) AND json_extract(m.content, '$.type') IN ('agent_turn', 'summary_request', 'summary'))
     OR m.kind = 'summary'
   ))`;
   const nonInternalLatestClause = `(NOT (
-    (json_valid(m2.content) AND json_extract(m2.content, '$.type') IN ('agent_turn', 'summary_request', 'summary', 'artifactRef'))
+    (json_valid(m2.content) AND json_extract(m2.content, '$.type') IN ('agent_turn', 'summary_request', 'summary'))
     OR m2.kind = 'summary'
   ))`;
   const unreadClause = `(

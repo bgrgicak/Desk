@@ -440,7 +440,14 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     expect(rows[0].state).toBe("succeeded");
   });
 
-  it("POST /run fires a plain agent task without mutating the parent when the run fails", async () => {
+  it("POST /run propagates a failed agent-authored unscheduled task's terminal state onto the parent", async () => {
+    // afterTaskRun mirrors the run's terminal state onto an
+    // agent-authored unscheduled parent (sandbox sub-task semantics): a
+    // run that errored out lands the parent in `failed` so the board
+    // surfaces the failure (the UI selector folds `failed` into Open,
+    // see app/src/lib/task-status.ts) instead of leaving the card stuck
+    // in stale Active. User-authored unscheduled tasks remain kanban-
+    // sticky and are covered by the sibling test above.
     const mid = await insertPlainAgentTask({ type: "text", text: "missing attachment failure" });
 
     const res = await userRequest("POST", `/chats/${chatId}/messages/${mid}/run`);
@@ -448,17 +455,15 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     expect((res.body as { kind: string; state: string }).kind).toBe("task");
     expect((res.body as { state: string }).state).toBe("pending");
 
-    for (let i = 0; i < 50; i++) {
-      const { rows } = await pool.query<{ state: string }>(
-        `SELECT state FROM messages WHERE parent_id = ? AND kind = 'task_run'`,
-        [mid],
-      );
-      if (rows[0]?.state === "failed") break;
+    let parentState: string | undefined;
+    for (let i = 0; i < 100; i++) {
       await new Promise((r) => setTimeout(r, 20));
+      const parent = await queries.messages.findById(pool, mid);
+      parentState = parent?.state;
+      if (parentState === "failed") break;
     }
 
-    const parent = await queries.messages.findById(pool, mid);
-    expect(parent?.state).toBe("pending");
+    expect(parentState).toBe("failed");
 
     const { rows } = await pool.query<{ state: string }>(
       `SELECT state FROM messages WHERE parent_id = ? AND kind = 'task_run'`,

@@ -966,12 +966,16 @@ execRunFn: async () => ({ exitCode: 1 }),
     expect(runs[0].state).toBe("succeeded");
   });
 
-  it("agent-created unscheduled task: direct scheduler fire mirrors the run state onto the parent", async () => {
-    // Sandbox sub-tasks are agent-authored. The auto-fire flow promotes
-    // the parent to `running` so the kanban card lands on Active, and
-    // afterTaskRun mirrors the run's terminal state onto the parent so
-    // it doesn't get stuck Active after the run finishes. User-authored
-    // unscheduled tasks remain sticky — covered by the next test.
+  it("agent-created unscheduled task: a clean run leaves the parent in `running` for task complete to close", async () => {
+    // Sandbox sub-tasks are agent-authored. fireMessage promotes the
+    // parent to `running` so the kanban card lands on Active, runs the
+    // agent, then hands off: afterTaskRun does NOT propagate a clean
+    // success onto the parent. The canonical close is
+    // `desk-agent task complete`, and auto-completing here would steal
+    // the Needs-input hand-off (the agent's reply lands in the thread,
+    // flipping chat.unread) AND break callers that issue task complete
+    // after the run terminates (the endpoint refuses terminal state).
+    // Failure DOES propagate — see the sibling failed-run test.
     const mgr = createRunManager({
       pool,
       execRunFn: async (_id, _a, _p, onLog) => {
@@ -989,12 +993,41 @@ execRunFn: async () => ({ exitCode: 1 }),
     await mgr.fireMessage(taskId);
 
     const parent = await queries.messages.findById(pool, taskId);
-    expect(parent?.state).toBe("succeeded");
+    expect(parent?.state).toBe("running");
     expect(parent?.executeAt).toBeUndefined();
 
     const runs = await listTaskRuns(taskId);
     expect(runs).toHaveLength(1);
     expect(runs[0].state).toBe("succeeded");
+  });
+
+  it("agent-created unscheduled task: a failed run propagates `failed` onto the parent", async () => {
+    // Failure is the one terminal state afterTaskRun mirrors onto an
+    // agent-authored unscheduled parent: the UI selector folds `failed`
+    // back into Open (failure is internal-only — see
+    // app/src/lib/task-status.ts) so the user retries from the same
+    // column, instead of the card sitting in stale Active forever.
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _a, _p, onLog) => {
+        onLog({ runId: _id, seq: 0, kind: "stderr", payload: "boom" });
+        return { exitCode: 1 };
+      },
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "agent todo that fails" },
+      role: "agent",
+    });
+
+    await mgr.fireMessage(taskId);
+
+    const parent = await queries.messages.findById(pool, taskId);
+    expect(parent?.state).toBe("failed");
+
+    const runs = await listTaskRuns(taskId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].state).toBe("failed");
   });
 
   it("failed unscheduled task run does not complete the manually defined parent", async () => {

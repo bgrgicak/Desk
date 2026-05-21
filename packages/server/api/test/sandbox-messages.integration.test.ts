@@ -234,12 +234,17 @@ describe("POST /sandbox/messages", () => {
     expect(anchorRows[0].state).toBe("running");
   });
 
-  it("propagates a successful task_run's terminal state onto the agent-authored unscheduled parent", async () => {
-    // The fake execRun resolves with exitCode=0; afterTaskRun must mirror
-    // that onto the parent (state='succeeded') so the kanban moves the
-    // card out of Active and into Done without requiring the agent to
-    // call task complete. Sub-tasks where the agent forgot to close out
-    // explicitly should still land in Done, not stay perpetually Active.
+  it("leaves a successful unscheduled agent task in `running` for `task complete` to close", async () => {
+    // afterTaskRun deliberately does NOT propagate success onto an
+    // agent-authored unscheduled parent: the canonical close is
+    // `desk-agent task complete`, and auto-completing here would (a)
+    // steal the Needs-input hand-off the agent's reply lands on the
+    // thread chat, and (b) break callers that issue task complete after
+    // the run terminates (the endpoint throws on terminal state). So
+    // after a clean exit, the anchor is still `running` and the UI
+    // selector renders it as Active (or Needs input if the thread is
+    // unread). Failure is the only outcome that propagates from this
+    // path — see the failed-run test below.
     const token = await issueSandboxToken();
     const res = await sandboxPost({
       chatId: sourceChatId,
@@ -248,21 +253,30 @@ describe("POST /sandbox/messages", () => {
     }, token);
     expect(res.status).toBe(201);
     const anchorId = res.body.message.id as string;
+    const threadChatId = res.body.threadChat.id as string;
 
-    // Poll briefly: fireMessage / afterTaskRun run on the background
-    // catch path of the auto-fire, so the response returns before the
-    // run-terminate transitions land.
-    let anchorState: string | null = null;
+    // Wait for the task_run to finalise: that is the signal afterTaskRun
+    // has had its chance to mutate (or not) the parent. Polling on
+    // task_run state is more robust than a fixed sleep — local CI is
+    // bursty enough that a 100ms wait sometimes lands before the
+    // background fire completes.
+    let runState: string | null = null;
     for (let i = 0; i < 100; i++) {
       await new Promise((r) => setTimeout(r, 20));
       const { rows } = await pool.query<{ state: string }>(
-        `SELECT state FROM messages WHERE id = ?`,
-        [anchorId],
+        `SELECT state FROM messages WHERE chat_id = ? AND kind = 'task_run' AND parent_id = ?`,
+        [threadChatId, anchorId],
       );
-      anchorState = rows[0]?.state ?? null;
-      if (anchorState === "succeeded") break;
+      runState = rows[0]?.state ?? null;
+      if (runState === "succeeded" || runState === "failed" || runState === "cancelled") break;
     }
-    expect(anchorState).toBe("succeeded");
+    expect(runState).toBe("succeeded");
+
+    const { rows: anchorRows } = await pool.query<{ state: string }>(
+      `SELECT state FROM messages WHERE id = ?`,
+      [anchorId],
+    );
+    expect(anchorRows[0].state).toBe("running");
   });
 
   it("propagates a failed task_run's terminal state onto the agent-authored unscheduled parent", async () => {

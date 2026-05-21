@@ -88,6 +88,25 @@ async function freshChat(): Promise<string> {
   return chatId;
 }
 
+/**
+ * Insert an agent-role text message directly. Used by tests that need
+ * `chat.unread` to flip — the chat route's sendMessage path creates a
+ * user-role message, and per the tightened unread semantics in
+ * messages-writes.ts only agent-authored visible rows set the flag, so
+ * sendMessage on its own no longer makes a chat unread. The agent
+ * follow-up that would historically flip the flag is the run output,
+ * which we don't want to spin up here; this helper is the smallest
+ * stand-in.
+ */
+async function agentReply(chatId: string, text: string): Promise<void> {
+  await queries.messages.insert(pool, {
+    id: generateId("message"),
+    chatId,
+    role: "agent",
+    content: { type: "text", text },
+  });
+}
+
 describe("chat unread status", () => {
   it("new chat starts as not unread", async () => {
     const chatId = await freshChat();
@@ -95,17 +114,17 @@ describe("chat unread status", () => {
     expect(chat!.unread).toBe(false);
   });
 
-  it("inserting a message sets unread to true", async () => {
+  it("inserting an agent-authored message sets unread to true", async () => {
     const chatId = await freshChat();
-    await sendMessage(pool, chatId, { content: "hello" }, () => {});
+    await agentReply(chatId, "hello");
     const chat = await queries.chats.findById(pool, chatId);
     expect(chat!.unread).toBe(true);
   });
 
   it("PATCH with unread=false clears the unread flag", async () => {
     const chatId = await freshChat();
-    // First make it unread by sending a message
-    await sendMessage(pool, chatId, { content: "hello" }, () => {});
+    // First make it unread by inserting an agent message
+    await agentReply(chatId, "hello");
     const before = await queries.chats.findById(pool, chatId);
     expect(before!.unread).toBe(true);
 
@@ -120,7 +139,7 @@ describe("chat unread status", () => {
 
   it("markRead returns the full chat atomically with unread=false", async () => {
     const chatId = await freshChat();
-    await sendMessage(pool, chatId, { content: "hello" }, () => {});
+    await agentReply(chatId, "hello");
     expect((await queries.chats.findById(pool, chatId))!.unread).toBe(true);
 
     // markRead should return the full Chat with unread=false in a single
@@ -138,7 +157,7 @@ describe("chat unread status", () => {
 
   it("PATCH with unread=false and other fields works correctly", async () => {
     const chatId = await freshChat();
-    await sendMessage(pool, chatId, { content: "hello" }, () => {});
+    await agentReply(chatId, "hello");
 
     const result = await patchChat(pool, chatId, {
       unread: false,
@@ -148,25 +167,25 @@ describe("chat unread status", () => {
     expect(result.title).toBe("New Title");
   });
 
-  it("new message after marking read re-sets unread to true", async () => {
+  it("new agent message after marking read re-sets unread to true", async () => {
     const chatId = await freshChat();
 
-    // Send message → unread=true
-    await sendMessage(pool, chatId, { content: "first" }, () => {});
+    // Agent reply → unread=true
+    await agentReply(chatId, "first");
     expect((await queries.chats.findById(pool, chatId))!.unread).toBe(true);
 
     // Mark as read → unread=false
     await patchChat(pool, chatId, { unread: false });
     expect((await queries.chats.findById(pool, chatId))!.unread).toBe(false);
 
-    // Send another message → unread=true again
-    await sendMessage(pool, chatId, { content: "second" }, () => {});
+    // Another agent reply → unread=true again
+    await agentReply(chatId, "second");
     expect((await queries.chats.findById(pool, chatId))!.unread).toBe(true);
   });
 
   it("unread appears in listWithLatestMessage", async () => {
     const chatId = await freshChat();
-    await sendMessage(pool, chatId, { content: "hello" }, () => {});
+    await agentReply(chatId, "hello");
 
     const list = await queries.chats.listWithLatestMessage(pool, workspaceId);
     const found = list.find((c) => c.id === chatId);
@@ -234,8 +253,8 @@ describe("chat unread status", () => {
 
   it("internal message does not flip unread back after marking read", async () => {
     const chatId = await freshChat();
-    // Make it unread via a real user message
-    await sendMessage(pool, chatId, { content: "hello" }, () => {});
+    // Make it unread via an agent text reply
+    await agentReply(chatId, "hello");
     expect((await queries.chats.findById(pool, chatId))!.unread).toBe(true);
 
     // Mark read
@@ -391,20 +410,17 @@ describe("chat unread status", () => {
       },
     });
 
-    // Send a regular chat message which creates an agent_turn trigger.
+    // Send a regular chat message which creates a user message + an
+    // agent_turn trigger. Neither flips unread: the user text is the
+    // user's own write (unread is "agent said something the user hasn't
+    // engaged with yet" — your own messages aren't unread to you) and
+    // the agent_turn trigger is internal.
     const { triggerId } = await sendMessage(pool, chatId, { content: "hi" }, (e) => events.push(e));
-
-    // The user text message sets unread=1.
-    expect((await queries.chats.findById(pool, chatId))!.unread).toBe(true);
-
-    // Mark read (simulating the user viewing the chat).
-    await patchChat(pool, chatId, { unread: false });
     expect((await queries.chats.findById(pool, chatId))!.unread).toBe(false);
 
-    // Fire the agent_turn — produces an events output child.
+    // Fire the agent_turn — produces an events output child authored by
+    // the agent. That is the row that flips unread.
     await rm.fireMessage(triggerId);
-
-    // The events output child IS visible → should set unread=1.
     expect((await queries.chats.findById(pool, chatId))!.unread).toBe(true);
 
     // Mark read again.
