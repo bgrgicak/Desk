@@ -435,7 +435,7 @@ async function createOrReuseImpl(
     if (existing) {
       const currentImageId = await engine.imageId(sandboxImage(workspaceKind));
       const imageMatches = currentImageId !== null && existing.imageId === currentImageId;
-      const mountsMatch = bindsEqual(existing.binds, expectedBindStrings);
+      const mountsMatch = bindsSatisfy(existing.binds, expectedBindStrings);
       const userMatches = existing.user === expectedUser;
       const resourcesMatch = existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL] === expectedResourceProfile;
       const agentUserMatches = existing.labels[SANDBOX_AGENT_USER_LABEL] === agentUser;
@@ -805,12 +805,35 @@ export async function sandboxUser(engine?: Engine): Promise<string> {
   return `${uid}:${gid}`;
 }
 
-/** Order-insensitive equality for bind-mount strings. */
-function bindsEqual(actual: string[] | undefined, expected: string[]): boolean {
-  if ((actual?.length ?? 0) !== expected.length) return false;
-  const a = [...(actual ?? [])].sort();
-  const e = [...expected].sort();
-  for (let i = 0; i < a.length; i++) if (a[i] !== e[i]) return false;
+/**
+ * Mount-layout drift check: every bind the caller said it NEEDS must
+ * be present in the container. Extras in the container are tolerated.
+ *
+ * Why subset, not set-equality:
+ * - The scheduler's mountPlan includes local-filesystem connections
+ *   (e.g. ~/Projects, ~/Downloads). Those mounts are bound into the
+ *   container at create time.
+ * - `execInSandbox` (called by `listModels`, etc.) re-resolves the
+ *   sandbox WITHOUT specifying a mountPlan — it doesn't know or care
+ *   about local-filesystem connections, it just wants to exec.
+ *   `createOrReuse` then falls back to the *default* mount plan
+ *   (workspace + skills, 2 binds).
+ * - With set-equality the second caller's "expected" (2 binds) would
+ *   never match the actual (4 binds), causing every utility exec to
+ *   REMOVE the running container, recreate it without locals, then
+ *   the next scheduler-driven run sees the smaller plan as drift and
+ *   recreates again — an infinite ping-pong that the chaos test
+ *   surfaced as repeated 512→1024 MiB memory grows on freshly-baseline
+ *   containers (every recreate resets the cgroup limit).
+ * - Subset is the correct invariant: "the caller's required mounts
+ *   must be live; extras the previous caller asked for are harmless."
+ */
+export function bindsSatisfy(actual: string[] | undefined, expected: string[]): boolean {
+  if (expected.length === 0) return true;
+  const have = new Set(actual ?? []);
+  for (const e of expected) {
+    if (!have.has(e)) return false;
+  }
   return true;
 }
 

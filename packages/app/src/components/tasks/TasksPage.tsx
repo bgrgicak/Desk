@@ -100,6 +100,7 @@ const EMPTY_COPY: Record<TaskTab, { title: string; body: string }> = {
   needs_input: { title: 'Nothing needs your input', body: 'When an agent has a question for you, it shows up here.' },
   active:      { title: 'Nothing in progress',      body: 'Tasks an agent is actively working on appear here.' },
   scheduled:   { title: 'Nothing scheduled',        body: 'Give a task a schedule when you create it to see it here.' },
+  failed:      { title: 'Nothing failed',           body: "Tasks whose run errored out appear here so you can retry or close them." },
   complete:    { title: 'Nothing done yet',         body: 'Completed tasks are kept here for reference.' },
 }
 
@@ -310,6 +311,7 @@ export function TasksPage({
       needs_input: 0,
       active: 0,
       scheduled: 0,
+      failed: 0,
       complete: 0,
     }
     for (const t of allTasks) {
@@ -665,7 +667,9 @@ export function TasksPage({
             onMarkDone={() => void onMarkDone(selectedTask)}
             onRunNow={
               selectedTask.status === 'scheduled' ||
-              selectedTask.status === 'todo'
+              selectedTask.status === 'todo' ||
+              selectedTask.status === 'complete' ||
+              selectedTask.status === 'failed'
                 ? () => void onRunNow(selectedTask)
                 : undefined
             }
@@ -734,9 +738,14 @@ const TaskCardRow = memo(function TaskCardRow({
   // Run/Pause visibility tracks status — keep the prop-level "menu item
   // hidden" affordance by returning undefined when not applicable.
   // Run now is for activating a task that isn't already running, so it
-  // doesn't apply to status === 'active'.
+  // doesn't apply to status === 'active'. On 'complete' / 'failed' it
+  // re-runs the task and moves it back out of its terminal column (see
+  // useTaskActions.onRunNow, which resets the parent state first).
   const onRunNow =
-    task.status === 'scheduled' || task.status === 'todo'
+    task.status === 'scheduled' ||
+    task.status === 'todo' ||
+    task.status === 'complete' ||
+    task.status === 'failed'
       ? () => actions.runNow(task)
       : undefined
   const onPause = (task.status === 'active' || task.status === 'scheduled') &&

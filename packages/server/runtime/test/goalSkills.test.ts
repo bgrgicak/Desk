@@ -72,7 +72,7 @@ describe("Desk skills", () => {
       expect(schedule).not.toContain("## desk-agent chat attach-artifact");
 
       expect(attach).toContain("## desk-agent chat attach-artifact");
-      expect(attach).toContain("desk-agent chat attach-artifact --chat <id>");
+      expect(attach).toContain("desk-agent chat attach-artifact [--chat <id>]");
       expect(attach).not.toContain("## desk-agent task schedule");
 
       expect(convert).toContain("## desk-agent file to-markdown");

@@ -154,7 +154,14 @@ export function toUiTask(
   runs: ServerMessage[] = [],
 ): Task {
   const agent = agents.find((a) => a.id === m.agentId);
-  const chat = chats.find((c) => c.id === m.chatId);
+  // For a sub-task, the agent runs inside the dedicated thread chat —
+  // that's where messages-writes.ts flips `unread = 1` when the agent
+  // posts, and where `running` reflects the live agent_turn. Reading
+  // unread/running off the parent chat would surface false negatives
+  // (the parent chat stays unread=false while the sub-task thread
+  // accumulates agent replies) and the task would never show as
+  // `needs_input` until the user opened the thread themselves.
+  const chat = chats.find((c) => c.id === (m.threadChatId ?? m.chatId));
   const realStartedAt = m.startedAt ? new Date(m.startedAt) : undefined;
   const completedAt = m.endedAt ? new Date(m.endedAt) : undefined;
   const status = statusFor(m, runs, chat);

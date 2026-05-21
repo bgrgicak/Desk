@@ -6,15 +6,16 @@ export type Priority = NonNullable<Task['priority']>
 // ── Status badge ──────────────────────────────────────────────────────────────
 
 const STATUS_CONFIG: Record<Task['status'], { label: string; bg: string; text: string; dot: string }> = {
-  todo:        { label: 'Open',        bg: 'bg-slate-100',   text: 'text-slate-600',  dot: 'bg-slate-400'   },
-  active:      { label: 'Active',      bg: 'bg-blue-100',    text: 'text-blue-700',   dot: 'bg-blue-500'    },
-  needs_input: { label: 'Needs input', bg: 'bg-amber-100',   text: 'text-amber-700',  dot: 'bg-amber-500'   },
+  todo:        { label: 'Open',        bg: 'bg-slate-100',   text: 'text-slate-600',   dot: 'bg-slate-400'   },
+  active:      { label: 'Active',      bg: 'bg-blue-100',    text: 'text-blue-700',    dot: 'bg-blue-500'    },
+  needs_input: { label: 'Needs input', bg: 'bg-amber-100',   text: 'text-amber-700',   dot: 'bg-amber-500'   },
   complete:    { label: 'Done',        bg: 'bg-emerald-100', text: 'text-emerald-700', dot: 'bg-emerald-500' },
-  scheduled:   { label: 'Scheduled',   bg: 'bg-violet-100',  text: 'text-violet-700', dot: 'bg-violet-500'  },
+  scheduled:   { label: 'Scheduled',   bg: 'bg-violet-100',  text: 'text-violet-700',  dot: 'bg-violet-500'  },
+  failed:      { label: 'Failed',      bg: 'bg-red-100',     text: 'text-red-700',     dot: 'bg-red-500'     },
 }
 
 export const STATUS_LABELS: Record<Task['status'], string> = {
-  todo: 'Open', active: 'Active', needs_input: 'Needs input', complete: 'Done', scheduled: 'Scheduled',
+  todo: 'Open', active: 'Active', needs_input: 'Needs input', complete: 'Done', scheduled: 'Scheduled', failed: 'Failed',
 }
 
 /** The per-status dot colour (Tailwind bg-* class), shared with the
@@ -25,6 +26,7 @@ export const STATUS_DOT: Record<Task['status'], string> = {
   needs_input: STATUS_CONFIG.needs_input.dot,
   complete: STATUS_CONFIG.complete.dot,
   scheduled: STATUS_CONFIG.scheduled.dot,
+  failed: STATUS_CONFIG.failed.dot,
 }
 
 export function StatusBadge({ status, small }: { status: Task['status']; small?: boolean }) {

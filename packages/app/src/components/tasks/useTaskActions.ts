@@ -47,6 +47,24 @@ export function useTaskActions(): TaskActionHandlers {
   const onRunNow = useCallback(async (task: Task) => {
     if (!task.chatId || !task.messageId) return
     try {
+      // A task carrying any terminal parent state (succeeded / cancelled /
+      // failed) must be reset to `pending` before a re-run: the status
+      // selector treats succeeded/cancelled as Done and the scheduler's
+      // promotion path in fireMessage only flips `pending → running`, so
+      // hitting Run on a failed/done card without a reset would either
+      // surface stale Done (parent unchanged) or skip the kanban-Active
+      // promotion (state guard refuses non-pending input). Key off
+      // `messageState` rather than `status` because `failed` is folded
+      // into the Open badge by the selector — the underlying state is
+      // still terminal and needs resetting.
+      const ms = task.messageState
+      if (ms === 'succeeded' || ms === 'cancelled' || ms === 'failed') {
+        await patchMessageMutation({
+          chatId: task.chatId,
+          messageId: task.messageId,
+          patch: { state: 'pending' },
+        }).unwrap()
+      }
       await runMessageMutation({
         chatId: task.chatId,
         messageId: task.messageId,
@@ -54,7 +72,7 @@ export function useTaskActions(): TaskActionHandlers {
     } catch (err) {
       toast.error('Run failed', { description: extractApiError(err) })
     }
-  }, [runMessageMutation])
+  }, [patchMessageMutation, runMessageMutation])
 
   const onPause = useCallback(async (task: Task) => {
     if (!task.chatId || !task.messageId) return

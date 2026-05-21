@@ -86,7 +86,7 @@ import {
 } from '@/lib/account-notifications'
 import { extractApiError } from '@/lib/api-error'
 
-function buildDefaultViewPath(wsId: string, defaultView: PrefsShape['defaultView']): string {
+export function buildDefaultViewPath(wsId: string, defaultView: PrefsShape['defaultView']): string {
   if (defaultView === 'new-chat') return buildPath(wsId, 'pinned', { chat: NEW_CHAT_ID })
   if (defaultView === 'desk') return buildPath(wsId, 'pinned')
   return buildPath(wsId, defaultView)
@@ -144,9 +144,32 @@ export default function App() {
   return (
     <Routes>
       <Route path="/w/:wsId/:view" element={<MustChangeGate><AppInner /></MustChangeGate>} />
+      <Route path="/w/:wsId" element={<MustChangeGate><WorkspaceDefaultRedirect /></MustChangeGate>} />
       <Route path="*" element={<MustChangeGate><AppBoot /></MustChangeGate>} />
     </Routes>
   )
+}
+
+/**
+ * Bare `/w/:wsId` URLs (no view segment) redirect to whatever the user
+ * picked as their default view in Settings → Preferences. Without this,
+ * the catch-all route would render the hub and the user would have to
+ * click their way back into the workspace they were already addressing.
+ */
+function WorkspaceDefaultRedirect() {
+  const { wsId = '' } = useParams<{ wsId: string }>()
+  const { defaultView, loaded: prefsLoaded } = usePrefs()
+  if (!prefsLoaded) {
+    return (
+      <TooltipProvider>
+        <Toaster position="bottom-right" />
+        <div className="h-dvh w-full flex items-center justify-center bg-muted/40">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground/60" />
+        </div>
+      </TooltipProvider>
+    )
+  }
+  return <Navigate to={buildDefaultViewPath(wsId, defaultView)} replace />
 }
 
 /**

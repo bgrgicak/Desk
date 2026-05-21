@@ -28,6 +28,7 @@ import {
   useDeleteMessageMutation,
   useGetAgentsQuery,
   useGetChatQuery,
+  useGetChatsQuery,
   useGetMessagesQuery,
   usePatchMessageMutation,
   usePostChatMessageMutation,
@@ -260,6 +261,16 @@ function TasksSection({
   const hasRealId = !!chatId && chatId !== NEW_CHAT_ID
   const { data: agents = [] } = useGetAgentsQuery()
   const { data: chat } = useGetChatQuery(chatId, { skip: !hasRealId })
+  // Sub-tasks anchored in this chat run inside their own thread chats —
+  // and the unread/running flags that drive the "Needs input" pill live
+  // on those thread chats, not on `chat`. Pull the workspace chat list
+  // so `toUiTask` can look up each task's thread chat by id. Without
+  // this, sub-task rows here never light up when the agent posts a
+  // reply, even though the Tasks board does.
+  const { currentData: workspaceChats } = useGetChatsQuery(
+    workspaceId ? { workspaceId } : undefined,
+    { skip: !workspaceId },
+  )
   const { currentData: tasksResp, isLoading } = useGetMessagesQuery(
     { chatId, kind: ['task'] },
     { skip: !hasRealId, refetchOnMountOrArgChange: true },
@@ -274,7 +285,13 @@ function TasksSection({
   // New-task sheet — pre-fills `chatId` so the created task lands here.
   const [sheetOpen, setSheetOpen] = useState(false)
 
-  const tasks: Task[] = (tasksResp?.items ?? []).map(m => toUiTask(m, agents, chat ? [chat] : []))
+  // Prefer the workspace chats list (contains thread chats) so
+  // `toUiTask` resolves unread/running off the thread chat for
+  // sub-tasks. Fall back to just the current chat when the workspace
+  // list hasn't loaded yet (or no workspace id) so non-threaded tasks
+  // still render correctly.
+  const chatsForLookup = workspaceChats ?? (chat ? [chat] : [])
+  const tasks: Task[] = (tasksResp?.items ?? []).map(m => toUiTask(m, agents, chatsForLookup))
 
   const goToTask = (task: Task) => {
     if (workspaceId) navigate(buildPath(workspaceId, 'tasks', { task: task.id }))

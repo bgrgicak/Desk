@@ -121,21 +121,32 @@ export async function dispatchSandbox(
 
     // Auto-fire policy for sandbox-issued tasks:
     //   - executeAt or cron present → scheduler fires when due. Leave it.
-    //   - Neither → manual/unscheduled task. The agent's intent in
-    //     spinning this off is "go do this now"; sitting in `pending`
-    //     until someone clicks Run defeats the purpose. Insert the
-    //     task_run row synchronously so the HTTP response reflects an
-    //     `active` status (the UI's status selector only marks a task
-    //     active when a child run is `running` — a fire-and-forget
-    //     would leave a perceptible `todo` window). Then fire the
-    //     exec in the background. The user-facing TasksPage composer
-    //     still has explicit todo/active control; only this agent
-    //     path defaults to active because there is no UI for the
-    //     agent to choose.
+    //   - Neither → unscheduled task. The agent's intent in spinning this
+    //     off is "go do this now"; the card must land on the board as
+    //     Active and stay Active until either the agent calls
+    //     `task complete` or the run propagates a terminal state via
+    //     afterTaskRun. Two things make that work:
+    //       1. Insert the task_run row synchronously so the HTTP response
+    //          reflects an active state immediately (the rich status
+    //          selector reads a running task_run as Active — without the
+    //          sync insert there's a perceptible Todo window).
+    //       2. Flip the parent task's state from `pending` to `running`
+    //          so Active sticks across the run-terminate gap. Without
+    //          this, when the run finishes the parent falls through the
+    //          status selector to `todo` (the "Open" badge) because no
+    //          run is in-flight and no schedule is set. With it, the
+    //          parent state itself reads as Active; afterTaskRun then
+    //          mirrors the run's terminal state onto the parent so the
+    //          user eventually sees Done / Failed instead of stale Active.
+    //     The user-facing TasksPage composer still has explicit
+    //     todo/active control via the kanban; only this agent path
+    //     defaults to running because there is no UI for the agent to
+    //     choose a column.
     const hasSchedule =
       (typeof anchorMessage.executeAt === "string" && anchorMessage.executeAt.length > 0) ||
       (typeof anchorMessage.cron === "string" && anchorMessage.cron.length > 0);
     let preStartedRun: Awaited<ReturnType<typeof runManager.beginTaskRun>> = null;
+    let activeAnchor = anchorMessage;
     if (!hasSchedule) {
       preStartedRun = await runManager.beginTaskRun(anchorMessage.id);
       if (!preStartedRun) {
@@ -148,6 +159,21 @@ export async function dispatchSandbox(
           { messageId: anchorMessage.id, chatId: sourceChatId },
           "beginTaskRun returned null — falling back to fireMessage",
         );
+      } else {
+        // Mirror the run-in-flight state on the parent so the kanban
+        // badge stays Active past the moment the task_run terminates.
+        // Guarded to `pending` so a concurrent user gesture that already
+        // moved the anchor (cancel, etc.) wins.
+        const promoted = await queries.messages.updateMessageIfState(
+          pool,
+          anchorMessage.id,
+          { state: "running" },
+          ["pending"],
+        );
+        if (promoted) {
+          activeAnchor = promoted;
+          emit({ type: "message.updated", payload: promoted });
+        }
       }
       runManager
         .fireMessage(anchorMessage.id, preStartedRun ? { preStartedRunId: preStartedRun.id } : {})
@@ -162,7 +188,7 @@ export async function dispatchSandbox(
     // createThreadShell sets thread_chat_id on the anchor row; reflect
     // that on the response so callers don't have to round-trip.
     sendJson(res, 201, {
-      message: { ...anchorMessage, threadChatId: threadChat.id },
+      message: { ...activeAnchor, threadChatId: threadChat.id },
       threadChat,
       parentChatId: sourceChatId,
       run: preStartedRun ?? undefined,
@@ -249,15 +275,23 @@ export async function dispatchSandbox(
     return true;
   }
 
-  // Sandbox task completion — lets an agent running inside a sub-task
-  // thread mark its work done AND deliver a result message back to the
-  // parent chat in one call. This is the "I'm finished with this side
-  // job, here's what I did" verb for spun-off sub-tasks.
+  // Sandbox task completion — marks a task done AND optionally delivers a
+  // result message back to the parent chat in one call. This is the
+  // "I'm finished with this side job, here's what I did" verb.
   //
-  // The agent only needs to pass its own current chat id (the thread
-  // chat); the server finds the anchor via `thread_chat_id`. Recurring
-  // (cron) tasks are rejected — they're not the right shape for
-  // "complete" (use cancel to stop a recurring task entirely).
+  // Two ways to identify the task:
+  //   - `messageId`: the task anchor's id. Use this when the agent isn't
+  //     sitting inside the task's thread chat (e.g. completing from the
+  //     source chat, or from an unrelated interactive run that has the
+  //     anchor id in context).
+  //   - `chatId`: the task's dedicated thread chat id. The server walks
+  //     back to the anchor via `thread_chat_id`. This is the path the
+  //     agent uses when it IS inside the thread.
+  // Exactly one of the two is required; if both are supplied, `messageId`
+  // wins and the chatId is ignored.
+  //
+  // Recurring (cron) tasks are rejected — they're not the right shape
+  // for "complete" (use cancel to stop a recurring task entirely).
   //
   // When `message` is supplied, it's posted as a `role='agent'`
   // `kind='chat'` message in the *parent* chat, with `parentId` pointing
@@ -268,22 +302,37 @@ export async function dispatchSandbox(
     const tokenHeader = req.headers["x-desk-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
     const { agent } = await authenticateSandboxToken(pool, token);
-    const body = await parseBody(req) as { chatId?: unknown; message?: unknown };
-    if (typeof body.chatId !== "string" || !body.chatId) {
-      throw new ValidationError("Missing chatId");
+    const body = await parseBody(req) as { chatId?: unknown; messageId?: unknown; message?: unknown };
+    const messageIdArg = typeof body.messageId === "string" && body.messageId ? body.messageId : null;
+    const chatIdArg = typeof body.chatId === "string" && body.chatId ? body.chatId : null;
+    if (!messageIdArg && !chatIdArg) {
+      throw new ValidationError("Missing messageId or chatId — pass one to identify the task");
     }
-    const threadChatId = body.chatId;
-    await requireOwnedChat(pool, threadChatId, agent.userId);
 
-    const anchor = await queries.messages.findAnchorForThreadChat(pool, threadChatId);
-    if (!anchor) {
-      throw new NotFoundError(
-        `No task anchor for chat: ${threadChatId} — task complete can only be called from inside a task thread`,
-      );
-    }
+    const anchor = await (async () => {
+      if (messageIdArg) {
+        const found = await queries.messages.findById(pool, messageIdArg);
+        if (!found) {
+          throw new NotFoundError(`Task not found: ${messageIdArg}`);
+        }
+        // Validate ownership via the anchor's own chat — the agent must own
+        // the chat the task lives in, not whatever chat it's calling from.
+        await requireOwnedChat(pool, found.chatId, agent.userId);
+        return found;
+      }
+      const threadChatId = chatIdArg!;
+      await requireOwnedChat(pool, threadChatId, agent.userId);
+      const found = await queries.messages.findAnchorForThreadChat(pool, threadChatId);
+      if (!found) {
+        throw new NotFoundError(
+          `No task anchor for chat: ${threadChatId} — pass messageId to complete a task from outside its thread`,
+        );
+      }
+      return found;
+    })();
     if (anchor.kind !== "task") {
       throw new ValidationError(
-        `Anchor for chat ${threadChatId} is not a task (kind=${anchor.kind}); task complete is for sub-tasks only`,
+        `Message ${anchor.id} is not a task (kind=${anchor.kind}); task complete is for tasks only`,
       );
     }
     if (anchor.cron && anchor.cron.trim().length > 0) {
@@ -585,18 +634,27 @@ export async function dispatchSandbox(
       throw new ValidationError("Sandbox run is no longer active");
     }
     const runChatId = runMessage.chatId;
-    if (body.chatId !== undefined && (typeof body.chatId !== "string" || body.chatId !== runChatId)) {
-      throw new ValidationError("Sandbox runs can only attach artifacts to their own chat");
+    // Target chat defaults to the run's own chat, but the agent can also
+    // surface artifacts in any other chat it owns within the same
+    // workspace — e.g. a task thread or a sibling chat. The file path can
+    // reference any chat in the workspace (the filesystem check below
+    // catches paths that resolve outside the workspace tree).
+    const targetChatId =
+      typeof body.chatId === "string" && body.chatId.length > 0
+        ? body.chatId
+        : runChatId;
+    if (body.chatId !== undefined && typeof body.chatId !== "string") {
+      throw new ValidationError("chatId must be a string");
     }
     if (runMessage.kind === "summary" || runMessage.content.type === "summary_request") {
       throw new ValidationError("Summary runs cannot attach artifacts");
     }
-    const chat = await requireOwnedChat(pool, runChatId, agent.userId);
+    const chat = await requireOwnedChat(pool, targetChatId, agent.userId);
     if (session.workspaceId && chat.workspaceId !== session.workspaceId) {
-      throw new NotFoundError(`Chat not found: ${runChatId}`);
+      throw new NotFoundError(`Chat not found: ${targetChatId}`);
     }
 
-    const message = await chatRoutes.attachArtifactRef(storage, { ...body, chatId: runChatId }, emit, {
+    const message = await chatRoutes.attachArtifactRef(storage, { ...body, chatId: targetChatId }, emit, {
       agentId: agent.id,
       model: agent.model,
     });

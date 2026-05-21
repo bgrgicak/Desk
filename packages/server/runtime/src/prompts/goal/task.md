@@ -73,8 +73,12 @@ Default behaviors for task work:
   the Tasks board, and a one-word body leaves the future task with no
   context.
 - For one-shot reminders, pass `--at <iso>`. For recurring follow-ups, pass
-  `--cron <expr>`. For manual TODOs the user will run themselves, pass
-  neither.
+  `--cron <expr>`. **Default (no `--at`/`--cron`) = run now: the server
+  auto-fires the task as soon as it lands and keeps the card Active
+  until you call `desk-agent task complete`.** There is no "passive TODO"
+  flag — agents always create work that's already running. If the user
+  literally wants a card to sit untouched on the kanban they create it
+  from the Tasks page composer themselves; you can't.
 - When the user asks for status, summarize what's pending, recently
   completed, or overdue — don't list every historic task.
 - Keep titles short and verb-led ("Review PR #42", "Email finance team").

@@ -208,9 +208,17 @@ describe("POST /sandbox/messages", () => {
     expect(res.body.run.chatId).toBe(threadChatId);
     expect(res.body.run.state).toBe("running");
 
-    // And the DB must reflect the same row synchronously — no
-    // poll-and-retry: the task_run exists by the time the response
-    // returns. Use a single, immediate query (no setTimeout loop).
+    // And the parent anchor must also reflect running — that's what keeps
+    // the kanban Active badge sticky past the moment the task_run
+    // terminates. Without this promotion the card would dip back to
+    // "Open" the instant the run finished and the agent had not yet
+    // called task complete.
+    expect(res.body.message.state).toBe("running");
+
+    // And the DB must reflect the same rows synchronously — no
+    // poll-and-retry: the task_run exists and the parent is `running`
+    // by the time the response returns. Use a single, immediate query
+    // (no setTimeout loop).
     const { rows } = await pool.query<{ count: number; state: string }>(
       `SELECT COUNT(*) AS count, MIN(state) AS state FROM messages
         WHERE chat_id = ? AND kind = 'task_run' AND parent_id = ?`,
@@ -218,6 +226,118 @@ describe("POST /sandbox/messages", () => {
     );
     expect(rows[0].count).toBe(1);
     expect(rows[0].state).toBe("running");
+
+    const { rows: anchorRows } = await pool.query<{ state: string }>(
+      `SELECT state FROM messages WHERE id = ?`,
+      [anchorId],
+    );
+    expect(anchorRows[0].state).toBe("running");
+  });
+
+  it("propagates a successful task_run's terminal state onto the agent-authored unscheduled parent", async () => {
+    // The fake execRun resolves with exitCode=0; afterTaskRun must mirror
+    // that onto the parent (state='succeeded') so the kanban moves the
+    // card out of Active and into Done without requiring the agent to
+    // call task complete. Sub-tasks where the agent forgot to close out
+    // explicitly should still land in Done, not stay perpetually Active.
+    const token = await issueSandboxToken();
+    const res = await sandboxPost({
+      chatId: sourceChatId,
+      title: "Run that succeeds",
+      content: "Print ok and exit.",
+    }, token);
+    expect(res.status).toBe(201);
+    const anchorId = res.body.message.id as string;
+
+    // Poll briefly: fireMessage / afterTaskRun run on the background
+    // catch path of the auto-fire, so the response returns before the
+    // run-terminate transitions land.
+    let anchorState: string | null = null;
+    for (let i = 0; i < 100; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      const { rows } = await pool.query<{ state: string }>(
+        `SELECT state FROM messages WHERE id = ?`,
+        [anchorId],
+      );
+      anchorState = rows[0]?.state ?? null;
+      if (anchorState === "succeeded") break;
+    }
+    expect(anchorState).toBe("succeeded");
+  });
+
+  it("propagates a failed task_run's terminal state onto the agent-authored unscheduled parent", async () => {
+    // Same contract as the success case, but for failure: the user must
+    // see something other than the deceptive "Open" badge that the
+    // previous policy left behind. We swap in a per-test runManager whose
+    // execRunFn returns non-zero so finalizeExecution writes
+    // state='failed' on the task_run and afterTaskRun mirrors that onto
+    // the parent. statusText then renders "Failed" while the badge stays
+    // Open (by design — failure is internal, the user retries from the
+    // same column).
+    const failingRunManager = createRunManager({
+      pool,
+      execRunFn: async (runId, _agentId, _prompt, onLog) => {
+        await onLog({ runId, seq: 0, kind: "stderr", payload: "boom" });
+        return { exitCode: 1 };
+      },
+    });
+    const failingServer = createApp({ pool, storage: { pool, home }, runManager: failingRunManager });
+    await new Promise<void>((resolve) => failingServer.listen(0, "127.0.0.1", resolve));
+    const failingPort = (failingServer.address() as net.AddressInfo).port;
+    try {
+      const token = await issueSandboxToken();
+      const raw = JSON.stringify({
+        chatId: sourceChatId,
+        title: "Run that fails",
+        content: "Exit non-zero.",
+      });
+      const res = await new Promise<{ status: number; body: any }>((resolve, reject) => {
+        const req = http.request(
+          {
+            hostname: "127.0.0.1",
+            port: failingPort,
+            path: "/sandbox/messages",
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Content-Length": Buffer.byteLength(raw),
+              "X-Desk-Sandbox-Token": token,
+            },
+          },
+          (response) => {
+            const chunks: Buffer[] = [];
+            response.on("data", (c) => chunks.push(c as Buffer));
+            response.on("end", () => {
+              const text = Buffer.concat(chunks).toString("utf8");
+              try {
+                resolve({ status: response.statusCode ?? 0, body: text ? JSON.parse(text) : null });
+              } catch (e) {
+                reject(e);
+              }
+            });
+          },
+        );
+        req.on("error", reject);
+        req.write(raw);
+        req.end();
+      });
+      expect(res.status).toBe(201);
+      const anchorId = res.body.message.id as string;
+
+      let anchorState: string | null = null;
+      for (let i = 0; i < 100; i++) {
+        await new Promise((r) => setTimeout(r, 20));
+        const { rows } = await pool.query<{ state: string }>(
+          `SELECT state FROM messages WHERE id = ?`,
+          [anchorId],
+        );
+        anchorState = rows[0]?.state ?? null;
+        if (anchorState === "failed") break;
+      }
+      expect(anchorState).toBe("failed");
+    } finally {
+      failingServer.close();
+    }
   });
 
   it("rejects requests with no chatId — agents must always anchor tasks to a chat", async () => {
@@ -560,12 +680,68 @@ describe("POST /sandbox/messages/complete", () => {
     expect(res.body.message).toMatch(/No task anchor/);
   });
 
-  it("rejects requests with no chatId", async () => {
+  it("rejects requests with neither chatId nor messageId", async () => {
     const token = await issueSandboxToken();
     const res = await sandboxPost({
       message: "no chat",
     }, token, "/sandbox/messages/complete");
     expect(res.status).toBe(400);
-    expect(res.body.message).toMatch(/Missing chatId/);
+    expect(res.body.message).toMatch(/Missing messageId or chatId/);
+  });
+
+  // Lets the agent complete a task from outside its thread — e.g. from
+  // the source chat or an unrelated interactive run where the agent has
+  // the anchor id in context but isn't sitting inside the thread chat.
+  it("completes a task by messageId from any chat (no thread chat required)", async () => {
+    const token = await issueSandboxToken();
+    const spawned = await spawnSubTask(token);
+
+    const before = await pool.query<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE chat_id = ?",
+      [spawned.parentChatId],
+    );
+    const res = await sandboxPost({
+      messageId: spawned.message.id,
+      message: "Done — closed via messageId path.",
+    }, token, "/sandbox/messages/complete");
+    expect(res.status).toBe(200);
+
+    expect(res.body.task.id).toBe(spawned.message.id);
+    expect(res.body.task.state).toBe("succeeded");
+    expect(res.body.parentChatId).toBe(spawned.parentChatId);
+    expect(res.body.report).toBeTruthy();
+    expect(res.body.report.chatId).toBe(spawned.parentChatId);
+    expect(res.body.report.parentId).toBe(spawned.message.id);
+
+    const after = await pool.query<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE chat_id = ?",
+      [spawned.parentChatId],
+    );
+    expect(after.rows[0].count).toBe(before.rows[0].count + 1);
+  });
+
+  it("messageId path: 404s when the task id doesn't exist", async () => {
+    const token = await issueSandboxToken();
+    const res = await sandboxPost({
+      messageId: "msg_does_not_exist",
+    }, token, "/sandbox/messages/complete");
+    expect(res.status).toBe(404);
+    expect(res.body.message).toMatch(/Task not found/);
+  });
+
+  it("messageId path: rejects when the message isn't a task", async () => {
+    const token = await issueSandboxToken();
+    // A plain chat message in the source chat — not a task anchor.
+    const plainId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, kind, content) VALUES (?, ?, ?, ?, ?)`,
+      [plainId, sourceChatId, "user", "chat", JSON.stringify({ type: "text", text: "hi" })],
+    );
+
+    const res = await sandboxPost({
+      messageId: plainId,
+    }, token, "/sandbox/messages/complete");
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/is not a task/);
   });
 });

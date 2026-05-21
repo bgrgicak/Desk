@@ -2,22 +2,26 @@ import { postJson } from "../client.js";
 import { CliError, parseFlags } from "../errors.js";
 import { output } from "../index.js";
 
-export const usage = "desk-agent task complete --chat <thread-chat-id> [--message <text>]";
+export const usage =
+  "desk-agent task complete (--chat <thread-chat-id> | --message-id <anchor-id>) [--message <text>]";
 
 export const help = `\
-desk-agent task complete — mark a sub-task done and (optionally) deliver a
+desk-agent task complete — mark a task done and (optionally) deliver a
 result message back to the parent thread.
 
-This is the "I'm finished with this side job, here's how it went" verb. The
-agent calls it from inside its own task thread; the server finds the task
-anchor in the parent chat via the thread link, flips it to 'succeeded',
-and (when --message is given) posts that message in the parent chat
-attributed to this agent.
+This is the "I'm finished, here's how it went" verb. The server flips the
+task anchor to 'succeeded' and (when --message is given) posts that
+message in the parent chat attributed to this agent.
 
-Required:
-  --chat <id>            The agent's current chat (the sub-task thread).
-                         The server resolves the anchor in the parent chat
-                         from this — you don't have to pass anchor ids.
+Identify the task with exactly one of:
+  --chat <id>            The agent's current chat, when it IS the task's
+                         dedicated thread. The server walks back to the
+                         anchor in the parent chat via the thread link.
+  --message-id <id>      The task anchor's message id. Use this when the
+                         agent isn't inside the thread chat — e.g. it's
+                         completing a task from the source chat or from
+                         an unrelated interactive run that has the anchor
+                         id in context.
 
 Optional:
   --message <text>       Short outcome to post back to the parent chat —
@@ -34,11 +38,11 @@ Already-terminal tasks (succeeded/cancelled/failed) cannot be completed
 again — the call returns 400.
 
 Examples:
-  # Bare completion (no report-back)
+  # From inside the task's thread chat
   desk-agent task complete --chat ch_thread_xyz
 
-  # Completion with a parent-thread report
-  desk-agent task complete --chat ch_thread_xyz \\
+  # From anywhere, when you have the anchor id
+  desk-agent task complete --message-id msg_anchor_abc \\
       --message "Audited 12 PRs. 3 need follow-up: #145, #161, #163."
 
 Exit codes:
@@ -55,10 +59,22 @@ export async function run(argv: string[]): Promise<void> {
 
   const { flags, positionals } = parseFlags(argv, [], []);
   const chatId = flags["chat"];
+  const messageId = flags["message-id"];
   const message = flags["message"];
 
-  if (typeof chatId !== "string" || !chatId) {
-    throw new CliError("INVALID_ARGS", "Missing --chat <id>. Usage:\n" + usage);
+  const hasChat = typeof chatId === "string" && chatId.length > 0;
+  const hasMessageId = typeof messageId === "string" && messageId.length > 0;
+  if (!hasChat && !hasMessageId) {
+    throw new CliError(
+      "INVALID_ARGS",
+      "Pass either --chat <thread-id> or --message-id <anchor-id>. Usage:\n" + usage,
+    );
+  }
+  if (hasChat && hasMessageId) {
+    throw new CliError(
+      "INVALID_ARGS",
+      "Pass --chat or --message-id, not both. Usage:\n" + usage,
+    );
   }
   if (positionals.length > 0) {
     throw new CliError(
@@ -67,7 +83,9 @@ export async function run(argv: string[]): Promise<void> {
     );
   }
 
-  const body: Record<string, unknown> = { chatId };
+  const body: Record<string, unknown> = hasMessageId
+    ? { messageId }
+    : { chatId };
   if (typeof message === "string" && message.trim().length > 0) {
     body.message = message;
   }

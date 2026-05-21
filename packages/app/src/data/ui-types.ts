@@ -159,12 +159,16 @@ export interface Task {
   title?: string
   description?: string
   agentName: string
-  /** `todo` = idle (created, not picked up). `active` = in progress
-   *  (picked up by the user or the AI / a run is executing).
-   *  `needs_input` = the AI paused awaiting the user's reply (the AI
-   *  moves it here and back). `scheduled` = has a future run.
-   *  `complete` = done/cancelled. */
-  status: 'todo' | 'active' | 'needs_input' | 'complete' | 'scheduled'
+  /** `todo` = idle (created, not picked up, OR last agent run errored —
+   *  failure is internal-only and surfaces as Open in the UI so the
+   *  user retries from the same column instead of learning a new
+   *  status). `active` = in progress (picked up by the user or the AI
+   *  / a run is executing / parent state is `running`). `needs_input`
+   *  = the AI paused awaiting the user's reply (the AI moves it here
+   *  and back). `scheduled` = has a future run. `complete` =
+   *  done/cancelled. `failed` = a run terminated in error and no
+   *  retry has succeeded since. */
+  status: 'todo' | 'active' | 'needs_input' | 'complete' | 'scheduled' | 'failed'
   statusText: string
   priority?: 'low' | 'medium' | 'high' | 'highest'
   assigneeId?: string

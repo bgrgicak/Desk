@@ -100,10 +100,12 @@ export function TaskPanelActionsMenu({
               {initialSchedule ? 'Edit schedule' : 'Schedule'}
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem onClick={onMarkDone} disabled={isDone}>
-            <CheckCircle2 className="h-4 w-4 mr-2" />
-            {isDone ? 'Done' : 'Mark as done'}
-          </DropdownMenuItem>
+          {!isDone && (
+            <DropdownMenuItem onClick={onMarkDone}>
+              <CheckCircle2 className="h-4 w-4 mr-2" />
+              Mark as done
+            </DropdownMenuItem>
+          )}
           {onDelete && (
             <DropdownMenuItem onClick={onDelete}>
               <Trash2 className="h-4 w-4 mr-2" />

@@ -353,8 +353,23 @@ export function createRunManager(opts: RunManagerOptions) {
         if (!run) return { fired: false, childIds: [] };
         runId = run.id;
         emit({ type: "message.appended", payload: run, workspaceId: eventWorkspaceId });
-        // The task_run child is the authoritative agent-owned Active signal. The
-        // parent is emitted only when a lifecycle policy below changes it.
+        // The task_run child is the authoritative agent-owned Active signal.
+        // For agent-authored unscheduled tasks (sandbox sub-tasks), also flip
+        // the parent state to `running` so the kanban badge stays Active past
+        // the run-terminate gap. Covers manual re-runs from the board (e.g.
+        // retrying a failed sub-task) and any path where fireMessage was
+        // entered without a pre-started run; the dispatcher's auto-fire
+        // covers the inline case. Guarded to `pending` so a concurrent
+        // user-issued cancel (state='cancelled') wins.
+        if (msg.role === "agent" && isUnscheduledTask(msg)) {
+          const promoted = await queries.messages.updateMessageIfState(
+            pool,
+            messageId,
+            { state: "running" },
+            ["pending"],
+          );
+          if (promoted) emit({ type: "message.updated", payload: promoted });
+        }
       }
     } else {
       const claimed = await queries.messages.claimPending(pool, messageId);
@@ -825,6 +840,19 @@ export function createRunManager(opts: RunManagerOptions) {
    * occurrence and stay pending; successful one-shot tasks transition to done
    * and clear execute_at. Failed one-shot runs clear the missed occurrence but
    * keep the parent task pending so an error does not count as completion.
+   *
+   * Unscheduled agent-authored tasks are sandbox-issued sub-tasks: the
+   * agent ran `desk-agent task schedule` to spin off work, the auto-fire
+   * path in /sandbox/messages already promoted the parent to `running`
+   * (so the kanban badge reads Active), and now the run has ended. Mirror
+   * the run's terminal state onto the parent so the card lands in Done /
+   * Failed instead of stale Active. Guarded against an existing terminal
+   * state so a `task complete` that already ran from inside the agent
+   * (race: agent posts complete, then process exits) is not overwritten.
+   *
+   * Unscheduled *user-authored* tasks remain sticky on the kanban — the
+   * user placed them in a column explicitly, and a single agent run
+   * should not silently move them out of it.
    */
   async function afterTaskRun(
     task: Message,
@@ -858,7 +886,17 @@ export function createRunManager(opts: RunManagerOptions) {
       if (updated) emit({ type: "message.updated", payload: updated });
       return;
     }
-    if (isUnscheduledTask(task)) return;
+    if (isUnscheduledTask(task)) {
+      if (task.role !== "agent") return;
+      const updated = await queries.messages.updateMessageIfState(
+        pool,
+        task.id,
+        { state: terminal },
+        ["pending", "running"],
+      );
+      if (updated) emit({ type: "message.updated", payload: updated });
+      return;
+    }
     const updated = await queries.messages.updateMessage(pool, task.id, {
       state: terminal === "failed" ? "pending" : terminal,
       executeAt: null,

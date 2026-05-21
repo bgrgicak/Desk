@@ -58,7 +58,9 @@ export function RoomTopBarActions({
           task={task!}
           onMarkDone={() => void taskActions!.onMarkDone(task!)}
           onRunNow={
-            task!.status === 'scheduled' || task!.status === 'todo'
+            task!.status === 'scheduled' ||
+            task!.status === 'todo' ||
+            task!.status === 'complete'
               ? () => void taskActions!.onRunNow(task!)
               : undefined
           }

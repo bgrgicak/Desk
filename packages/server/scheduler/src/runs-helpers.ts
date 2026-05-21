@@ -300,10 +300,13 @@ export function errorLogLines(err: unknown): string[] {
 }
 
 export function isUnscheduledTask(task: Message): boolean {
-  // Unscheduled tasks are kanban cards first and execution prompts second.
-  // A completed agent run is history on a task_run child; it must not
-  // silently move the parent card out of Todo/Active regardless of who
-  // authored the parent task.
+  // True for any task with no schedule. User-authored cards remain kanban
+  // cards (sticky column, runs never auto-close them); agent-authored
+  // sub-tasks created via `desk-agent task schedule` are "go do this now"
+  // work items and the afterTaskRun policy mirrors their run's terminal
+  // state onto the parent so they don't appear stuck in Active after the
+  // agent finishes. The role distinction is owned by afterTaskRun; this
+  // helper only answers the schedule question.
   return task.kind === "task" && !task.executeAt && !task.cron;
 }
 

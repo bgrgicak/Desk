@@ -545,14 +545,19 @@ describe("memory injection", () => {
 });
 
 describe("Desk reference skills", () => {
-  it("publishes current-workspace artifact attachment guidance", () => {
+  it("publishes cross-chat artifact attachment guidance", () => {
+    // The skill was rewired to allow attaching from any chat in the
+    // same workspace (a task thread surfacing an artifact back into
+    // the source chat). Assert the new contract: --chat optional,
+    // cross-chat cross-workspace paths allowed within one workspace,
+    // failure surfaces inline.
     const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-cli-chat-attach-artifact");
     const body = skill?.body() ?? "";
 
     expect(skill).toBeTruthy();
-    expect(body).toContain("Only pass paths that exist in the current chat/workspace");
-    expect(body).toContain("library hit should already be scoped there");
-    expect(body).toContain("no attachable\ncurrent-workspace path exists");
+    expect(body).toContain("`--chat` is optional and defaults to the chat this run is in");
+    expect(body).toContain("the source chat must be in\n  the same workspace as the target chat");
+    expect(body).toContain("If the command fails or no attachable path exists, report the\nlimitation inline");
   });
 
   it("publishes a persistence playbook", () => {

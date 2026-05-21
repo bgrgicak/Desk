@@ -164,8 +164,12 @@ export const TaskCard = memo(function TaskCard({
   const nextRunProgress = showNextRun ? nextRunProgressFor(task) : 0
 
   const hasMenu = !!(onRunNow || onPause || onDelete || onSchedule)
-  // Don't let footer controls trigger the card-level open.
+  // Don't let footer controls trigger the card-level open. The card is
+  // an `<a>` (react-router Link), so we also preventDefault to stop the
+  // anchor's native navigation — stopPropagation alone leaves the
+  // browser's default action intact and the task view opens anyway.
   const stop = (fn: () => void) => (e: React.MouseEvent) => {
+    e.preventDefault()
     e.stopPropagation()
     fn()
   }
@@ -278,7 +282,10 @@ export const TaskCard = memo(function TaskCard({
                     variant="outline"
                     className="h-8 w-8 -ml-px rounded-l-none"
                     aria-label="More task actions"
-                    onClick={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                    }}
                     data-testid={`task-menu-${task.id}`}
                   >
                     <ChevronDown className="h-4 w-4" />

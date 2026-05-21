@@ -35,8 +35,8 @@ describe("desk-agent task complete", () => {
     });
   });
 
-  it("rejects missing --chat", async () => {
-    await expect(run([])).rejects.toThrow(/Missing --chat/);
+  it("rejects when neither --chat nor --message-id is given", async () => {
+    await expect(run([])).rejects.toThrow(/--chat .* or --message-id/);
     expect(postJsonMock).not.toHaveBeenCalled();
   });
 
@@ -54,5 +54,32 @@ describe("desk-agent task complete", () => {
     expect(postJsonMock).toHaveBeenCalledWith("/sandbox/messages/complete", {
       chatId: "ch_thread_xyz",
     });
+  });
+
+  // --message-id is the escape hatch for agents that aren't sitting inside
+  // the task's thread chat — they identify the task by its anchor id.
+  it("posts messageId when --message-id is given", async () => {
+    await run(["--message-id", "msg_anchor_abc"]);
+    expect(postJsonMock).toHaveBeenCalledWith("/sandbox/messages/complete", {
+      messageId: "msg_anchor_abc",
+    });
+  });
+
+  it("forwards --message alongside --message-id", async () => {
+    await run([
+      "--message-id", "msg_anchor_abc",
+      "--message", "Brief written; closing out.",
+    ]);
+    expect(postJsonMock).toHaveBeenCalledWith("/sandbox/messages/complete", {
+      messageId: "msg_anchor_abc",
+      message: "Brief written; closing out.",
+    });
+  });
+
+  it("rejects passing both --chat and --message-id", async () => {
+    await expect(
+      run(["--chat", "ch_a", "--message-id", "msg_b"]),
+    ).rejects.toThrow(/not both/);
+    expect(postJsonMock).not.toHaveBeenCalled();
   });
 });

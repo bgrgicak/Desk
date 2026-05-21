@@ -966,7 +966,12 @@ execRunFn: async () => ({ exitCode: 1 }),
     expect(runs[0].state).toBe("succeeded");
   });
 
-  it("agent-created unscheduled task: direct scheduler fire does not move the parent", async () => {
+  it("agent-created unscheduled task: direct scheduler fire mirrors the run state onto the parent", async () => {
+    // Sandbox sub-tasks are agent-authored. The auto-fire flow promotes
+    // the parent to `running` so the kanban card lands on Active, and
+    // afterTaskRun mirrors the run's terminal state onto the parent so
+    // it doesn't get stuck Active after the run finishes. User-authored
+    // unscheduled tasks remain sticky — covered by the next test.
     const mgr = createRunManager({
       pool,
       execRunFn: async (_id, _a, _p, onLog) => {
@@ -984,7 +989,7 @@ execRunFn: async () => ({ exitCode: 1 }),
     await mgr.fireMessage(taskId);
 
     const parent = await queries.messages.findById(pool, taskId);
-    expect(parent?.state).toBe("pending");
+    expect(parent?.state).toBe("succeeded");
     expect(parent?.executeAt).toBeUndefined();
 
     const runs = await listTaskRuns(taskId);
