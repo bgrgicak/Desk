@@ -367,7 +367,7 @@ export function createApp(opts: AppOptions): Server {
       if (handled) return;
     }
 
-    // /apps/* surface — covers storage, chat/library issue+delete,
+    // /apps/* surface — covers storage, chat/library/global issue+delete,
     // and workspace-scoped dist serving.  These paths intentionally
     // bypass requireAuth; each branch enforces its own auth (Bearer
     // for issue/DELETE, HttpOnly app-token cookie for static dist).

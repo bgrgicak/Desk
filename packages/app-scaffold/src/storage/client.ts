@@ -25,6 +25,19 @@ export function getStorageClient(): StorageClient {
   return window.desk.storage
 }
 
+/**
+ * Posts a chat message on behalf of the iframe — used by fragments that ask
+ * the user a structured question via UI (yes/no, radio, checkbox, form).
+ * Requires the `chats.write` capability. The text lands in the chat exactly
+ * as typed, so keep it short and structured (`"Yes"`, `"red, blue"`, etc.).
+ */
+export interface ChatBridgeClient {
+  sendMessage(
+    text: string,
+    opts?: { artifactRefMessageId?: string },
+  ): Promise<unknown>
+}
+
 declare global {
   interface Window {
     desk?: {
@@ -32,6 +45,7 @@ declare global {
       chatId: string
       capabilities: string[]
       storage?: StorageClient
+      chat?: ChatBridgeClient
     }
   }
 }

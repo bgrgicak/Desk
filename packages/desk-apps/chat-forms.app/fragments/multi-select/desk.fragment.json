@@ -1,0 +1,23 @@
+{
+  "name": "multi-select",
+  "description": "Renders a question with N checkbox options. Agents attach with --param question=\"...\" --param options=\"a,b,c\" to ask the user to select zero or more options via UI instead of free-text.",
+  "capabilities": ["chats.write"],
+  "params": {
+    "question": {
+      "type": "string",
+      "description": "The question to display."
+    },
+    "options": {
+      "type": "string",
+      "description": "Comma-separated list of option labels, or a JSON-encoded string array."
+    },
+    "min": {
+      "type": "number",
+      "description": "Minimum number of selections required to enable Submit. Defaults to 1."
+    },
+    "max": {
+      "type": "number",
+      "description": "Maximum number of selections allowed (advisory; not currently enforced in UI)."
+    }
+  }
+}

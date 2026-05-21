@@ -33,6 +33,7 @@ interface IssuedAppSession {
 type AppPreviewProps =
   | { scope: 'chat'; chatId: string; appName: string; fragment?: string; params?: Record<string, string>; variant?: AppPreviewVariant }
   | { scope: 'library'; appName: string; appPath?: string; workspaceId?: string; fragment?: string; params?: Record<string, string>; variant?: AppPreviewVariant }
+  | { scope: 'global'; chatId: string; appName: string; fragment?: string; params?: Record<string, string>; variant?: AppPreviewVariant }
 
 export type AppPreviewVariant = 'detail' | 'inline'
 
@@ -45,15 +46,18 @@ function appBasePathFromSessionUrl(rawUrl: string): string {
 async function issueAppSession(props: AppPreviewProps): Promise<IssuedAppSession> {
   const token = getSessionToken()
   if (!token) throw new Error('Not signed in')
-  const url = props.scope === 'chat'
-    ? `/api/apps/chat/${encodeURIComponent(props.chatId)}/${encodeURIComponent(props.appName)}/issue`
-    : (() => {
-        const params = new URLSearchParams()
-        if (props.workspaceId) params.set('workspaceId', props.workspaceId)
-        if (props.appPath) params.set('path', props.appPath)
-        const qs = params.toString()
-        return `/api/apps/library/${encodeURIComponent(props.appName)}/issue${qs ? `?${qs}` : ''}`
-      })()
+  let url: string
+  if (props.scope === 'chat') {
+    url = `/api/apps/chat/${encodeURIComponent(props.chatId)}/${encodeURIComponent(props.appName)}/issue`
+  } else if (props.scope === 'global') {
+    url = `/api/apps/global/${encodeURIComponent(props.chatId)}/${encodeURIComponent(props.appName)}/issue`
+  } else {
+    const params = new URLSearchParams()
+    if (props.workspaceId) params.set('workspaceId', props.workspaceId)
+    if (props.appPath) params.set('path', props.appPath)
+    const qs = params.toString()
+    url = `/api/apps/library/${encodeURIComponent(props.appName)}/issue${qs ? `?${qs}` : ''}`
+  }
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -89,17 +93,23 @@ export function AppPreview(props: AppPreviewProps) {
   const initialHeight = variant === 'inline' ? 240 : 640
   const appPath = props.scope === 'library' ? props.appPath : undefined
   const workspaceId = props.scope === 'library' ? props.workspaceId : undefined
-  const chatId = props.scope === 'chat' ? props.chatId : null
+  const chatId = props.scope === 'chat' || props.scope === 'global' ? props.chatId : null
   const fragment = props.fragment ?? null
   const paramsKey = props.params ? JSON.stringify(props.params) : ''
   const [session, setSession] = useState<IssuedAppSession | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [reloadKey, setReloadKey] = useState(0)
+  // Counter that the error-state Retry button increments to force a fresh
+  // `issueAppSession` round-trip without remounting the component.
+  const [retryToken, setRetryToken] = useState(0)
   const [frameHeight, setFrameHeight] = useState(initialHeight)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
-  const getMaxFrameHeight = () => variant === 'inline'
-    ? Math.min(Math.floor(window.innerHeight * 0.6), 500)
-    : Math.floor(window.innerHeight * 0.85)
+  // Cap frame height at 85% of the viewport for both variants. The content
+  // inside an inline fragment drives its own height via the resize bridge;
+  // we only need a ceiling so a runaway fragment can't push the chat
+  // composer off-screen. The previous 500px hard cap was too tight for
+  // multi-step wizards and produced an inner scrollbar even when the
+  // fragment's natural height would have fit fine.
+  const getMaxFrameHeight = () => Math.floor(window.innerHeight * 0.85)
 
   useEffect(() => {
     let cancelled = false
@@ -116,11 +126,11 @@ export function AppPreview(props: AppPreviewProps) {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.scope, chatId, appName, appPath, workspaceId, fragment, paramsKey, reloadKey])
+  }, [props.scope, chatId, appName, appPath, workspaceId, fragment, paramsKey, retryToken])
 
   useEffect(() => {
     setFrameHeight(initialHeight)
-  }, [initialHeight, reloadKey])
+  }, [initialHeight])
 
   useEffect(() => {
     const onResize = () => {
@@ -175,8 +185,15 @@ export function AppPreview(props: AppPreviewProps) {
       style={{ height: frameHeight }}
     />
   ) : error ? (
-    <div className="flex items-center justify-center px-4" style={{ height: frameHeight }}>
+    <div className="flex flex-col items-center justify-center gap-2 px-4 text-center" style={{ height: frameHeight }}>
       <p className="text-sm text-destructive">Failed to load app: {error}</p>
+      <button
+        type="button"
+        onClick={() => setRetryToken((n) => n + 1)}
+        className="text-xs text-muted-foreground underline hover:text-foreground"
+      >
+        Retry
+      </button>
     </div>
   ) : (
     <div className="flex items-center justify-center text-muted-foreground" style={{ height: frameHeight }}>
@@ -186,25 +203,11 @@ export function AppPreview(props: AppPreviewProps) {
   );
 
   if (variant === 'inline') {
-    return (
-      <div className="w-full min-w-0 max-w-full overflow-hidden rounded-lg border bg-background sm:max-w-[480px]">
-        <div className="flex items-center justify-between gap-2 border-b px-3 py-2 text-xs">
-          <span className="truncate font-medium">{fragment ? `${appName}/${fragment}` : appName}</span>
-          <button
-            type="button"
-            onClick={() => setReloadKey((k) => k + 1)}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            Reload
-          </button>
-        </div>
-        <div className="bg-white">{iframe}</div>
-      </div>
-    )
+    return <div className="w-full min-w-0 bg-background">{iframe}</div>
   }
 
   return (
-    <div className="flex flex-col bg-white">
+    <div className="flex flex-col bg-background">
       {iframe}
     </div>
   )
@@ -273,6 +276,25 @@ export function parseChatAppFragmentPath(
   return { chatId: m[1], appName: m[2], fragment: m[3] }
 }
 
+/**
+ * Built-in apps are attached with their in-sandbox path
+ * `/opt/desk-apps/<name>.app/dist/...` (mirrors `APPS_SANDBOX_MOUNT_DIR`
+ * in @agent-desk/runtime). This parser recognizes those paths so the
+ * chat UI can render them via the global app scope.
+ */
+export function parseGlobalAppPath(
+  p: string,
+): { appName: string; fragment?: string } | null {
+  const fragmentMatch =
+    /^\/opt\/desk-apps\/([a-z][a-z0-9-]{0,62})\.app\/dist\/fragments\/([a-z][a-z0-9-]{0,62})(?:\/(?:index\.html)?)?$/.exec(
+      p,
+    )
+  if (fragmentMatch) return { appName: fragmentMatch[1], fragment: fragmentMatch[2] }
+  const appMatch = /^\/opt\/desk-apps\/([a-z][a-z0-9-]{0,62})\.app(?:\/dist(?:\/(?:index\.html)?)?)?$/.exec(p)
+  if (appMatch) return { appName: appMatch[1] }
+  return null
+}
+
 export function parseLibraryAppFragmentPath(
   p: string,
 ): { appName: string; appPath: string; fragment: string } | null {
@@ -292,7 +314,17 @@ export function appAttachmentToPreview(
 ):
   | { scope: 'chat'; chatId: string; appName: string; fragment?: string }
   | { scope: 'library'; appName: string; appPath?: string; fragment?: string }
+  | { scope: 'global'; appName: string; fragment?: string }
   | null {
+  // Global scope is checked first: built-in app paths under
+  // `/opt/desk-apps/<name>.app/...` would otherwise match the (looser)
+  // library parser, which accepts any `<name>.app/...` form.
+  const globalApp = parseGlobalAppPath(path)
+  if (globalApp) {
+    return globalApp.fragment
+      ? { scope: 'global', appName: globalApp.appName, fragment: globalApp.fragment }
+      : { scope: 'global', appName: globalApp.appName }
+  }
   const chatFragment = parseChatAppFragmentPath(path)
   if (chatFragment) {
     return {

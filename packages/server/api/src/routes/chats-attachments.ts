@@ -30,6 +30,38 @@ import { workspaceSlugForChat } from "./chats-shared.js";
 
 const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
 const APP_DIR_MIME = "application/vnd.desk.app+directory";
+/** In-sandbox mount path for built-in apps (matches `APPS_SANDBOX_MOUNT_DIR` in @agent-desk/runtime). */
+const GLOBAL_APP_SANDBOX_PREFIX = "/opt/desk-apps/";
+
+/** Built-in apps live outside the workspace tree. The agent attaches them via their in-sandbox path. */
+function isGlobalAppArtifactPath(raw: string): boolean {
+  return raw.trim().startsWith(GLOBAL_APP_SANDBOX_PREFIX);
+}
+
+/**
+ * Validates a `/opt/desk-apps/<name>.app/...` path and returns it normalized
+ * (with the sandbox prefix retained — the chat stores the path verbatim so
+ * the SPA can detect global-scope artifacts by prefix).
+ */
+function normalizeGlobalAppPath(raw: string): { sandboxPath: string; insidePath: string } {
+  const trimmed = raw.trim();
+  if (trimmed.includes("\0") || trimmed.includes("\\")) {
+    throw new ValidationError(`Invalid artifact path: ${raw}`);
+  }
+  const inside = trimmed.slice(GLOBAL_APP_SANDBOX_PREFIX.length);
+  if (!inside) throw new ValidationError(`Invalid built-in app path: ${raw}`);
+  const segments = inside.split("/");
+  for (const segment of segments) {
+    if (segment === "" || segment === "." || segment === "..") {
+      throw new ValidationError(`Invalid built-in app path segment: ${segment}`);
+    }
+  }
+  const appDir = segments[0];
+  if (!/^[a-z][a-z0-9-]{0,62}\.app$/.test(appDir)) {
+    throw new ValidationError(`Invalid built-in app directory: ${appDir}`);
+  }
+  return { sandboxPath: `${GLOBAL_APP_SANDBOX_PREFIX}${inside}`, insidePath: inside };
+}
 
 function normalizeAppNameForDelete(appName: string): { appName: string; dirName: string } {
   const baseName = appName.endsWith(".app") ? appName.slice(0, -".app".length) : appName;
@@ -109,11 +141,49 @@ export async function attachArtifactRef(
     throw new ValidationError(`Invalid artifact body: ${parsed.error.message}`);
   }
   const data = parsed.data;
-  const relPath = normalizeWorkspaceRelativePath(data.path);
-  validateAttachableArtifactPath(relPath, data.chatId);
 
   const chat = await queries.chats.findById(storage.pool, data.chatId);
   if (!chat) throw new NotFoundError(`Chat not found: ${data.chatId}`);
+
+  // Built-in app path: lives outside the workspace tree, resolved against
+  // ~/Desk/.apps/. The chat row stores the verbatim `/opt/desk-apps/...`
+  // path so the SPA can detect global scope by prefix.
+  if (isGlobalAppArtifactPath(data.path)) {
+    const { sandboxPath, insidePath } = normalizeGlobalAppPath(data.path);
+    const appsRoot = path.join(storage.home, ".apps");
+    const abs = path.resolve(appsRoot, insidePath);
+    if (!abs.startsWith(appsRoot + path.sep)) {
+      throw new ValidationError(`Path traversal detected: ${data.path}`);
+    }
+    const stat = await fs.stat(abs).catch(() => null);
+    if (!stat) throw new NotFoundError(`Built-in app artifact not found: ${insidePath}`);
+    if (!stat.isFile() && !stat.isDirectory()) {
+      throw new ValidationError(`Artifact path must point to a file or directory: ${insidePath}`);
+    }
+    const inferredMime = stat.isDirectory() ? "inode/directory" : undefined;
+    const message = await queries.messages.insert(storage.pool, {
+      id: generateId("message"),
+      chatId: data.chatId,
+      role: "agent",
+      content: {
+        type: "artifactRef",
+        path: sandboxPath,
+        workspaceId: chat.workspaceId,
+        name: data.name?.trim() || path.basename(insidePath),
+        mime: data.mime?.trim() || inferredMime,
+        ...(data.params ? { params: data.params } : {}),
+      },
+      agentId: opts?.agentId ?? chat.agentId,
+      model: opts?.model ?? null,
+    });
+    emit({ type: "message.appended", payload: message, workspaceId: chat.workspaceId, chatTitle: chat.title });
+    emit({ type: "workspace.synced", payload: { workspaceId: chat.workspaceId } });
+    return message;
+  }
+
+  const relPath = normalizeWorkspaceRelativePath(data.path);
+  validateAttachableArtifactPath(relPath, data.chatId);
+
   const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
 

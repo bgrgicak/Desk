@@ -213,6 +213,14 @@ attach-artifact` in the same turn instead of creating a duplicate. Do not
 scaffold or rebuild an app, fragment, note, doc, or artifact when a suitable
 library item already exists unless the user explicitly asks for a new one.
 
+Desk-shipped **global apps** appear in every workspace's library alongside
+user-authored items. Their hits carry a `path` under `/opt/desk-apps/...`
+(the read-only mount of `${DESK_HOME}/.apps/` available in every sandbox,
+also browsable at `~/.apps/`). Treat them like any other library item — pass
+that path directly to `desk-agent chat attach-artifact`. Prefer a matching
+global app/fragment over scaffolding a new one, the same as you would for a
+workspace match.
+
 ```
 desk-agent find library [--query <text>] [--kind app|fragment|note|doc|any]
                         [--workspace <current-slug>] [--limit N]
