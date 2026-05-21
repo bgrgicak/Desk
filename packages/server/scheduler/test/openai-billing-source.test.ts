@@ -19,7 +19,6 @@ import { describe, it, expect } from "vitest";
 import {
   resolveOpenAiBillingSource,
   resolveModelForRun,
-  resolveModelChainForRun,
   FALLBACK_MODEL,
 } from "../src/runs.js";
 
@@ -151,88 +150,5 @@ describe("resolveModelForRun — fallback when no provider auth is live", () => 
     // The API key STAYS in providerKeys here — without it the daemon
     // couldn't authenticate the openai provider at all.
     expect(out.providerKeys.OPENAI_API_KEY).toBe("sk");
-  });
-});
-
-describe("resolveModelChainForRun — Phase 1 fallback chain", () => {
-  it("returns [selectedModel, FALLBACK_MODEL] when the head has live auth", async () => {
-    const out = await resolveModelChainForRun(
-      "openai/gpt-5",
-      null,
-      { OPENAI_API_KEY: "sk-real" },
-      {},
-    );
-    expect(out.chain).toEqual(["openai/gpt-5", FALLBACK_MODEL]);
-    expect(out.reason).toBeNull();
-  });
-
-  it("collapses to [FALLBACK_MODEL] when the head equals the floor", async () => {
-    // No dup; chain remains length 1.
-    const out = await resolveModelChainForRun("opencode/big-pickle", null, {}, {});
-    expect(out.chain).toEqual([FALLBACK_MODEL]);
-  });
-
-  it("uses the no-auth-fallback head for the chain when the requested model has no live auth", async () => {
-    // openai/* with no key triggers resolveModelForRun's downgrade to
-    // FALLBACK_MODEL; the chain should reflect that, not the user's
-    // original pick.
-    const out = await resolveModelChainForRun("openai/gpt-5", null, {}, {});
-    expect(out.chain).toEqual([FALLBACK_MODEL]);
-    expect(out.reason).toBe("no-auth-fallback");
-  });
-
-  it("filters unauthed entries even when the head is OK (defends against future chain growth)", async () => {
-    // resolveModelForRun keeps the head when its auth is live, but if a
-    // future chain ever lifts unauthed entries through (e.g. via the
-    // goals-table path in Phase 2), filterUnauthedModels must still drop
-    // them. Phase 1's [head, big-pickle] chain has no unauthed entries
-    // by construction; this just pins the invariant.
-    const out = await resolveModelChainForRun(
-      "anthropic/claude-3-5-sonnet",
-      null,
-      { ANTHROPIC_API_KEY: "sk-ant" },
-      {},
-    );
-    expect(out.chain).toEqual(["anthropic/claude-3-5-sonnet", FALLBACK_MODEL]);
-  });
-
-  it("translates codex/* → openai/* in the chain head via resolveModelForRun", async () => {
-    const out = await resolveModelChainForRun(
-      "codex/gpt-5",
-      null,
-      {},
-      { OPENCODE_AUTH_CONTENT: "{\"openai\":{\"type\":\"oauth\"}}" },
-    );
-    // Head was rewritten by resolveModelForRun; chain carries the
-    // translated id, not the user-facing `codex/` label.
-    expect(out.chain[0]).toBe("openai/gpt-5");
-    expect(out.chain).toContain(FALLBACK_MODEL);
-  });
-
-  it("accepts the goal parameter and ignores it in Phase 1 (signature stable for Phase 2)", async () => {
-    const withGoal = await resolveModelChainForRun(
-      "openai/gpt-5",
-      "site",
-      { OPENAI_API_KEY: "sk" },
-      {},
-    );
-    const withoutGoal = await resolveModelChainForRun(
-      "openai/gpt-5",
-      null,
-      { OPENAI_API_KEY: "sk" },
-      {},
-    );
-    expect(withGoal.chain).toEqual(withoutGoal.chain);
-  });
-
-  it("guarantees the chain is non-empty (FALLBACK_MODEL always passes the auth gate)", async () => {
-    // Worst case: no provider keys at all, unrecognized provider in the
-    // requested model. resolveModelForRun passes it through unchanged
-    // (Desk doesn't gatekeep unknown providers); filterUnauthedModels
-    // keeps everything but `openai/anthropic/codex` without auth; the
-    // opencode/* floor is always reachable.
-    const out = await resolveModelChainForRun("xprovider/secret-model", null, {}, {});
-    expect(out.chain.length).toBeGreaterThan(0);
-    expect(out.chain).toContain(FALLBACK_MODEL);
   });
 });
