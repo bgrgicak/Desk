@@ -48,6 +48,12 @@ export interface ExecRunOptions {
    * scheduler) to persist on the chat row.
    */
   opencodeSessionId?: string | null;
+  /**
+   * Ordered fallback model ids to try when the agent's primary model
+   * fails with a provider-shaped error. See `RunOptions.fallbackModels`
+   * for the matching predicate and the per-attempt loop semantics.
+   */
+  fallbackModels?: string[];
   onLog: (event: LogEvent) => void;
 }
 
@@ -119,6 +125,7 @@ export async function execRun(
         ? undefined
         : (opts.apiUrl ?? defaultSandboxApiUrl()),
       model: opts.agent.model,
+      fallbackModels: opts.fallbackModels,
       providerKeys: opts.providerKeys,
       extraEnv: opts.extraEnv,
       mountPlan: opts.mountPlan,

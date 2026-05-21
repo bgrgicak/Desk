@@ -28,7 +28,7 @@ import { SANDBOX_HOME, type MountPlan } from "./mounts.js";
 import { managedConnectionDefinitions } from "@agent-desk/shared";
 import { connectionEnvNames } from "./docker.js";
 import { LOCAL_SOURCE_ENV_NAMES } from "./localSources/index.js";
-import { runPi, type PiHandle } from "./piClient.js";
+import { runPi, type PiHandle, type PiRunResult } from "./piClient.js";
 import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("runtime/driver");
 
@@ -70,6 +70,21 @@ export interface RunOptions {
    * its default.
    */
   model?: string;
+  /**
+   * Ordered fallback model ids to try when `model` (or an earlier
+   * fallback) fails with a provider-shaped error (rate limit, quota,
+   * model-not-found, auth failure, 5xx). Each fallback gets its own
+   * fresh pi spawn; the first one to produce a successful turn wins.
+   *
+   * Container-shaped failures (container-gone, OOM) are recovered
+   * upstream (via the auto-grow + container-gone retry paths) and do
+   * NOT consume a fallback slot — those re-fire the same run with the
+   * same model.
+   *
+   * When the list is empty/undefined, behavior is the pre-fallback
+   * single-attempt behavior.
+   */
+  fallbackModels?: string[];
   /**
    * Provider API keys forwarded into the pi process env. Per-turn, so a
    * provider change in Settings reaches the next turn without any
@@ -266,7 +281,6 @@ function createRealDriver(): SandboxDriver {
       }
 
       const sessionId = opts.opencodeSessionId ?? opts.chatId ?? randomUUID();
-      const { providerID, modelID } = opts.model ? parseModelSpec(opts.model) : { providerID: undefined, modelID: undefined };
 
       let seq = 0;
       const pendingLogs: Promise<unknown>[] = [];
@@ -277,32 +291,67 @@ function createRealDriver(): SandboxDriver {
         }
       };
 
-      const piHandle = runPi(engine, {
-        containerId: handle.containerId,
-        user,
-        cwd: SANDBOX_HOME,
-        sessionId,
-        provider: providerID,
-        model: modelID,
-        env: piEnv,
-        prompt: buildPiPrompt({ prompt: opts.prompt, attachments: opts.attachments }),
-        onEvent: (line) => emitLog("event", line),
-        onStderr: (line) => emitLog("stderr", line),
-        translate: {
-          sessionID: sessionId,
-          assistantMessageId: `msg_${opts.runId}`,
-          ...(providerID && modelID
-            ? { model: { providerID, modelID, ...(opts.agentFileId ? { agent: opts.agentFileId } : {}) } }
-            : {}),
-        },
-      });
-      activeRuns.set(opts.runId, { containerId: handle.containerId, sessionId, handle: piHandle });
+      // Build the model attempt list: primary, then fallbacks. An empty
+      // primary model (`undefined`) plus no fallbacks means "let pi pick
+      // its default" — represented as a single null entry so the loop
+      // runs exactly once and `parseModelSpec` is skipped.
+      const attemptModels: (string | null)[] = opts.model
+        ? [opts.model, ...(opts.fallbackModels ?? [])]
+        : [null];
 
+      let lastResult: PiRunResult = { exitCode: 1, aborted: false };
+      let stderrAccum = "";
       try {
-        const result = await piHandle.done;
+        for (let attempt = 0; attempt < attemptModels.length; attempt++) {
+          const modelSpec = attemptModels[attempt];
+          const parsed = modelSpec ? parseModelSpec(modelSpec) : { providerID: undefined, modelID: undefined };
+          const { providerID, modelID } = parsed;
+          stderrAccum = "";
+
+          const piHandle = runPi(engine, {
+            containerId: handle.containerId,
+            user,
+            cwd: SANDBOX_HOME,
+            sessionId,
+            provider: providerID,
+            model: modelID,
+            env: piEnv,
+            prompt: buildPiPrompt({ prompt: opts.prompt, attachments: opts.attachments }),
+            onEvent: (line) => emitLog("event", line),
+            onStderr: (line) => {
+              stderrAccum += line + "\n";
+              emitLog("stderr", line);
+            },
+            translate: {
+              sessionID: sessionId,
+              assistantMessageId: `msg_${opts.runId}`,
+              ...(providerID && modelID
+                ? { model: { providerID, modelID, ...(opts.agentFileId ? { agent: opts.agentFileId } : {}) } }
+                : {}),
+            },
+          });
+          activeRuns.set(opts.runId, { containerId: handle.containerId, sessionId, handle: piHandle });
+          lastResult = await piHandle.done;
+          activeRuns.delete(opts.runId);
+
+          if (lastResult.aborted) break;
+          if (lastResult.exitCode === 0) break;
+
+          const nextSpec = attemptModels[attempt + 1];
+          if (!nextSpec) break;
+          if (!isModelFailure(lastResult.exitCode, stderrAccum)) break;
+
+          // Surface the fallback decision so the chat log makes it clear
+          // why the assistant's reply ended up using a different model
+          // than the one the user picked.
+          emitLog(
+            "stderr",
+            `Model ${modelSpec ?? "<default>"} failed; falling back to ${nextSpec} (${describeModelFailure(lastResult.exitCode, stderrAccum)}).`,
+          );
+        }
         await Promise.all(pendingLogs);
         return {
-          exitCode: result.aborted ? 130 : result.exitCode,
+          exitCode: lastResult.aborted ? 130 : lastResult.exitCode,
           opencodeSessionId: sessionId,
         };
       } finally {
@@ -418,3 +467,51 @@ export function buildPiEnv(opts: {
 
 /** Legacy alias kept so existing callers can import without rename churn. */
 export const buildDaemonEnv = buildPiEnv;
+
+/**
+ * Decides whether a pi exit + accumulated stderr looks like a model /
+ * provider failure (rate limit, quota exhausted, model-not-found,
+ * provider auth failure, 5xx outage) — the kinds of failure where a
+ * different model would plausibly succeed.
+ *
+ * Used by the per-run fallback loop. Container-shaped failures
+ * (container-gone, OOM, cgroup limits) deliberately don't match
+ * because they're handled by upstream retry paths, not by switching
+ * model.
+ *
+ * Exported for direct unit testing.
+ */
+export function isModelFailure(exitCode: number, stderr: string): boolean {
+  if (exitCode === 0) return false;
+  // SIGTERM/SIGKILL from cancellation — never fallback.
+  if (exitCode === 130 || exitCode === 137) return false;
+  const s = stderr.toLowerCase();
+  // Pi's own surface when a provider key/auth blob is missing or invalid.
+  if (s.includes("no api key found for")) return true;
+  if (s.includes("no live auth for")) return true;
+  // Provider HTTP errors that pi-ai surfaces verbatim.
+  if (/\b(rate.?limit|quota|exceeded|too many requests)\b/.test(s)) return true;
+  if (/\b(429|401|403|5\d\d)\b/.test(s)) return true;
+  if (/\b(no such model|model not found|providermodelnotfounderror|invalid model)\b/.test(s)) return true;
+  if (/\b(service unavailable|overloaded|upstream|connection refused)\b/.test(s)) return true;
+  if (/\b(authentication|unauthorized|forbidden)\b/.test(s)) return true;
+  return false;
+}
+
+/**
+ * One-line description of the model failure for the fallback-stderr
+ * marker. Best-effort: pulls the most-specific token out of the
+ * stderr; falls back to the exit code when no recognizable pattern.
+ */
+export function describeModelFailure(exitCode: number, stderr: string): string {
+  const s = stderr.toLowerCase();
+  if (s.includes("no api key found for")) return "no API key";
+  if (s.includes("no live auth")) return "no live auth";
+  if (/\b429\b|rate.?limit/.test(s)) return "rate limited";
+  if (/\bquota|exceeded\b/.test(s)) return "quota exceeded";
+  if (/\b401\b|unauthorized|authentication/.test(s)) return "unauthorized";
+  if (/\b403\b|forbidden/.test(s)) return "forbidden";
+  if (/\b5\d\d\b|service unavailable|overloaded/.test(s)) return "provider 5xx";
+  if (/no such model|model not found|invalid model|providermodelnotfounderror/.test(s)) return "model not found";
+  return `pi exited ${exitCode}`;
+}

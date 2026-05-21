@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   buildDaemonEnv,
   buildPiEnv,
+  describeModelFailure,
   isContainerGoneError,
+  isModelFailure,
   parseModelSpec,
   buildPiPrompt,
   toSandboxPath,
@@ -94,6 +96,66 @@ describe("toSandboxPath", () => {
   it("prepends SANDBOX_HOME and strips leading slashes", () => {
     expect(toSandboxPath("foo/bar.md")).toBe(`${SANDBOX_HOME}/foo/bar.md`);
     expect(toSandboxPath("/foo/bar.md")).toBe(`${SANDBOX_HOME}/foo/bar.md`);
+  });
+});
+
+describe("isModelFailure", () => {
+  it("returns false on success (exit 0)", () => {
+    expect(isModelFailure(0, "")).toBe(false);
+    expect(isModelFailure(0, "rate limit hit but exit was 0")).toBe(false);
+  });
+
+  it("returns false on cancellation exits", () => {
+    // 130 = SIGTERM (user cancel), 137 = SIGKILL — falling back to a
+    // different model on cancel would surprise the user with extra work
+    // they explicitly stopped.
+    expect(isModelFailure(130, "rate limited")).toBe(false);
+    expect(isModelFailure(137, "anything")).toBe(false);
+  });
+
+  it("matches pi's auth-missing stderr (the chaos-test smoking gun)", () => {
+    expect(isModelFailure(1, "No API key found for openai-codex.")).toBe(true);
+    expect(isModelFailure(1, "No live auth for anthropic/claude-haiku-4-5")).toBe(true);
+  });
+
+  it("matches rate-limit / quota / 429 shapes from upstream providers", () => {
+    expect(isModelFailure(1, "Anthropic returned 429: rate_limited")).toBe(true);
+    expect(isModelFailure(1, "quota exceeded for this billing period")).toBe(true);
+    expect(isModelFailure(1, "too many requests, please retry in 30s")).toBe(true);
+  });
+
+  it("matches provider 5xx outages", () => {
+    expect(isModelFailure(1, "OpenAI 503 Service Unavailable")).toBe(true);
+    expect(isModelFailure(1, "overloaded")).toBe(true);
+  });
+
+  it("matches model-not-found shapes (provider deprecated the id, or typo)", () => {
+    expect(isModelFailure(1, "ProviderModelNotFoundError: no such model gpt-5.7")).toBe(true);
+    expect(isModelFailure(1, "model not found: claude-omega")).toBe(true);
+    expect(isModelFailure(1, "invalid model: foo")).toBe(true);
+  });
+
+  it("returns false for container/sandbox shapes (those have their own retry)", () => {
+    // Container-gone is handled by the upstream retry loop, not by
+    // switching model — falling back here would burn a fallback slot
+    // for a recoverable infra error.
+    expect(isModelFailure(1, "No such container: abc123")).toBe(false);
+    expect(isModelFailure(1, "spawn EAGAIN")).toBe(false);
+  });
+});
+
+describe("describeModelFailure", () => {
+  it("picks the most specific reason from common stderr patterns", () => {
+    expect(describeModelFailure(1, "No API key found for openai")).toBe("no API key");
+    expect(describeModelFailure(1, "Anthropic returned 429")).toBe("rate limited");
+    expect(describeModelFailure(1, "quota exceeded")).toBe("quota exceeded");
+    expect(describeModelFailure(1, "401 Unauthorized")).toBe("unauthorized");
+    expect(describeModelFailure(1, "503 Service Unavailable")).toBe("provider 5xx");
+    expect(describeModelFailure(1, "ProviderModelNotFoundError")).toBe("model not found");
+  });
+
+  it("falls back to the exit code when no pattern matches", () => {
+    expect(describeModelFailure(42, "something weird")).toBe("pi exited 42");
   });
 });
 

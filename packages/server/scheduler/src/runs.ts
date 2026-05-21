@@ -87,6 +87,27 @@ export interface RunManagerOptions {
 export const FALLBACK_MODEL = "anthropic/claude-haiku-4-5";
 
 /**
+ * Ordered list of fallback model ids the per-turn pi runner cycles
+ * through when the agent's primary model errors out with a provider-
+ * shaped failure (rate limit, quota, 5xx, auth, model-not-found).
+ *
+ * Configured via `DESK_FALLBACK_MODELS` env (comma-separated). Empty by
+ * default — agent picks its primary model and we don't substitute on
+ * failure. A future agent-row column can replace the env hop without
+ * changing the runtime contract.
+ *
+ * Exported for direct unit testing.
+ */
+export function resolveFallbackModels(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = env.DESK_FALLBACK_MODELS;
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
  * Reasons `resolveModelForRun` returned a model other than the requested
  * one. `null` means "the requested model was used as-is".
  */
@@ -625,6 +646,7 @@ export function createRunManager(opts: RunManagerOptions) {
                 extraEnv,
                 mountPlan,
                 opencodeSessionId,
+                fallbackModels: resolveFallbackModels(),
                 onLog: onLogWithStderrCapture,
               });
             } catch (err) {
