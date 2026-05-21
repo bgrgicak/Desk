@@ -19,6 +19,7 @@
  * returned promise; it resolves with the in-container exit code.
  */
 
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import type { Engine } from "./engine.js";
 import { readPiJsonEvents, translatePiEvent, type TranslateContext } from "./piEvents.js";
@@ -94,7 +95,37 @@ export interface PiHandle {
  */
 export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
   const argv = buildPiArgv(opts);
-  const envArgs = Object.entries(opts.env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+  // Per-pi-invocation agent-dir on tmpfs (/tmp). Pi reads auth.json +
+  // models.json from here and locks it via proper-lockfile. With two
+  // parallel pi invocations sharing the workspace's ~/.pi/agent dir the
+  // sync lockfile retry budget (200ms) is too short under load — some
+  // invocations silently fall back to an empty auth and report "No API
+  // key found" for the configured provider. Giving each pi its own
+  // agent-dir eliminates the contention: pi never sees a contested
+  // lock, so OAuth refresh + provider lookup always succeed.
+  //
+  // Sessions stay on the workspace bind-mount via the explicit
+  // `--session-dir` flag (see buildPiArgv) so chat history still
+  // persists across container reaping.
+  const agentDir = `/tmp/pi-${randomUUID()}/agent`;
+  const env = {
+    HOME: opts.cwd,
+    PI_CODING_AGENT_DIR: agentDir,
+    ...opts.env,
+  };
+  const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+  // Compose the seed-then-pi command inline as a shell script so we get
+  // one `docker exec` per turn instead of two. The seed copies auth.json
+  // + models.json from the workspace's ~/.pi/agent (where the entrypoint
+  // already placed them from /etc/skel) into the per-invocation dir.
+  // Pi then runs against the isolated dir.
+  const piCmd = argv.map(shSingleQuote).join(" ");
+  const sourceDir = `${opts.cwd}/.pi/agent`;
+  const shellScript = [
+    `mkdir -p ${shSingleQuote(agentDir)}`,
+    `cp ${shSingleQuote(`${sourceDir}/auth.json`)} ${shSingleQuote(`${sourceDir}/models.json`)} ${shSingleQuote(agentDir)}/ 2>/dev/null || true`,
+    `exec ${piCmd}`,
+  ].join(" && ");
   const dockerArgv = [
     "exec",
     "-i",
@@ -102,7 +133,7 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
     "--workdir", opts.cwd,
     ...envArgs,
     opts.containerId,
-    ...argv,
+    "sh", "-c", shellScript,
   ];
 
   const child = spawn(engine.name, dockerArgv, { stdio: ["ignore", "pipe", "pipe"] });
@@ -153,6 +184,11 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
   };
 
   return { containerId: opts.containerId, done, cancel };
+}
+
+/** POSIX-quote `s` for safe inclusion inside `sh -c '…'`. */
+function shSingleQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
 function buildPiArgv(opts: PiRunOptions): string[] {
