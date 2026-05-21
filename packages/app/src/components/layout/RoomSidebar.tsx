@@ -172,7 +172,7 @@ const ChatSidebarRow = memo(function ChatSidebarRow({
             isPinned={!!isPinned}
             onPin={onPin}
             onUnpin={onUnpin}
-            onDelete={onDelete}
+            onDelete={onDelete ?? (() => undefined)}
           />
         )}
       </RowKebab>

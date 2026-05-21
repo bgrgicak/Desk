@@ -39,7 +39,6 @@ import {
   buildOutputContent,
   computeNextRun,
   errorLogLines,
-  isNonEmpty,
   isUnscheduledTask,
   outputContentTypeFor,
   readLogEntries,

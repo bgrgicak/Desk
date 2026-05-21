@@ -1,20 +1,16 @@
 import { useCallback, useEffect, useMemo } from 'react'
-import { useDispatch } from 'react-redux'
 import { toast } from 'sonner'
 import {
   useCreateChatMutation,
-  useDeleteMessageMutation,
   useGetAgentsQuery,
   useGetMessagesQuery,
   useGetMeQuery,
   useGetWorkspaceAgentsQuery,
   useGetWorkspacesQuery,
   useGetChatsQuery,
-  usePatchMessageMutation,
   usePostChatMessageMutation,
-  useRunMessageMutation,
 } from '@/store/api'
-import { useAppStore } from '@/store/hooks'
+import { useAppDispatch, useAppStore } from '@/store/hooks'
 import { useAvatarUrl } from '@/hooks/use-avatar'
 import { usePrefs } from '@/hooks/use-prefs'
 import { markChatReadQuietly } from '@/store/ws/middleware'
@@ -25,15 +21,13 @@ import {
   taskRunMessageKinds,
   toUiTask,
 } from '@/store/selectors/tasks'
-import { buildTaskLifecycleMove, buildTaskStatusMove } from '@/lib/task-status'
 import { buildPath } from '@/router/nav'
 import { extractApiError } from '@/lib/api-error'
 import { generateTaskTitle } from '@/lib/task-title'
 import type { ServerMessage } from '@/store/types'
-import type { Task } from '@/data/ui-types'
 import type { TaskComposerSubmit } from './TaskComposer'
-import type { SchedulePickerValue } from './SchedulePicker'
 import { TasksPage } from './TasksPage'
+import { useTaskActions } from './useTaskActions'
 
 interface TasksRouteProps {
   workspaceId: string
@@ -55,7 +49,7 @@ interface TasksRouteProps {
  * still re-render for unrelated reasons.
  */
 export function TasksRoute({ workspaceId, selectedTaskId, onSelectTask }: TasksRouteProps) {
-  const dispatch = useDispatch()
+  const dispatch = useAppDispatch()
   const appStore = useAppStore()
   const { data: me } = useGetMeQuery()
   const userAvatarUrl = useAvatarUrl(me?.id)
@@ -148,9 +142,7 @@ export function TasksRoute({ workspaceId, selectedTaskId, onSelectTask }: TasksR
 
   const [createChatMutation] = useCreateChatMutation()
   const [postMessageMutation] = usePostChatMessageMutation()
-  const [patchMessageMutation] = usePatchMessageMutation()
-  const [runMessageMutation] = useRunMessageMutation()
-  const [deleteMessageMutation] = useDeleteMessageMutation()
+  const { onMarkDone, onRunNow, onPause, onDelete, onSchedule } = useTaskActions()
 
   const hrefForTask = useCallback(
     (id: string) => buildPath(workspaceId, 'tasks', { task: id }),
@@ -186,79 +178,6 @@ export function TasksRoute({ workspaceId, selectedTaskId, onSelectTask }: TasksR
       toast.error('Failed to create task', { description: extractApiError(err) })
     }
   }, [workspaceId, workspaceServerAgents, serverAgents, createChatMutation, postMessageMutation])
-
-  const onMarkDone = useCallback(async (task: Task) => {
-    if (!task.chatId || !task.messageId) return
-    const move = buildTaskStatusMove(task, 'complete', 'user')
-    if (move.kind !== 'patch') return
-    try {
-      await patchMessageMutation({
-        chatId: task.chatId,
-        messageId: task.messageId,
-        patch: move.patch,
-      }).unwrap()
-    } catch (err) {
-      toast.error('Failed to mark done', { description: extractApiError(err) })
-    }
-  }, [patchMessageMutation])
-
-  const onRunNow = useCallback(async (task: Task) => {
-    if (!task.chatId || !task.messageId) return
-    try {
-      await runMessageMutation({
-        chatId: task.chatId,
-        messageId: task.messageId,
-      }).unwrap()
-    } catch (err) {
-      toast.error('Run failed', { description: extractApiError(err) })
-    }
-  }, [runMessageMutation])
-
-  const onPause = useCallback(async (task: Task) => {
-    if (!task.chatId || !task.messageId) return
-    const move = buildTaskLifecycleMove(task, 'pause', 'user')
-    if (move.kind !== 'patch') return
-    try {
-      await patchMessageMutation({
-        chatId: task.chatId,
-        messageId: task.messageId,
-        patch: move.patch,
-      }).unwrap()
-    } catch (err) {
-      toast.error('Pause failed', { description: extractApiError(err) })
-    }
-  }, [patchMessageMutation])
-
-  const onDelete = useCallback(async (task: Task) => {
-    if (!task.chatId || !task.messageId) return
-    try {
-      await deleteMessageMutation({
-        chatId: task.chatId,
-        messageId: task.messageId,
-      }).unwrap()
-    } catch (err) {
-      toast.error('Delete failed', { description: extractApiError(err) })
-    }
-  }, [deleteMessageMutation])
-
-  const onSchedule = useCallback(async (task: Task, next: SchedulePickerValue | null) => {
-    if (!task.chatId || !task.messageId) return
-    try {
-      await patchMessageMutation({
-        chatId: task.chatId,
-        messageId: task.messageId,
-        // `null` clears both fields; a populated `next` overwrites
-        // executeAt + cron together so the picker is the source of
-        // truth for the task's schedule.
-        patch: {
-          executeAt: next?.executeAt ?? null,
-          cron:      next?.cron ?? null,
-        },
-      }).unwrap()
-    } catch (err) {
-      toast.error('Schedule update failed', { description: extractApiError(err) })
-    }
-  }, [patchMessageMutation])
 
   const tasksListLoading = !!workspaceId && !tasksResp && (tasksLoading || tasksFetching)
 

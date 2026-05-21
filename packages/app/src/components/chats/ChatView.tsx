@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
@@ -8,6 +8,9 @@ import { ArtifactInlineCard } from '@/components/shared/ArtifactInlineCard'
 import { RoomTopBarActions } from '@/components/layout/RoomTopBarActions'
 import { ChatRightPanel } from '@/components/chats/ChatRightPanel'
 import { ThreadParentChip } from '@/components/chats/ThreadParentChip'
+import { useTaskForChat } from '@/components/tasks/useTaskForChat'
+import { useTaskActions } from '@/components/tasks/useTaskActions'
+import { buildPath } from '@/router/nav'
 import { closeArtifact, selectPreviewArtifact, selectPreviewSplitRatio } from '@/store/slices/previewPanelSlice'
 import { ChatThread } from '@/components/compose/ChatThread'
 import { MessageBubble } from '@/components/compose/MessageBubble'
@@ -140,6 +143,7 @@ export function ChatView({
 }: ChatViewProps) {
   const focusInputRef = useRef<(() => void) | null>(null)
   const location = useLocation()
+  const navigate = useNavigate()
   const anchorMessage = startThread
     ? (location.state as { anchorMessage?: ServerMessage } | null)?.anchorMessage ?? null
     : null
@@ -178,6 +182,20 @@ export function ChatView({
   useContentAreaInsets(chatAreaLeft, chatAreaRight)
 
   const isNewChat = chat.id === NEW_CHAT_ID
+
+  // If the current chat is a task surface (thread chat or a
+  // standalone-task chat), resolve the backing Task so the kebab can
+  // show the task action menu instead of the generic chat menu.
+  const backingTask = useTaskForChat({
+    chatId: isNewChat ? undefined : chat.id,
+    workspaceId: chat.workspaceId,
+  })
+  const taskActions = useTaskActions()
+  const handleTaskDeleted = useCallback(() => {
+    if (chat.workspaceId) {
+      navigate(buildPath(chat.workspaceId, 'tasks'))
+    }
+  }, [chat.workspaceId, navigate])
 
   const dispatch = useAppDispatch()
 
@@ -402,6 +420,9 @@ export function ChatView({
           panelOpen={panelOpen}
           onTogglePanel={() => setPanelOpenFromUser(!panelOpen)}
           showPanelToggle={!isPreviewOpen}
+          task={backingTask}
+          taskActions={taskActions}
+          onTaskDeleted={handleTaskDeleted}
         />
 
         {/* Messages + Input via shared ChatThread */}

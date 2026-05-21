@@ -215,6 +215,43 @@ export class ContainerRuntimeUnavailableError extends DeskError {
   }
 }
 
+/**
+ * Builds a safe error message for a failed engine command. Hides the
+ * `--env KEY=VALUE` pairs (which often carry provider keys, OAuth
+ * tokens, and the per-spawn OPENCODE_SERVER_PASSWORD) but keeps the
+ * engine name, subcommand, target id, exit code, and full stderr —
+ * everything an operator needs to triage without leaking the secrets
+ * that the chaos test surfaced were going through into chat messages.
+ *
+ * Env values are replaced with `<REDACTED>`; the env *keys* stay
+ * visible so the operator can still see "GITHUB_TOKEN was set" vs
+ * "GITHUB_TOKEN was empty" by inspecting the redacted form's key list.
+ */
+export function formatEngineErrorMessage(
+  engineName: string,
+  args: readonly string[],
+  stderr: string,
+  exitCode: number | string | undefined,
+): string {
+  const safeArgs: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--env" && i + 1 < args.length) {
+      const pair = args[i + 1];
+      const eq = pair.indexOf("=");
+      const key = eq >= 0 ? pair.slice(0, eq) : pair;
+      safeArgs.push("--env", `${key}=<REDACTED>`);
+      i++;
+      continue;
+    }
+    safeArgs.push(a);
+  }
+  const exitFrag = exitCode !== undefined ? ` (exit ${exitCode})` : "";
+  const stderrTrim = stderr.trim();
+  const stderrFrag = stderrTrim ? `\n${stderrTrim}` : "";
+  return `${engineName} ${safeArgs.join(" ")} failed${exitFrag}${stderrFrag}`;
+}
+
 /** Caller-facing surface. Pure shell-out under the hood. */
 export interface Engine {
   readonly name: EngineName;
@@ -302,13 +339,40 @@ class CliEngine implements Engine {
     args: string[],
     opts?: { timeoutMs?: number },
   ): Promise<{ stdout: string; stderr: string }> {
-    const { stdout, stderr } = await execFileAsync(this.name, args, {
-      env: engineEnv(this.name),
-      maxBuffer: 8 * 1024 * 1024,
-      timeout: opts?.timeoutMs ?? ENGINE_COMMAND_TIMEOUT_MS,
-      killSignal: "SIGKILL",
-    });
-    return { stdout, stderr };
+    try {
+      const { stdout, stderr } = await execFileAsync(this.name, args, {
+        env: engineEnv(this.name),
+        maxBuffer: 8 * 1024 * 1024,
+        timeout: opts?.timeoutMs ?? ENGINE_COMMAND_TIMEOUT_MS,
+        killSignal: "SIGKILL",
+      });
+      return { stdout, stderr };
+    } catch (err) {
+      // Node's execFile reject sets `.message` to the full command line
+      // including every `--env KEY=VALUE` pair we pass into `docker
+      // exec`. Those env values frequently carry secrets — provider API
+      // keys, the per-spawn OPENCODE_SERVER_PASSWORD, the Codex/ChatGPT
+      // OAuth blob, GitHub PATs — and the message gets propagated up
+      // into emitLog("stderr") in driver.ts, where it ends up in a chat
+      // message visible to the user (and any log shipper that reads the
+      // pino stream). Rewrite the message into a safe shape that keeps
+      // the operationally-useful bits (engine name, subcommand, exit
+      // code, stderr tail) but scrubs the env values.
+      const e = err as { message?: string; stderr?: string; code?: number | string; stdout?: string };
+      const stderr = typeof e.stderr === "string" ? e.stderr : "";
+      const safeMessage = formatEngineErrorMessage(this.name, args, stderr, e.code);
+      const wrapped = new Error(safeMessage) as Error & {
+        stderr: string;
+        stdout: string;
+        code: number | string | undefined;
+        cause: unknown;
+      };
+      wrapped.stderr = stderr;
+      wrapped.stdout = typeof e.stdout === "string" ? e.stdout : "";
+      wrapped.code = e.code;
+      wrapped.cause = err;
+      throw wrapped;
+    }
   }
 
   /** Capture-or-null: returns null if stderr matches "no such" pattern. */

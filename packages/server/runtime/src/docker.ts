@@ -502,7 +502,26 @@ async function createOrReuseImpl(
         }
       } else {
         log.info(
-          { containerName, attempt, drift: driftReasons },
+          {
+            containerName,
+            attempt,
+            drift: driftReasons,
+            // Include the actual vs expected so we can diagnose
+            // mount-layout-mismatch loops without re-running with
+            // extra instrumentation.
+            ...(driftReasons.includes("mount-layout-mismatch")
+              ? {
+                  actualBinds: existing.binds ?? [],
+                  expectedBinds: expectedBindStrings,
+                }
+              : {}),
+            ...(driftReasons.includes("resource-profile-mismatch")
+              ? {
+                  actualProfile: existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL],
+                  expectedProfile: expectedResourceProfile,
+                }
+              : {}),
+          },
           "sandbox: removing drifted container",
         );
         await engine.remove(containerName, true).catch(() => {});

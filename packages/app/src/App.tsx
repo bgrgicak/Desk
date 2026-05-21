@@ -36,13 +36,12 @@ import { ChatView } from '@/components/chats/ChatView'
 import { GlobalPaletteProvider } from '@/components/global-palette/GlobalPaletteProvider'
 import { GlobalPalette } from '@/components/global-palette/GlobalPalette'
 import type { Artifact, Chat, ContextItem } from '@/data/ui-types'
-import type { AttachmentRef, ServerMessage } from '@/store/types'
+import type { AttachmentRef } from '@/store/types'
 import {
   useGetWorkspacesQuery,
   useGetChatsQuery,
   useGetAgentsQuery,
   useGetWorkspaceAgentsQuery,
-  useGetMessagesQuery,
   useGetLibraryQuery,
   useGetLibraryFileQuery,
   useGetChatQuery,
@@ -78,7 +77,6 @@ import type { PinnedSidebarEntry } from '@/components/layout/RoomSidebar'
 import { buildPath, NEW_CHAT_ID, resolveRouteView, type RouteView } from '@/router/nav'
 import { getSessionToken, logout } from '@/auth/session'
 import { usePrefs } from '@/hooks/use-prefs'
-import { useAvatarUrl } from '@/hooks/use-avatar'
 import type { PrefsShape } from '@/components/settings/SettingsModal'
 import { getLastWorkspaceUrl, saveLastWorkspaceUrl } from '@/lib/workspace-last-url'
 import {
@@ -255,7 +253,7 @@ function AppInner() {
     dispatch(setPendingSettingsSection('workspace'))
     navigate(buildPath(wsId || activeWorkspaceId, 'tasks'), { replace: true })
   }, [viewParam, wsId, activeWorkspaceId, dispatch, navigate])
-  const { defaultView, developerMode } = usePrefs()
+  const { defaultView } = usePrefs()
   const selectedChatId = searchParams.get('chat')
   const selectedArtifactPath = searchParams.get('artifact')
   const selectedContextPath = searchParams.get('item')
@@ -263,7 +261,6 @@ function AppInner() {
   const selectedArtifactParams = parseArtifactParams(searchParams.get('artifactParams'))
   const startThreadParam = searchParams.get('startThread') // chatId:messageId
   const selectedTaskId = searchParams.get('task')
-  const shouldLoadTasksView = activeView === 'tasks'
 
   const artifactTransitionSource = useAppSelector(s => s.ui.artifactTransitionSource)
   const savedArtifactIdList = useAppSelector(s => s.ui.savedArtifactIds)
@@ -273,7 +270,6 @@ function AppInner() {
 
   const { data: serverWorkspaces, isFetching: wsFetching } = useGetWorkspacesQuery()
   const { data: me } = useGetMeQuery()
-  const userAvatarUrl = useAvatarUrl(me?.id)
   const { data: serverAgents } = useGetAgentsQuery(undefined, { skip: !!activeWorkspaceId })
   const { currentData: workspaceServerAgents } = useGetWorkspaceAgentsQuery(
     activeWorkspaceId ?? '',

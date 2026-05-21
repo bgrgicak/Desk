@@ -314,7 +314,7 @@ export async function listLibrary(
   // honours rules anchored above it (root-level `*.log`, parent-level
   // `private/`, etc.). Mounts root their gitignore composition at the
   // mount source — workspace ancestors don't see the host filesystem.
-  let ancestorFrames: IgnoreFrame[] = [];
+  const ancestorFrames: IgnoreFrame[] = [];
   if (!showHidden && relPrefix) {
     const segments = relPrefix.split("/");
     const mount = virtualMounts.find((m) => segments[0] === m.homeName);
