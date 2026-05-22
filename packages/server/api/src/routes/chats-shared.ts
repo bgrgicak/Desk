@@ -1,5 +1,5 @@
-import { type Pool } from "@agent-desk/db";
-import { NotFoundError } from "@agent-desk/shared";
+import { type Pool } from "@roomy-ai/db";
+import { NotFoundError } from "@roomy-ai/shared";
 
 /**
  * Resolves the on-disk slug for a chat's workspace. Used by route handlers

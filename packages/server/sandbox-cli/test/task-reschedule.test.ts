@@ -16,7 +16,7 @@ beforeEach(() => {
   postJsonMock.mockResolvedValue({ id: "msg_x" });
 });
 
-describe("desk-agent task reschedule", () => {
+describe("roomy-agent task reschedule", () => {
   it("posts a one-shot reschedule with chat + message-id + --at", async () => {
     await run([
       "--chat", "ch_a",

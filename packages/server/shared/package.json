@@ -1,5 +1,5 @@
 {
-  "name": "@agent-desk/shared",
+  "name": "@roomy-ai/shared",
   "version": "0.1.0-alpha.0",
   "license": "MIT",
   "type": "module",
@@ -7,12 +7,12 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "@agent-desk/dev": "./src/index.ts",
+      "@roomy-ai/dev": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
     "./logger": {
-      "@agent-desk/dev": "./src/logger.ts",
+      "@roomy-ai/dev": "./src/logger.ts",
       "types": "./dist/logger.d.ts",
       "import": "./dist/logger.js"
     },

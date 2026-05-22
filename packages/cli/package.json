@@ -1,0 +1,37 @@
+{
+  "name": "@roomy-ai/cli",
+  "version": "0.1.0-alpha.0",
+  "license": "MIT",
+  "description": "Host CLI for the Roomy personal AI assistant. `npx @roomy-ai/cli` boots the full stack on http://127.0.0.1:35138/.",
+  "type": "module",
+  "bin": {
+    "roomy": "src/roomy.mjs"
+  },
+  "files": [
+    "dist",
+    "src/roomy.mjs",
+    "package.json",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "typecheck": "node -e \"console.log('cli has no ts to typecheck yet')\"",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@roomy-ai/api": ">=0.1.0-0",
+    "@roomy-ai/app": ">=0.1.0-0",
+    "@roomy-ai/db": ">=0.1.0-0",
+    "@roomy-ai/runtime": ">=0.1.0-0",
+    "@roomy-ai/scheduler": ">=0.1.0-0",
+    "@roomy-ai/shared": ">=0.1.0-0",
+    "@roomy-ai/storage": ">=0.1.0-0",
+    "tsx": "^4.19.2"
+  }
+}

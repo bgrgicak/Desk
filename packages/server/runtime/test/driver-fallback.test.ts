@@ -62,7 +62,7 @@ vi.mock("../src/piClient.js", async (importOriginal) => {
   };
 });
 
-const originalSandboxDriver = process.env.DESK_SANDBOX_DRIVER;
+const originalSandboxDriver = process.env.ROOMY_SANDBOX_DRIVER;
 
 beforeEach(() => {
   state.createCalls = 0;
@@ -71,14 +71,14 @@ beforeEach(() => {
   state.aborted = [];
   state.resultModels = [];
   state.runCalls = [];
-  delete process.env.DESK_SANDBOX_DRIVER;
+  delete process.env.ROOMY_SANDBOX_DRIVER;
 });
 
 afterEach(() => {
   if (originalSandboxDriver === undefined) {
-    delete process.env.DESK_SANDBOX_DRIVER;
+    delete process.env.ROOMY_SANDBOX_DRIVER;
   } else {
-    process.env.DESK_SANDBOX_DRIVER = originalSandboxDriver;
+    process.env.ROOMY_SANDBOX_DRIVER = originalSandboxDriver;
   }
 });
 

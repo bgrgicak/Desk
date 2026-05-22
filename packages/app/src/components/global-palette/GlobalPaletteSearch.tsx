@@ -8,7 +8,7 @@ import {
   CommandItem,
   CommandList,
   CommandSeparator,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { useGetWorkspacesQuery, useSearchQuery } from '@/store/api'
 import { useGlobalPalette } from './GlobalPaletteProvider'
 import { useGlobalChats } from './globalChatStore'

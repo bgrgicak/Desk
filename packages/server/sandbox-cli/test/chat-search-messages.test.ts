@@ -18,7 +18,7 @@ beforeEach(() => {
   getJsonMock.mockResolvedValue({ hits: [] });
 });
 
-describe("desk-agent chat search-messages", () => {
+describe("roomy-agent chat search-messages", () => {
   it("issues a GET to /sandbox/search/messages with the encoded query", async () => {
     await run(["--query", "kanban board"]);
     expect(getJsonMock).toHaveBeenCalledTimes(1);

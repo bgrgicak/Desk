@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Bot, FolderKanban, Lock, ShieldCheck, Sparkles, UserRound } from 'lucide-react'
-import { Button, Input, cn } from '@agent-desk/ui'
+import { Button, Input, cn } from '@roomy-ai/ui'
 import { setSessionToken } from '@/auth/session'
 import { extractApiError } from '@/lib/api-error'
 import { BackgroundBlobs } from '@/components/layout/BackgroundBlobs'
@@ -31,7 +31,7 @@ const STEP_META: Record<StepId, StepMeta> = {
   },
   vault: {
     title: 'Secure your credentials',
-    description: 'Desk encrypts every API key and OAuth token with a password only you know.',
+    description: 'Roomy encrypts every API key and OAuth token with a password only you know.',
   },
   models: {
     title: 'Add AI providers',
@@ -51,7 +51,7 @@ interface ExplainerCard {
 const EXPLAINER: Record<StepId, ExplainerCard> = {
   account: {
     icon: UserRound,
-    eyebrow: 'Welcome to Desk',
+    eyebrow: 'Welcome to Roomy',
     heading: 'Your private workspace for agents and knowledge',
     bullets: [
       'One account, all your chats, tasks and files in one place.',
@@ -113,6 +113,8 @@ const VAULT_PASSWORD_MIN = 8
 // ── Step bodies ──────────────────────────────────────────────────────────────
 
 interface AccountData {
+  // Stored on the server as `username` but presented to the user as
+  // their display name — what the agent calls them in conversation.
   username: string
   email: string
   password: string
@@ -127,14 +129,13 @@ function AccountStepBody({ data, onChange }: {
   return (
     <div className="space-y-4">
       <div className="space-y-1.5">
-        <label className="text-xs font-medium text-muted-foreground">Username</label>
+        <label className="text-xs font-medium text-muted-foreground">Your name</label>
         <Input
           autoFocus
-          autoComplete="username"
-          autoCapitalize="none"
+          autoComplete="name"
           value={data.username}
           onChange={e => onChange({ username: e.target.value })}
-          placeholder="e.g. jsmith"
+          placeholder="What should we call you?"
         />
       </div>
 
@@ -427,7 +428,7 @@ export function SignupScreen({ onSignIn, onComplete }: SignupScreenProps) {
     }
   } else if (step === 'models') {
     primary = {
-      label: 'Go to Desk',
+      label: 'Go to Roomy',
       disabled: false,
       onClick: onComplete,
     }

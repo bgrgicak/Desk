@@ -11,10 +11,10 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { hashPassword, Pool, runMigrations, queries } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { hashPassword, Pool, runMigrations, queries } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 import { createApp, type AppOptions } from "../src/app.js";
 import { issueSession, clearSessions } from "../src/auth/sessions.js";
 
@@ -88,14 +88,14 @@ function rawWsUpgrade(reqPath: string): Promise<{ response: string; socket: net.
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-gate-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-mcp-gate-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-gate-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-mcp-gate-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   userId = generateId("user");
   await queries.users.insert(pool, {
@@ -123,7 +123,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 describe("must-change-password — HTTP gate", () => {

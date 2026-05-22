@@ -1,6 +1,6 @@
 /**
  * Translates pi's `--mode json` event stream into the run-format JSON
- * events Desk's scheduler + UI already know how to consume.
+ * events Roomy's scheduler + UI already know how to consume.
  *
  * The downstream consumers (scheduler/runs-helpers.ts, app's
  * MessageBubble/messageVisibility) read a small set of `type` values

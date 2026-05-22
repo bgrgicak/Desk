@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import App from './App'
 import ExampleFragment from '../fragments/example/Component'
 
-describe('Desk app scaffold', () => {
+describe('Roomy app scaffold', () => {
   it('renders the full app shell', () => {
     const html = renderToString(
       <MemoryRouter>
@@ -12,7 +12,7 @@ describe('Desk app scaffold', () => {
       </MemoryRouter>,
     )
 
-    expect(html).toContain('Desk app')
+    expect(html).toContain('Roomy app')
     expect(html).toContain('Example')
     expect(html).not.toContain('h-screen')
   })

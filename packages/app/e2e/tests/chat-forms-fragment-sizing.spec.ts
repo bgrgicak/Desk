@@ -6,14 +6,14 @@
  * *contained* the right characters but said nothing about whether the
  * iframe ended up the right height in a browser. This test attaches a
  * real fragment, lets the bridge + AppPreview run end-to-end against a
- * real desk-server, and measures the rendered iframe against its content.
+ * real roomy-server, and measures the rendered iframe against its content.
  *
- * Required precondition: `packages/desk-apps/chat-forms.app/dist/` must
+ * Required precondition: `packages/apps/chat-forms.app/dist/` must
  * exist. The disposable e2e server mirrors that directory into its
- * `${DESK_HOME}/.apps/` on startup; if the dist isn't built, the global
+ * `${ROOMY_HOME}/.apps/` on startup; if the dist isn't built, the global
  * fragment URL 404s and these tests fail with "iframe never visible"
  * instead of a height assertion. Run `npm --workspace
- * @agent-desk/chat-forms-app run build` once before running this spec.
+ * @roomy-ai/chat-forms-app run build` once before running this spec.
  */
 import * as fs from 'node:fs/promises'
 import { test, expect, type FrameLocator, type Locator, type Page } from '../fixtures'
@@ -34,10 +34,10 @@ interface Message {
 }
 
 const MULTI_STEP_FRAGMENT_PATH =
-  '/opt/desk-apps/chat-forms.app/dist/fragments/multi-step'
+  '/opt/roomy-apps/chat-forms.app/dist/fragments/multi-step'
 
 const YES_NO_FRAGMENT_PATH =
-  '/opt/desk-apps/chat-forms.app/dist/fragments/yes-no'
+  '/opt/roomy-apps/chat-forms.app/dist/fragments/yes-no'
 
 const THREE_STEP_PAYLOAD = JSON.stringify([
   { id: 'q1', type: 'short-text', question: 'Test name?' },
@@ -54,7 +54,7 @@ async function chatFormsDistExists(): Promise<boolean> {
   const here = new URL(import.meta.url).pathname
   const distHtml = here.replace(
     /packages\/app\/e2e\/tests\/.*$/,
-    'packages/desk-apps/chat-forms.app/dist/fragments/multi-step/index.html',
+    'packages/apps/chat-forms.app/dist/fragments/multi-step/index.html',
   )
   try {
     await fs.access(distHtml)
@@ -188,7 +188,7 @@ test.describe('chat-forms fragments — real iframe sizing', () => {
     const ok = await chatFormsDistExists()
     test.skip(
       !ok,
-      'chat-forms.app/dist not built — run `npm --workspace @agent-desk/chat-forms-app run build` first',
+      'chat-forms.app/dist not built — run `npm --workspace @roomy-ai/chat-forms-app run build` first',
     )
   })
 

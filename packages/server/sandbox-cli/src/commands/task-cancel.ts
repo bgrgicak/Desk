@@ -2,10 +2,10 @@ import { postJson } from "../client.js";
 import { CliError, parseFlags } from "../errors.js";
 import { output } from "../index.js";
 
-export const usage = "desk-agent task cancel --chat <id> <message-id>";
+export const usage = "roomy-agent task cancel --chat <id> <message-id>";
 
 export const help = `\
-desk-agent task cancel — cancel a pending scheduled, recurring, or manual task
+roomy-agent task cancel — cancel a pending scheduled, recurring, or manual task
 message that belongs to the given chat.
 
 Required:
@@ -13,7 +13,7 @@ Required:
   <message-id>           ID of the task message to cancel.
 
 Examples:
-  desk-agent task cancel --chat ch_abc msg_123
+  roomy-agent task cancel --chat ch_abc msg_123
 
 Exit codes:
   0 on success — JSON message row on stdout.

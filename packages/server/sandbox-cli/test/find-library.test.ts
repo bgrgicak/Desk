@@ -18,7 +18,7 @@ beforeEach(() => {
   getJsonMock.mockResolvedValue({ hits: [] });
 });
 
-describe("desk-agent find library", () => {
+describe("roomy-agent find library", () => {
   it("forwards query options to /sandbox/find/library", async () => {
     await run(["--query", "note editor", "--kind", "fragment", "--workspace", "*", "--limit", "5"]);
     const url = getJsonMock.mock.calls[0][0] as string;

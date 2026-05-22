@@ -6,7 +6,7 @@ Branch: `worktree-feat+pi-runtime`. Single commit on a fresh worktree.
 
 Opencode pain: heavyweight long-lived daemon per container, fragile HTTP/SSE
 multiplexer, env-digest restart dance, MCP-config write lock, persistent
-auth wipe, port allocation races, SQLite contention on desk-server restart.
+auth wipe, port allocation races, SQLite contention on roomy-server restart.
 
 Pi ([@earendil-works/pi-coding-agent](https://github.com/badlogic/pi-mono))
 is a CLI coding agent that runs as one short-lived subprocess per turn,
@@ -38,7 +38,7 @@ opencode's 1.4 GB.
 | Recovery loops in `driver.ts` | 4 (daemon-gone, SSE-handshake, OOM-probe, session-stale) | 1 (container-gone) | **−75%** |
 | Explicit cross-call mutexes/locks (MCP write, port-bind, env-digest, auth wipe, SSE handshake guard) | 5 | 0 (per-turn isolation) | — |
 | Cold-spawn time on auth misconfig | 60s (daemon-ready timeout × 3 retries) | 1.5s | **40× faster** |
-| Cross–desk-server-restart cleanup | killed orphaned daemons to avoid SQLite `BUSY` | no-op | — |
+| Cross–roomy-server-restart cleanup | killed orphaned daemons to avoid SQLite `BUSY` | no-op | — |
 
 Plus a class of regressions we no longer have to chase: opencode's SSE
 broadcast format changed across minor versions and we had to pin
@@ -50,7 +50,7 @@ broadcast format changed across minor versions and we had to pin
 ```
 Old (opencode):                          New (pi):
 ─────────────────                        ──────────────
-desk-server                              desk-server
+roomy-server                              roomy-server
   └─ HTTP/SSE → opencode serve daemon      └─ docker exec pi -p --mode json ...
       (per container, long-lived)             (per turn, short-lived)
       ├─ port publish (9105)                  ├─ stdout = JSON event lines
@@ -106,12 +106,12 @@ now installs `@earendil-works/pi-coding-agent@0.75.4` and **does not** ship
 opencode-ai or playwright/firefox/Xvfb (MCP is deferred — see below).
 
 [`packages/server/runtime/sandbox-entrypoint.sh`](../../runtime/sandbox-entrypoint.sh)
-symlinks `/opt/desk-skills` → `~/.agents/skills` (pi's discovery path).
+symlinks `/opt/roomy-skills` → `~/.agents/skills` (pi's discovery path).
 
 **Action required before integration tests pass locally / CI:**
 
 ```sh
-docker build -t desk/sandbox:v1 -f packages/server/runtime/Dockerfile.sandbox .
+docker build -t roomy/sandbox:v1 -f packages/server/runtime/Dockerfile.sandbox .
 ```
 
 ## Deferred: MCP
@@ -140,7 +140,7 @@ passing as-is. A bulk rename is mechanical and can be a follow-up PR.
 ## Verification
 
 ```sh
-npm -w @agent-desk/runtime test   # 151/154 pass; 3 integration tests need rebuilt image
+npm -w @roomy-ai/runtime test   # 151/154 pass; 3 integration tests need rebuilt image
 npx tsc --noEmit -p packages/server/runtime    # clean
 npx tsc --noEmit -p packages/server/scheduler  # clean
 ```
@@ -153,7 +153,7 @@ them) — unrelated to this swap.
 ## Chaos testing against this branch
 
 [`packages/server/docs/CHAOS_TESTING.md`](../CHAOS_TESTING.md) hammers a
-running desk-server with the workload it really sees in production —
+running roomy-server with the workload it really sees in production —
 parallel quick chats, paced conversations, preemption floods, large
 attachments, multi-tool tasks. **The pi swap was validated end-to-end
 against a dedicated test instance** before this PR was opened.
@@ -179,13 +179,13 @@ opencode-serve 60s daemon-ready timeout on misconfig is gone.
 ### To reproduce locally
 
 1. Build the production sandbox image:
-   `docker build -t desk/sandbox:v1 -f packages/server/runtime/Dockerfile.sandbox .`
+   `docker build -t roomy/sandbox:v1 -f packages/server/runtime/Dockerfile.sandbox .`
 2. Bake provider credentials into a chaos image (your local Codex auth at
    `~/.codex/auth.json` translates to pi's `~/.pi/agent/auth.json` shape
    `{"openai-codex": {"type": "oauth", "access", "refresh", "accountId", "expires"}}`).
-3. Spin up a dedicated test desk-server on a non-default port + throwaway
-   `DESK_HOME`:
-   `DESK_HOME=/tmp/desk-chaos PORT=35238 DESK_SANDBOX_IMAGE=desk/sandbox:v1-pi-chaos npm -w @agent-desk/api run start`
+3. Spin up a dedicated test roomy-server on a non-default port + throwaway
+   `ROOMY_HOME`:
+   `ROOMY_HOME=/tmp/roomy-chaos PORT=35238 ROOMY_SANDBOX_IMAGE=roomy/sandbox:v1-pi-chaos npm -w @roomy-ai/api run start`
 4. Run chaos:
    `node scripts/chaos-test.mjs --port 35238 --workspaces 2 --scenarios-per-workspace 6 --seed 4242 --cleanup`
 
@@ -193,7 +193,7 @@ opencode-serve 60s daemon-ready timeout on misconfig is gone.
 
 The chaos test baked the `openai-codex` OAuth blob into the sandbox image
 via `/etc/skel/.pi/agent/auth.json`. For the production install where
-DESK's `localSources/codex` already reads `~/.codex/auth.json` and surfaces
+Roomy's `localSources/codex` already reads `~/.codex/auth.json` and surfaces
 it as `OPENCODE_AUTH_CONTENT`, we need a small piece of code in the runtime
 that translates that same blob into pi's `~/.pi/agent/auth.json` format
 before each pi exec. Mechanically the same shape we built for the chaos
@@ -208,7 +208,7 @@ All three gaps closed before merge — the swap is a 100% replacement.
    provider-shaped stderr (matched by `isModelFailure`), spawn pi
    again with the next fallback model in the list. Cancel + container-
    gone deliberately skip the fallback path. Configured via the
-   `DESK_FALLBACK_MODELS` env (comma-separated); a future agent-row
+   `ROOMY_FALLBACK_MODELS` env (comma-separated); a future agent-row
    column can replace the env hop without changing the contract.
 
 2. **Codex/ChatGPT subscription bridge** (commit `8c1d99e`).
@@ -219,12 +219,12 @@ All three gaps closed before merge — the swap is a 100% replacement.
    propagates immediately, no daemon cache to invalidate.
 
 3. **MCP bridge pi-extension** (this commit). New
-   `pi-extensions/desk-mcp-bridge/` extension reads
+   `pi-extensions/roomy-mcp-bridge/` extension reads
    `<workspace>/.agents/mcp.json`, spawns each MCP server via stdio
    (bare JSON-RPC, no SDK dep), runs the
    initialize → tools/list → tools/call handshake, and registers each
    discovered tool as a pi tool named `<server>__<tool>`. Baked into
-   the sandbox image at `/etc/skel/.pi/agent/extensions/desk-mcp-bridge/`
+   the sandbox image at `/etc/skel/.pi/agent/extensions/roomy-mcp-bridge/`
    so every workspace's first boot picks it up via the entrypoint's
    `cp -rn`. Browser-goal (`site`/`app`) chats wire up playwright-mcp
    automatically via the resurrected `writeWorkspaceMcpConfig` +

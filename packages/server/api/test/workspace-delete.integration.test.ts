@@ -10,11 +10,11 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, queries, hashPassword } from "@agent-desk/db";
-import { ensureLayout, ensureWorkspaceLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, queries, hashPassword } from "@roomy-ai/db";
+import { ensureLayout, ensureWorkspaceLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -58,14 +58,14 @@ function request(
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ws-delete-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-ws-delete-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ws-delete-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-ws-delete-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const runManager = createRunManager({
     pool,
@@ -96,7 +96,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 async function insertWorkspace(name: string): Promise<{ id: string; slug: string }> {
@@ -144,8 +144,8 @@ describe("DELETE /workspaces/:id — last-workspace guard", () => {
     expect(delRes.status).toBe(200);
     expect(delRes.body).toEqual({ ok: true });
 
-    // FS dir for the deleted workspace is gone from ~/Desk/
-    // and present under ~/Desk/.trash/workspaces/ with a timestamped suffix.
+    // FS dir for the deleted workspace is gone from ~/Roomy/
+    // and present under ~/Roomy/.trash/workspaces/ with a timestamped suffix.
     await expect(fs.stat(siblingDir)).rejects.toMatchObject({ code: "ENOENT" });
     const trashEntries = await fs.readdir(path.join(home, ".trash", "workspaces"));
     expect(trashEntries.some(name => name.startsWith(`${siblingSlug}-`))).toBe(true);

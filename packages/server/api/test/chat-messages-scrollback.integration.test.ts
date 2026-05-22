@@ -14,11 +14,11 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, queries, hashPassword } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId, type Message } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, queries, hashPassword } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId, type Message } from "@roomy-ai/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -69,14 +69,14 @@ function request(
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-scrollback-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-scrollback-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-scrollback-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-scrollback-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const runManager = createRunManager({
     pool,
@@ -188,7 +188,7 @@ afterAll(async () => {
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath)
     await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 describe("GET /chats/:id/messages — initial load (no cursor)", () => {

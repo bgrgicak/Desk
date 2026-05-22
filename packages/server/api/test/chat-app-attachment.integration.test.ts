@@ -1,7 +1,7 @@
 /**
  * PR-F: pin a library `<name>.app/` to a chat as an attachment.
  *
- * Real desk-server, real SQLite, real fs. Materializes a library
+ * Real roomy-server, real SQLite, real fs. Materializes a library
  * `<name>.app/`, calls `POST /chats/:id/library-refs` to pin it as a
  * chat attachment, and confirms a symlink lands in the chat's
  * `attachments/` dir + the listing returns the entry with the app mime
@@ -13,15 +13,15 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { Pool, runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 import {
   ensureLayout,
   ensureWorkspaceLayout,
   workspaceRootPath,
   chatAttachmentsDir,
-} from "@agent-desk/storage";
+} from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -38,18 +38,18 @@ let authToken: string;
 const APP_NAME = "embed-target-app";
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-attach-int-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-attach-int-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "attach-int-user";
-  process.env.DESK_SEED_PASSWORD = "pw";
+  process.env.ROOMY_SEED_USERNAME = "attach-int-user";
+  process.env.ROOMY_SEED_PASSWORD = "pw";
   await seedIfEmpty(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-attach-int-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-attach-int-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const { rows: wsRows } = await pool.query<{ id: string; path: string }>(
     "SELECT id, path FROM workspaces LIMIT 1",
@@ -69,7 +69,7 @@ beforeAll(async () => {
   const appRoot = path.join(wsRoot, `${APP_NAME}.app`);
   await fs.mkdir(path.join(appRoot, "dist"), { recursive: true });
   await fs.writeFile(
-    path.join(appRoot, "desk.app.json"),
+    path.join(appRoot, "roomy.app.json"),
     JSON.stringify({ name: APP_NAME, capabilities: [] }),
     "utf8",
   );
@@ -103,7 +103,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 interface RawResponse {
@@ -161,7 +161,7 @@ describe("chat-message embedding for library apps (PR-F)", () => {
     const ref = res.bodyJson as { path: string; mime: string; isDir: boolean; name: string };
     expect(ref.name).toBe(`${APP_NAME}.app`);
     expect(ref.isDir).toBe(true);
-    expect(ref.mime).toBe("application/vnd.desk.app+directory");
+    expect(ref.mime).toBe("application/vnd.roomy.app+directory");
     expect(ref.path).toBe(`.chats/${chatId}/attachments/${APP_NAME}.app`);
 
     // Symlink should now exist in the chat attachments dir

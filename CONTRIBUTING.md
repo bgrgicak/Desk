@@ -1,6 +1,6 @@
-# Contributing to Desk
+# Contributing to Roomy
 
-Thanks for picking up Desk. The bar for this codebase is "real users hit
+Thanks for picking up Roomy. The bar for this codebase is "real users hit
 it daily" — every change should preserve that. The notes below cover
 what's enforced automatically vs reviewed manually, and the few
 conventions we ask new contributors to follow.
@@ -17,13 +17,13 @@ conventions we ask new contributors to follow.
 
 ```bash
 git clone git@github.com:bgrgicak/Desk.git
-cd Desk
+cd Roomy
 npm install        # also installs the pre-commit hook
-npm run dev        # boots desk-server + Vite
+npm run dev        # boots roomy-server + Vite
 ```
 
-Open <http://localhost:5173/>, sign in as `desk` / the
-`DESK_SEED_PASSWORD` (default `change-me-before-first-boot`).
+Open <http://localhost:5173/>, sign in as `roomy` / the
+`ROOMY_SEED_PASSWORD` (default `change-me-before-first-boot`).
 
 ## What's enforced automatically
 
@@ -49,8 +49,8 @@ Triggers on `push` to `trunk` and on pull requests against it.
 | **Typecheck**                | `npm run typecheck` across every workspace.                                                                                 |
 | **Vitest (unit suite)**      | Pure-logic tests with no external dependencies.                                                                             |
 | **Vitest (integration suite)** | Real SQLite, real Docker, real `at` / `crontab`. Auto-detects backend availability.                                      |
-| **Playwright e2e**           | Real desk-server + Vite preview. Drives the UI end-to-end against the fake sandbox driver.                                  |
-| **Prepare sandbox image**    | Builds `desk/sandbox:v1` once; later jobs download the saved image instead of re-building.                                  |
+| **Playwright e2e**           | Real roomy-server + Vite preview. Drives the UI end-to-end against the fake sandbox driver.                                  |
+| **Prepare sandbox image**    | Builds `roomy/sandbox:v1` once; later jobs download the saved image instead of re-building.                                  |
 | **Build desktop app (macOS)** | Validates the Electron wrapper still installs / packages cleanly.                                                          |
 
 The aggregate `test` job fails unless every required parallel job

@@ -4,7 +4,7 @@
  * node_modules-style tree at packages/desktop/build-server/.
  *
  * electron-builder ships this tree as `Resources/server/` so the bundled
- * desk-server can resolve `@agent-desk/*` (and transitive deps like
+ * roomy-server can resolve `@roomy-ai/*` (and transitive deps like
  * busboy, croner, hash-wasm, zod, nanoid, ignore, kdbxweb,
  * @noble/hashes) via Node's standard node_modules walk.
  */
@@ -46,7 +46,7 @@ async function main() {
     );
     workspacePkgs.push({ pkg, src, pkgJson });
     for (const [name, version] of Object.entries(pkgJson.dependencies ?? {})) {
-      if (name.startsWith("@agent-desk/")) continue;
+      if (name.startsWith("@roomy-ai/")) continue;
       collectedDeps[name] = version;
     }
   }
@@ -55,7 +55,7 @@ async function main() {
     path.join(OUT, "package.json"),
     JSON.stringify(
       {
-        name: "desk-server-bundle",
+        name: "roomy-server-bundle",
         version: "0.0.0",
         private: true,
         dependencies: collectedDeps,
@@ -72,9 +72,9 @@ async function main() {
     stdio: "inherit",
   });
 
-  await fsp.mkdir(path.join(NM, "@agent-desk"), { recursive: true });
+  await fsp.mkdir(path.join(NM, "@roomy-ai"), { recursive: true });
   for (const { pkg, src, pkgJson } of workspacePkgs) {
-    const dst = path.join(NM, "@agent-desk", pkg);
+    const dst = path.join(NM, "@roomy-ai", pkg);
     await fsp.mkdir(dst, { recursive: true });
     await fsp.writeFile(
       path.join(dst, "package.json"),

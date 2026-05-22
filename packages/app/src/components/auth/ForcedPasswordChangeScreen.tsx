@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Toaster, toast } from 'sonner'
-import { Button, Input, TooltipProvider } from '@agent-desk/ui'
+import { Button, Input, TooltipProvider } from '@roomy-ai/ui'
 import { useChangePasswordMutation } from '@/store/api'
 import { extractApiError } from '@/lib/api-error'
 import {

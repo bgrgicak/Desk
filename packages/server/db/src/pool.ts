@@ -1,6 +1,6 @@
 import { chmodSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { withModule, type Logger } from "@agent-desk/shared/logger";
+import { withModule, type Logger } from "@roomy-ai/shared/logger";
 let slowQueryLogger: Logger = withModule("db/pool");
 
 /** Test-only: replace the slow-query logger with one whose destination
@@ -11,7 +11,7 @@ export function _setSlowQueryLoggerForTest(logger: Logger | null): void {
 
 export interface PoolConfig {
   /**
-   * Filesystem path to the SQLite database. Falls back to DESK_DB_PATH and
+   * Filesystem path to the SQLite database. Falls back to ROOMY_DB_PATH and
    * finally to `:memory:` (test default). Use `:memory:` for unit tests
    * that don't need cross-connection visibility.
    */
@@ -54,7 +54,7 @@ interface QueryResult<T> {
  */
 let slowQueryThresholdMsCache: number | undefined;
 function resolveSlowQueryThresholdMs(): number {
-  const raw = process.env.DESK_SLOW_QUERY_MS;
+  const raw = process.env.ROOMY_SLOW_QUERY_MS;
   if (raw === undefined) return 50;
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : 0;
@@ -136,9 +136,9 @@ export class Pool {
   private readonly db: DatabaseSync;
 
   constructor(config?: PoolConfig) {
-    // Resolution order: explicit `path` → `DESK_DB_PATH` env (production
+    // Resolution order: explicit `path` → `ROOMY_DB_PATH` env (production
     // default, set by install.sh) → `:memory:` (unit-test fallback).
-    const path = config?.path ?? process.env.DESK_DB_PATH ?? ":memory:";
+    const path = config?.path ?? process.env.ROOMY_DB_PATH ?? ":memory:";
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode=WAL");
     // EXCLUSIVE locking keeps the WAL index ("wal-index") in process heap

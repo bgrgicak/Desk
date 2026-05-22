@@ -35,7 +35,7 @@ export async function logKeyAccess(
  * running install accumulates a row per sandbox env injection.
  *
  * Default retention (90 days) is documented in SECURITY.md. Operators
- * who want longer history bump DESK_KEY_ACCESS_LOG_RETENTION_DAYS.
+ * who want longer history bump ROOMY_KEY_ACCESS_LOG_RETENTION_DAYS.
  */
 export async function pruneKeyAccessLog(
   db: Pool,

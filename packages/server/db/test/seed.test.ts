@@ -23,15 +23,15 @@ describe("seedIfEmpty", () => {
 
     const { rows: users } = await pool.query("SELECT * FROM users");
     expect(users).toHaveLength(1);
-    expect(users[0].username).toBe("desk");
+    expect(users[0].username).toBe("roomy");
 
     const { rows: agents } = await pool.query("SELECT * FROM agents");
     expect(agents).toHaveLength(1);
-    expect(agents[0].name).toBe("Desk");
+    expect(agents[0].name).toBe("Roomy");
 
     const { rows: workspaces } = await pool.query("SELECT * FROM workspaces");
     expect(workspaces).toHaveLength(1);
-    expect(workspaces[0].name).toBe("Desk");
+    expect(workspaces[0].name).toBe("Roomy");
     expect(workspaces[0].user_id).toBe(users[0].id);
   });
 

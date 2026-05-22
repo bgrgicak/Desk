@@ -1,8 +1,8 @@
 import { getSessionToken } from '@/auth/session'
 
-export const APP_BRIDGE_REQUEST = 'desk.app.request'
-export const APP_BRIDGE_RESPONSE = 'desk.app.response'
-export const APP_BRIDGE_RESIZE = 'desk.app.resize'
+export const APP_BRIDGE_REQUEST = 'roomy.app.request'
+export const APP_BRIDGE_RESPONSE = 'roomy.app.response'
+export const APP_BRIDGE_RESIZE = 'roomy.app.resize'
 
 export type AppBridgeMethod =
   | 'storage.list'
@@ -98,7 +98,7 @@ export async function handleAppBridgeRequest(
 
 /**
  * Posts a chat message on the iframe's behalf. Built-in interaction
- * fragments (e.g. chat-forms/yes_no) call this from `window.desk.chat.sendMessage`
+ * fragments (e.g. chat-forms/yes_no) call this from `window.roomy.chat.sendMessage`
  * to bubble the user's choice back into the chat transcript, where the
  * agent picks it up on its next turn. The parent SPA uses its own bearer
  * session — the iframe never sees the user's auth token.

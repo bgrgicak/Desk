@@ -38,7 +38,7 @@ export async function seedSessionToken(
   // resolves to about:blank before the page navigates).
   await context.addInitScript((token) => {
     try {
-      sessionStorage.setItem("desk.session.token", token);
+      sessionStorage.setItem("roomy.session.token", token);
     } catch {
       /* ignore — about:blank or storage-denied context */
     }

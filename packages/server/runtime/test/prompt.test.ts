@@ -2,21 +2,21 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { GOAL_KEYS } from "@agent-desk/shared";
+import { GOAL_KEYS } from "@roomy-ai/shared";
 import {
   ensureLayout,
   ensureWorkspaceLayout,
   userMemoryIndexPath,
   workspaceMemoryIndexPath,
-} from "@agent-desk/storage";
+} from "@roomy-ai/storage";
 import { loadAndSub, renderPromptBody } from "../src/prompt.js";
-import { DESK_REFERENCE_SKILLS } from "../src/skills.js";
+import { ROOMY_REFERENCE_SKILLS } from "../src/skills.js";
 
 describe("loadAndSub", () => {
   it("substitutes {{name}} placeholders from vars", () => {
-    const out = loadAndSub("identity.md", { agentName: "Jarvis", userName: "Desk" });
-    expect(out).toContain("You are Jarvis, call me Desk.");
-    expect(out).toContain("Jarvis is a steady, useful presence in Desk's life");
+    const out = loadAndSub("identity.md", { agentName: "Jarvis", userName: "Roomy" });
+    expect(out).toContain("You are Jarvis, call me Roomy.");
+    expect(out).toContain("Jarvis is a steady, useful presence in Roomy's life");
   });
 
   it("throws when a referenced placeholder is missing, naming the fragment", () => {
@@ -49,10 +49,10 @@ describe("loadAndSub", () => {
 describe("renderPromptBody", () => {
   const baseInput = {
     agentName: "Jarvis",
-    userName: "Desk",
+    userName: "Roomy",
   };
 
-  it("orders identity → mandate → task routing → artifacts → task context → scheduling → persistence → memory rules → goal → Desk skill router", () => {
+  it("orders identity → mandate → task routing → artifacts → task context → scheduling → persistence → memory rules → goal → Roomy skill router", () => {
     const body = renderPromptBody({
       ...baseInput,
       chatId: "chat-x",
@@ -66,10 +66,10 @@ describe("renderPromptBody", () => {
     const idxArtifacts = body.indexOf("## Your workspace");
     const idxTaskContext = body.indexOf("## Building task context");
     const idxScheduling = body.indexOf("## Scheduling");
-    const idxPersistence = body.indexOf("## Persistence (~/.deskrc)");
+    const idxPersistence = body.indexOf("## Persistence (~/.roomyrc)");
     const idxMemoryRules = body.indexOf("## Memory and recall");
     const idxGoal = body.indexOf("## User's goal: write a document");
-    const idxSkills = body.indexOf("## Desk native skills");
+    const idxSkills = body.indexOf("## Roomy native skills");
 
     expect(idxIdentity).toBeGreaterThanOrEqual(0);
     expect(idxMandate).toBeGreaterThanOrEqual(0);
@@ -100,7 +100,7 @@ describe("renderPromptBody", () => {
     // The body template is what makes the resulting task self-contained.
     expect(body).toContain("Acceptance criteria:");
     expect(body).toContain("Completion handoff:");
-    expect(body).toContain("desk-agent task complete");
+    expect(body).toContain("roomy-agent task complete");
     // The "stay inline" exceptions must be present so the agent doesn't
     // spawn tasks for quick answers / one-line edits.
     expect(body).toContain("quick answer, explanation, or clarification");
@@ -125,7 +125,7 @@ describe("renderPromptBody", () => {
     expect(body).toContain("briefly say what failed and the next\nuseful step");
   });
 
-  it("places Desk identity at the top of the system prompt", () => {
+  it("places Roomy identity at the top of the system prompt", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-x" });
 
     const idxIdentity = body.indexOf("## Identity");
@@ -140,34 +140,34 @@ describe("renderPromptBody", () => {
 
   it("includes persistence guidance in chat-mode prompts", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-x" });
-    expect(body).toContain("## Persistence (~/.deskrc)");
+    expect(body).toContain("## Persistence (~/.roomyrc)");
     expect(body).toContain("There are no ephemeral package installs");
     expect(body).toContain("always add the idempotent install command to");
-    expect(body).toContain("`~/.deskrc` immediately");
+    expect(body).toContain("`~/.roomyrc` immediately");
     expect(body).toContain("`npm install -g`");
-    expect(body).toContain("Installing a package without persisting it in `~/.deskrc` is an incomplete");
+    expect(body).toContain("Installing a package without persisting it in `~/.roomyrc` is an incomplete");
     expect(body).toContain("sudo apt-get update && sudo apt-get install -y --no-install-recommends");
     expect(body).toContain("Every line must be idempotent");
-    expect(body).toContain("desk-persistence");
+    expect(body).toContain("roomy-persistence");
   });
 
   it("omits persistence guidance from summary-mode prompts", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-x", runMode: "summary" });
-    expect(body).not.toContain("## Persistence (~/.deskrc)");
+    expect(body).not.toContain("## Persistence (~/.roomyrc)");
   });
 
-  it("does not inline the long Desk CLI manual", () => {
+  it("does not inline the long Roomy CLI manual", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-x" });
-    expect(body).toContain("## Desk native skills");
-    expect(body).toContain("desk-cli-task-schedule");
-    expect(body).toContain("desk-cli-chat-attach-artifact");
-    expect(body).toContain("desk-cli-file-to-markdown");
-    expect(body).toContain("desk-persistence");
+    expect(body).toContain("## Roomy native skills");
+    expect(body).toContain("roomy-cli-task-schedule");
+    expect(body).toContain("roomy-cli-chat-attach-artifact");
+    expect(body).toContain("roomy-cli-file-to-markdown");
+    expect(body).toContain("roomy-persistence");
     expect(body).toContain("the `playwright` MCP server");
     expect(body).toContain("assume Firefox");
-    expect(body).toContain("desk-app-storage");
-    expect(body).toContain("load `desk-app-storage` before touching");
-    expect(body).not.toContain("# Desk CLI");
+    expect(body).toContain("roomy-app-storage");
+    expect(body).toContain("load `roomy-app-storage` before touching");
+    expect(body).not.toContain("# Roomy CLI");
     expect(body).not.toContain("### Cron quick reference");
     expect(body).not.toContain("NO_TOKEN");
   });
@@ -204,7 +204,7 @@ describe("renderPromptBody", () => {
 
   it("artifacts fragment includes attach-artifact instruction when chatId is set", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-xyz" });
-    expect(body).toContain('desk-agent chat attach-artifact --chat chat-xyz "<path>"');
+    expect(body).toContain('roomy-agent chat attach-artifact --chat chat-xyz "<path>"');
     expect(body).toContain("as the last step before replying");
     expect(body).toContain("create, significantly update, or retrieve from the current chat/workspace library");
     expect(body).toContain("files, apps, directories, images, and library items");
@@ -214,13 +214,13 @@ describe("renderPromptBody", () => {
     expect(body).toContain("Reply only after the attach command succeeds, fails, or no attachable current-workspace path exists");
     expect(body).toContain("report failures inline");
     expect(body).toContain("Quote paths.");
-    expect(body).toContain("desk-cli-chat-attach-artifact");
+    expect(body).toContain("roomy-cli-chat-attach-artifact");
     expect(body).toContain("chat-xyz");
   });
 
   it("artifacts fragment omits attach-artifact instruction when chatId is missing", () => {
     const body = renderPromptBody({ ...baseInput });
-    expect(body).not.toContain("Always run `desk-agent chat attach-artifact");
+    expect(body).not.toContain("Always run `roomy-agent chat attach-artifact");
   });
 
   it("summary mode uses summary-only instructions and omits artifact workflow", () => {
@@ -241,12 +241,12 @@ describe("renderPromptBody", () => {
     expect(body).toContain("Chat artifacts:  ~/.chats/chat-abc/artifacts/");
     expect(body).not.toContain("## Your workspace");
     expect(body).not.toContain("Save before replying");
-    expect(body).not.toContain("desk-agent chat attach-artifact");
+    expect(body).not.toContain("roomy-agent chat attach-artifact");
     expect(body).not.toContain("## Scheduling");
     expect(body).not.toContain("## Goal autodetection");
     expect(body).not.toContain("## User's goal:");
-    expect(body).not.toContain("## Desk native skills");
-    expect(body).not.toContain("## Persistence (~/.deskrc)");
+    expect(body).not.toContain("## Roomy native skills");
+    expect(body).not.toContain("## Persistence (~/.roomyrc)");
   });
 
   it("artifacts fragment enumerates artifacts/ and attachments/ but not notes/ when asking about files", () => {
@@ -290,13 +290,13 @@ describe("renderPromptBody", () => {
   });
 
   it("points the agent at search_chat_messages from the always-on context", () => {
-    // P3.5: context.md must name the chat-search tool and its Desk skill so
-    // recall is discoverable without preloading desk-skills.
+    // P3.5: context.md must name the chat-search tool and its Roomy skill so
+    // recall is discoverable without preloading roomy-skills.
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
 
     expect(body).toContain("## Memory and recall");
     expect(body).toContain("search_chat_messages");
-    expect(body).toContain("desk-cli-chat-search-messages");
+    expect(body).toContain("roomy-cli-chat-search-messages");
     expect(body.match(/## Memory and recall/g)).toHaveLength(1);
   });
 
@@ -320,8 +320,8 @@ describe("renderPromptBody", () => {
 
   it("includes timezone-known fragment when userTimezone is provided", () => {
     const body = renderPromptBody({ ...baseInput, userTimezone: "Europe/Berlin" });
-    expect(body).toContain("Europe/Berlin (Desk's app client)");
-    expect(body).toContain("desk-cli-task-schedule");
+    expect(body).toContain("Europe/Berlin (Roomy's app client)");
+    expect(body).toContain("roomy-cli-task-schedule");
   });
 
   it("includes timezone-unknown fragment when userTimezone is missing", () => {
@@ -353,13 +353,13 @@ describe("renderPromptBody", () => {
   });
 
   it("the `app` goal points the agent at the scaffold + fragment composition", () => {
-    // PR-A added the desk-app-scaffold flow; PR-D pushed the goal toward
+    // PR-A added the roomy-app-scaffold flow; PR-D pushed the goal toward
     // multi-fragment composition. Pin the load-bearing pieces of that
     // prompt so a future tweak doesn't quietly drop the agent into the
     // single-HTML-file pattern PR-A replaced.
     const body = renderPromptBody({ ...baseInput, goal: "app" });
-    expect(body).toContain("desk-agent app create");
-    expect(body).toContain("desk-app-scaffold");
+    expect(body).toContain("roomy-agent app create");
+    expect(body).toContain("roomy-app-scaffold");
     expect(body).toContain("getStorageClient()");
     expect(body).toContain("storage.read");
     expect(body).not.toContain("per-app storage API in later issues");
@@ -371,7 +371,7 @@ describe("renderPromptBody", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
 
     expect(body).toContain("Before answering whether the Library has a reusable app");
-    expect(body).toContain("run `desk-agent find library` and read the result");
+    expect(body).toContain("run `roomy-agent find library` and read the result");
     expect(body).toContain("before handling a request that a\nreusable item could satisfy");
     expect(body).toContain("Filesystem search may supplement current-turn discovery, not replace it");
   });
@@ -403,7 +403,7 @@ describe("renderPromptBody", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-abc" });
 
     expect(body).toContain("If discovery finds a satisfying current-workspace item, reuse or update it\ninstead of creating a duplicate");
-    expect(body).toContain("attach it in the same turn with `desk-agent chat\nattach-artifact` before replying");
+    expect(body).toContain("attach it in the same turn with `roomy-agent chat\nattach-artifact` before replying");
     expect(body).toContain("only pass paths that are in the current\nchat/workspace");
     expect(body).toContain("Attach first when attachable, then summarize briefly");
   });
@@ -412,7 +412,7 @@ describe("renderPromptBody", () => {
     const body = renderPromptBody({ ...baseInput, goal: "app" });
 
     expect(body).toContain("Before scaffolding, offering to build, or saying an app does not exist");
-    expect(body).toContain("search the current workspace library with `desk-agent find library`");
+    expect(body).toContain("search the current workspace library with `roomy-agent find library`");
     expect(body).toContain("If a matching app or fragment satisfies the request, reuse it and attach it");
     expect(body).toContain("do not scaffold, rebuild,\n   or duplicate it");
     expect(body).toContain("Only build a new app when no suitable app/fragment exists or\n   the user explicitly asks for a new one");
@@ -426,7 +426,7 @@ describe("memory injection", () => {
   let home: string;
 
   beforeAll(async () => {
-    home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-prompt-memory-"));
+    home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-prompt-memory-"));
     await ensureLayout(home);
     await ensureWorkspaceLayout(home, "alpha");
   });
@@ -437,7 +437,7 @@ describe("memory injection", () => {
 
   const baseInput = {
     agentName: "Jarvis",
-    userName: "Desk",
+    userName: "Roomy",
   };
 
   it("injects context.md (memory rules) followed by user and workspace memory indexes in order", async () => {
@@ -469,16 +469,16 @@ describe("memory injection", () => {
     expect(idxWorkspaceIndex).toBeGreaterThan(idxUserIndex);
     expect(idxGoal).toBeGreaterThan(idxWorkspaceIndex);
 
-    expect(body).toContain("<!-- Desk user memory index -->");
-    expect(body).toContain("<!-- Desk workspace memory index -->");
+    expect(body).toContain("<!-- Roomy user memory index -->");
+    expect(body).toContain("<!-- Roomy workspace memory index -->");
     expect(body).toContain("Workspace memory is writable from the sandbox");
     expect(body).toContain("~/.memory/workspace.md");
-    expect(body).not.toContain("~/Desk/.memory/memory.md");
-    expect(body).not.toContain("~/Desk/alpha/.memory/workspace.md");
+    expect(body).not.toContain("~/Roomy/.memory/memory.md");
+    expect(body).not.toContain("~/Roomy/alpha/.memory/workspace.md");
   });
 
   it("injects empty stubs when memory indexes are missing", async () => {
-    const fresh = await fs.mkdtemp(path.join(os.tmpdir(), "desk-prompt-memory-fresh-"));
+    const fresh = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-prompt-memory-fresh-"));
     try {
       const body = renderPromptBody({
         ...baseInput,
@@ -495,7 +495,7 @@ describe("memory injection", () => {
   });
 
   it("surfaces unexpected memory read failures instead of injecting empty stubs", async () => {
-    const broken = await fs.mkdtemp(path.join(os.tmpdir(), "desk-prompt-memory-broken-"));
+    const broken = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-prompt-memory-broken-"));
     try {
       await fs.mkdir(path.dirname(userMemoryIndexPath(broken)), { recursive: true });
       await fs.mkdir(userMemoryIndexPath(broken));
@@ -516,8 +516,8 @@ describe("memory injection", () => {
 
   it("skips memory injection when home/workspaceSlug are not provided", () => {
     const body = renderPromptBody({ ...baseInput });
-    expect(body).not.toContain("<!-- Desk user memory index -->");
-    expect(body).not.toContain("<!-- Desk workspace memory index -->");
+    expect(body).not.toContain("<!-- Roomy user memory index -->");
+    expect(body).not.toContain("<!-- Roomy workspace memory index -->");
   });
 
   it("does not inject memory indexes during summary mode", () => {
@@ -529,7 +529,7 @@ describe("memory injection", () => {
       chatId: "chat-x",
     });
     expect(body).not.toContain("## Memory and recall");
-    expect(body).not.toContain("<!-- Desk user memory index -->");
+    expect(body).not.toContain("<!-- Roomy user memory index -->");
   });
 
   it("reflection mode injects only workspace memory", () => {
@@ -540,19 +540,19 @@ describe("memory injection", () => {
       workspaceSlug: "alpha",
     });
     expect(body).toContain("## Memory and recall");
-    expect(body).not.toContain("<!-- Desk user memory index -->");
-    expect(body).toContain("<!-- Desk workspace memory index -->");
+    expect(body).not.toContain("<!-- Roomy user memory index -->");
+    expect(body).toContain("<!-- Roomy workspace memory index -->");
   });
 });
 
-describe("Desk reference skills", () => {
+describe("Roomy reference skills", () => {
   it("publishes cross-chat artifact attachment guidance", () => {
     // The skill was rewired to allow attaching from any chat in the
     // same workspace (a task thread surfacing an artifact back into
     // the source chat). Assert the new contract: --chat optional,
     // cross-chat cross-workspace paths allowed within one workspace,
     // failure surfaces inline.
-    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-cli-chat-attach-artifact");
+    const skill = ROOMY_REFERENCE_SKILLS.find((s) => s.name === "roomy-cli-chat-attach-artifact");
     const body = skill?.body() ?? "";
 
     expect(skill).toBeTruthy();
@@ -562,11 +562,11 @@ describe("Desk reference skills", () => {
   });
 
   it("publishes a persistence playbook", () => {
-    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-persistence");
+    const skill = ROOMY_REFERENCE_SKILLS.find((s) => s.name === "roomy-persistence");
 
     expect(skill).toBeTruthy();
     expect(skill?.description).toMatch(/persist/);
-    expect(skill?.body()).toContain("# Desk persistence playbook");
+    expect(skill?.body()).toContain("# Roomy persistence playbook");
     expect(skill?.body()).toContain("sudo apt-get update && sudo apt-get install");
     expect(skill?.body()).toContain("grep -qxF");
     expect(skill?.body()).toContain("MCP server registrations");
@@ -575,7 +575,7 @@ describe("Desk reference skills", () => {
   });
 
   it("publishes a general app storage CRUD guide", () => {
-    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-app-storage");
+    const skill = ROOMY_REFERENCE_SKILLS.find((s) => s.name === "roomy-app-storage");
 
     expect(skill).toBeTruthy();
     expect(skill?.description).toMatch(/CRUD/);
@@ -590,28 +590,28 @@ describe("Desk reference skills", () => {
   });
 
   it("publishes a chat-message search reference (P3.5)", () => {
-    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-cli-chat-search-messages");
+    const skill = ROOMY_REFERENCE_SKILLS.find((s) => s.name === "roomy-cli-chat-search-messages");
     expect(skill).toBeTruthy();
     expect(skill?.description).toMatch(/recall|history|search/i);
     const body = skill?.body() ?? "";
-    expect(body).toContain("desk-agent chat search-messages");
+    expect(body).toContain("roomy-agent chat search-messages");
     expect(body).toContain("--query");
     expect(body).toContain("--workspace");
   });
 
   it("publishes hard reuse rules in the library discovery reference", () => {
-    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-cli-find-library");
+    const skill = ROOMY_REFERENCE_SKILLS.find((s) => s.name === "roomy-cli-find-library");
     const body = skill?.body() ?? "";
 
     expect(skill).toBeTruthy();
-    expect(body).toContain("attach it with `desk-agent chat\nattach-artifact` in the same turn");
+    expect(body).toContain("attach it with `roomy-agent chat\nattach-artifact` in the same turn");
     expect(body).toContain("Do not\nscaffold or rebuild an app, fragment, note, doc");
     expect(body).toContain("unless the user explicitly asks for a new one");
     expect(body).toContain("Discovery is scoped to the current\nchat/workspace; cross-workspace library search is not available yet");
   });
 
   it("keeps scaffold guidance explicit about app storage contracts", () => {
-    const skill = DESK_REFERENCE_SKILLS.find((s) => s.name === "desk-app-scaffold");
+    const skill = ROOMY_REFERENCE_SKILLS.find((s) => s.name === "roomy-app-scaffold");
     const body = skill?.body() ?? "";
 
     expect(body).toContain("Persistent app storage");

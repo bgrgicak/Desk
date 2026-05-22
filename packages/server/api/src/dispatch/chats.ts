@@ -1,7 +1,7 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
-import { ValidationError } from "@agent-desk/shared";
-import { ReplaceLibraryAppConflictError } from "@agent-desk/storage";
-import { withModule } from "@agent-desk/shared/logger";
+import { ValidationError } from "@roomy-ai/shared";
+import { ReplaceLibraryAppConflictError } from "@roomy-ai/storage";
+import { withModule } from "@roomy-ai/shared/logger";
 import * as chatRoutes from "../routes/chats.js";
 import {
   requireOwnedAgent,

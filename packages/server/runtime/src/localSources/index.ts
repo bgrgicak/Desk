@@ -1,7 +1,7 @@
 /**
  * Local source registry. Each entry is a model provider running on the
  * user's host (Codex CLI auth, future LM Studio / Ollama servers, …) that
- * Desk can detect and bridge into the sandbox via env vars.
+ * Roomy can detect and bridge into the sandbox via env vars.
  *
  * To register a new local source: add its `LocalSource` implementation
  * under `./<name>.ts`, then add it to `LOCAL_SOURCES` keyed by `kind`.
@@ -9,7 +9,7 @@
  * kind — `listLocalSources()` and `loadLocalSourceEnv()` iterate the
  * registry.
  */
-import { type Pool, queries } from "@agent-desk/db";
+import { type Pool, queries } from "@roomy-ai/db";
 import { codexLocalSource } from "./codex.js";
 import type { LocalSource, LocalSourceKind, LocalSourceStatus } from "./types.js";
 

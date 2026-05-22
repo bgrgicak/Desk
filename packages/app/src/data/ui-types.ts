@@ -9,7 +9,7 @@
  */
 
 import { FileText, Zap, ImageIcon, Table, Globe, type LucideIcon } from 'lucide-react'
-import type { GoalKey } from '@agent-desk/shared'
+import type { GoalKey } from '@roomy-ai/shared'
 
 // ── Artifacts ─────────────────────────────────────────────────────────────────
 

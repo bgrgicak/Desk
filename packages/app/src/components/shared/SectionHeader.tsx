@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { ChevronDown } from 'lucide-react'
-import { cn } from '@agent-desk/ui'
+import { cn } from '@roomy-ai/ui'
 
 /**
  * Collapsible section header used in the left sidebar (Pinned, Chats) and the

@@ -1,5 +1,5 @@
 import { type Pool } from "../pool.js";
-import { SandboxSessionSchema, type SandboxSession } from "@agent-desk/shared";
+import { SandboxSessionSchema, type SandboxSession } from "@roomy-ai/shared";
 
 function rowToSandboxSession(row: Record<string, unknown>): SandboxSession {
   return SandboxSessionSchema.parse({

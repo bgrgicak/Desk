@@ -38,7 +38,7 @@ doesn't eat the context window.
   for free.
 - The agent prompt template grows a templated section listing
   every memory entry; cap enforced server-side at
-  `DESK_WORKSPACE_MEMORY_MAX_BYTES` (default 8KB).
+  `ROOMY_WORKSPACE_MEMORY_MAX_BYTES` (default 8KB).
 - "Forget this fact" maps to deleting the Library entry.
 - The Library UI gains a memory filter so users can see only
   facts the agent will inject.

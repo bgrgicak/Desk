@@ -12,8 +12,8 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from '@agent-desk/ui'
-import type { GoalKey } from '@agent-desk/shared'
+} from '@roomy-ai/ui'
+import type { GoalKey } from '@roomy-ai/shared'
 import { useGetLibraryQuery, useSearchLibraryQuery } from '@/store/api'
 import { toContextItem } from '@/store/selectors/library'
 import { useListKeyboardNav } from '@/hooks/use-list-keyboard-nav'

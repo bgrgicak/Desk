@@ -27,7 +27,7 @@ interface State {
 
 // ── Persistence ───────────────────────────────────────────────────────────
 
-const STORAGE_KEY = 'desk.globalChats.v1'
+const STORAGE_KEY = 'roomy.globalChats.v1'
 
 function loadState(): State {
   try {
@@ -89,7 +89,7 @@ function deriveTitle(firstMessage: string): string {
  * server call when wiring up. */
 async function streamMockReply(chatId: string, _userMessage: string): Promise<void> {
   const reply =
-    'This is a placeholder response from Desk AI. The backend is not wired up yet — when it is, your conversation will be saved to your account and available across every workspace.'
+    'This is a placeholder response from Roomy AI. The backend is not wired up yet — when it is, your conversation will be saved to your account and available across every workspace.'
   const messageId = uid('msg')
   setState(s => {
     const chat = s.chats[chatId]

@@ -20,15 +20,15 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { generateId } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, seedIfEmpty, queries } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { generateId } from "@roomy-ai/shared";
 import { createApp } from "../src/app.js";
 import { ensureHubsForAllUsers } from "../src/routes/workspaces.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
-import { createRunManager } from "@agent-desk/scheduler";
+import { createRunManager } from "@roomy-ai/scheduler";
 
 let pool: Pool;
 let server: http.Server;
@@ -40,18 +40,18 @@ let token: string;
 let sandboxToken: string;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-vault-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-vault-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "vault-test";
-  process.env.DESK_SEED_PASSWORD = "vault-pass";
+  process.env.ROOMY_SEED_USERNAME = "vault-test";
+  process.env.ROOMY_SEED_PASSWORD = "vault-pass";
   await seedIfEmpty(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-vault-home-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-vault-home-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const storage = { pool, home };
   const runManager = createRunManager({
@@ -128,7 +128,7 @@ function request(
     } else if (bearerOrSandbox?.kind === "user") {
       headers["Authorization"] = `Bearer ${bearerOrSandbox.token}`;
     } else if (bearerOrSandbox?.kind === "sandbox") {
-      headers["X-Desk-Sandbox-Token"] = bearerOrSandbox.token;
+      headers["X-Roomy-Sandbox-Token"] = bearerOrSandbox.token;
     }
     const payload = body ? JSON.stringify(body) : undefined;
     if (payload) headers["Content-Length"] = String(Buffer.byteLength(payload));

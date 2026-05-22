@@ -4,12 +4,12 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
+import { Pool, runMigrations } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
 import { createApp, type AppOptions } from "../src/app.js";
-import { queries } from "@agent-desk/db";
-import { generateId } from "@agent-desk/shared";
+import { queries } from "@roomy-ai/db";
+import { generateId } from "@roomy-ai/shared";
 import { issueSession, clearSessions } from "../src/auth/sessions.js";
 
 let pool: Pool;
@@ -67,14 +67,14 @@ function assertHasErrorShape(body: unknown): void {
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-err-shape-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-err-shape-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-err-shape-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-err-shape-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   userId = generateId("user");
   await queries.users.insert(pool, {
@@ -94,7 +94,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 /**
@@ -105,7 +105,7 @@ afterAll(async () => {
  *
  * If a new route emits a non-conforming error response the failing
  * case here points at it; either add the {code, message} pair or
- * route through a DeskError subclass so the default dispatcher does it.
+ * route through a RoomyError subclass so the default dispatcher does it.
  */
 describe("uniform error response shape", () => {
   it("401 on missing Authorization", async () => {
@@ -136,8 +136,8 @@ describe("uniform error response shape", () => {
     assertHasErrorShape(res.body);
   });
 
-  it("400 on signup when DESK_ENABLE_SIGNUP is unset", async () => {
-    delete process.env.DESK_ENABLE_SIGNUP;
+  it("400 on signup when ROOMY_ENABLE_SIGNUP is unset", async () => {
+    delete process.env.ROOMY_ENABLE_SIGNUP;
     const res = await request("POST", "/auth/signup", {
       body: {
         username: "alice",
@@ -150,7 +150,7 @@ describe("uniform error response shape", () => {
   });
 
   it("400 on bad /auth/signup payload when enabled", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const res = await request("POST", "/auth/signup", {
       body: { username: "x", email: "bad", password: "short" },
     });

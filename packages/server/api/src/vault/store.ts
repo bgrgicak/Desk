@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import kdbxweb from "kdbxweb";
 import { argon2dAsync, argon2idAsync } from "@noble/hashes/argon2";
-import { VaultLockedError } from "@agent-desk/shared";
+import { VaultLockedError } from "@roomy-ai/shared";
 
 /**
  * Per-user encrypted secrets vault, backed by a KDBX 4 file on disk and
@@ -106,7 +106,7 @@ export class VaultStore {
   }
 
   private vaultPath(userId: string): string {
-    // userId is server-issued (see generateId in @agent-desk/shared) and
+    // userId is server-issued (see generateId in @roomy-ai/shared) and
     // matches /^[a-z]+_[A-Za-z0-9_-]+$/. No path-traversal risk, but
     // sanity-check anyway.
     if (!/^[A-Za-z0-9_-]+$/.test(userId)) {
@@ -147,7 +147,7 @@ export class VaultStore {
       kdbxweb.ProtectedValue.fromString(password),
       null,
     );
-    const db = kdbxweb.Kdbx.create(credentials, "Desk");
+    const db = kdbxweb.Kdbx.create(credentials, "Roomy");
     const buf = await db.save();
     await fs.writeFile(p, Buffer.from(buf), { mode: 0o600 });
 

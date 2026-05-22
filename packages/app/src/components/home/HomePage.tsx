@@ -48,7 +48,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { BackgroundBlobs } from '@/components/layout/BackgroundBlobs'
 import { SIDEBAR_ROW_STATE_CLASS, SidebarAccountMenu } from '@/components/layout/sidebarShared'
 import { useGlobalPalette } from '@/components/global-palette/GlobalPaletteProvider'
@@ -92,7 +92,7 @@ import {
 } from '@/router/nav'
 import { buildDefaultViewPath } from '@/App'
 import { logout } from '@/auth/session'
-import { DeskWordmark } from './DeskWordmark'
+import { RoomyWordmark } from './RoomyWordmark'
 import { CreateWorkspaceModal } from './CreateWorkspaceModal'
 import { HomeSettingsPopover } from './HomeSettingsPopover'
 import { AskAiView } from './AskAiView'
@@ -123,7 +123,7 @@ const COLUMN = 'w-full max-w-4xl min-w-0 mx-auto'
 // Set on the user's very first visit to Home. Until it's present, an
 // unparameterised Home URL redirects to `?view=askai` so a brand-new
 // account lands in the Ask AI chat instead of the (empty) day digest.
-const HOME_VISITED_KEY = 'desk.home.has-visited'
+const HOME_VISITED_KEY = 'roomy.home.has-visited'
 
 function errMsg(err: unknown): string | undefined {
   if (typeof err === 'object' && err && 'data' in err) {
@@ -817,8 +817,8 @@ export function HomePage() {
       <div className="relative z-20 flex w-full shrink-0">
       <div className="relative flex flex-1 min-w-0 items-center px-6 py-4 min-h-16">
         <div className="flex flex-1 items-center min-w-0">
-          <DeskWordmark className="h-5 w-auto text-foreground" aria-hidden />
-          <span className="sr-only">Desk Home</span>
+          <RoomyWordmark className="h-5 w-auto text-foreground" aria-hidden />
+          <span className="sr-only">Roomy Home</span>
         </div>
 
         {/* Anchor-tabs slot — absolute, pixel-tracks the content

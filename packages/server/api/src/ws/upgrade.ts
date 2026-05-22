@@ -1,8 +1,8 @@
 import { type Server } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
-import { type Pool } from "@agent-desk/db";
-import { DeskError } from "@agent-desk/shared";
-import { withModule } from "@agent-desk/shared/logger";
+import { type Pool } from "@roomy-ai/db";
+import { RoomyError } from "@roomy-ai/shared";
+import { withModule } from "@roomy-ai/shared/logger";
 import { enforceMustChangePassword } from "../auth/middleware.js";
 import { verifySession } from "../auth/sessions.js";
 import { isWsOriginAllowed } from "../http/security-headers.js";
@@ -73,7 +73,7 @@ export function installWsUpgradeHandler(server: Server, pool: Pool): void {
       try {
         await enforceMustChangePassword(pool, userId, "GET", "/ws");
       } catch (err) {
-        if (err instanceof DeskError && err.code === "FORBIDDEN") {
+        if (err instanceof RoomyError && err.code === "FORBIDDEN") {
           socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
         } else {
           log.warn({ err, userId }, "ws upgrade: must-change-password check threw");
@@ -95,11 +95,11 @@ export function installWsUpgradeHandler(server: Server, pool: Pool): void {
         // exactly t=60s; 25 s leaves a comfortable margin under any
         // reasonable upstream timeout. Cheap (~2 bytes per ping).
         // The interval is `unref()`d so it doesn't block shutdown.
-        // `DESK_WS_PING_INTERVAL_MS` lets tests use a much shorter
+        // `ROOMY_WS_PING_INTERVAL_MS` lets tests use a much shorter
         // cadence so assertions don't have to wait 25 s of real time.
         const wsPingIntervalMs = Math.max(
           100,
-          parseInt(process.env.DESK_WS_PING_INTERVAL_MS ?? "25000", 10),
+          parseInt(process.env.ROOMY_WS_PING_INTERVAL_MS ?? "25000", 10),
         );
         const pingTimer = setInterval(() => {
           if (ws.readyState !== ws.OPEN) return;

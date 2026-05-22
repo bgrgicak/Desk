@@ -1,5 +1,5 @@
-import { type Pool } from "@agent-desk/db";
-import { queries } from "@agent-desk/db";
+import { type Pool } from "@roomy-ai/db";
+import { queries } from "@roomy-ai/db";
 import {
   generateId,
   hubSlugForUser,
@@ -10,10 +10,10 @@ import {
   slugifyWorkspaceName,
   type Chat,
   type Workspace,
-} from "@agent-desk/shared";
-import { ensureWorkspaceLayout, renameWorkspaceDir, trashWorkspaceDir } from "@agent-desk/storage";
-import { ensureDailyReflectionTasks } from "@agent-desk/scheduler";
-import { withModule } from "@agent-desk/shared/logger";
+} from "@roomy-ai/shared";
+import { ensureWorkspaceLayout, renameWorkspaceDir, trashWorkspaceDir } from "@roomy-ai/storage";
+import { ensureDailyReflectionTasks } from "@roomy-ai/scheduler";
+import { withModule } from "@roomy-ai/shared/logger";
 const log = withModule("api/routes/workspaces");
 
 const HUB_NAME = "Hub";
@@ -84,10 +84,10 @@ export async function createHub(
     await enrollExistingAgents(pool, ws.id, userId);
   }
 
-  if ((process.env.DESK_DAILY_REFLECTION ?? "on").toLowerCase() !== "off") {
+  if ((process.env.ROOMY_DAILY_REFLECTION ?? "on").toLowerCase() !== "off") {
     await ensureDailyReflectionTasks({
       pool,
-      cron: process.env.DESK_DAILY_REFLECTION_CRON ?? "0 3 * * *",
+      cron: process.env.ROOMY_DAILY_REFLECTION_CRON ?? "0 3 * * *",
     });
   }
   return ws;
@@ -162,7 +162,7 @@ export async function getOrCreateAskAiChat(pool: Pool, userId: string): Promise<
  * here would render in onboarding as a pre-configured provider the user
  * didn't add.
  *
- * The workspace's on-disk directory at `~/Desk/{slug}/` is
+ * The workspace's on-disk directory at `~/Roomy/{slug}/` is
  * created before the DB insert so every successful insert has a matching
  * folder. Slug is derived from `name` with a `-2`, `-3`, ... suffix on
  * collision so two workspaces can't share a directory.
@@ -192,10 +192,10 @@ export async function createWorkspace(
     ...data,
   });
   await enrollExistingAgents(pool, ws.id, userId);
-  if ((process.env.DESK_DAILY_REFLECTION ?? "on").toLowerCase() !== "off") {
+  if ((process.env.ROOMY_DAILY_REFLECTION ?? "on").toLowerCase() !== "off") {
     await ensureDailyReflectionTasks({
       pool,
-      cron: process.env.DESK_DAILY_REFLECTION_CRON ?? "0 3 * * *",
+      cron: process.env.ROOMY_DAILY_REFLECTION_CRON ?? "0 3 * * *",
     });
   }
   return ws;
@@ -254,7 +254,7 @@ export async function patchWorkspace(
 
 /**
  * Hard-deletes a workspace (FK cascade removes chats/messages/workspace_agents)
- * and moves its on-disk directory into `~/Desk/.trash/workspaces/`.
+ * and moves its on-disk directory into `~/Roomy/.trash/workspaces/`.
  * Refuses to delete the user's last *project* workspace — the app
  * requires at least one (the hub doesn't satisfy this because the hub
  * has different capabilities and isn't a substitute for a project

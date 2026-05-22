@@ -12,14 +12,14 @@ API — no app UI involvement, no test seed.
 
 ## Prerequisites
 
-- `desk-server` reachable (default `http://127.0.0.1:35138`).
+- `roomy-server` reachable (default `http://127.0.0.1:35138`).
 - Node 23+ (matches the rest of the repo).
 - `ws` package — already a workspace dependency, no install step.
 
 Auth is automatic in dev: the script tries `POST /auth/auto-login`
 first and falls back to credential-based `POST /auth/login` only when
 auto-login is disabled. Override with `--username` / `--password` (or
-`DESK_USERNAME` / `DESK_PASSWORD`).
+`ROOMY_USERNAME` / `ROOMY_PASSWORD`).
 
 ## Usage
 
@@ -50,10 +50,10 @@ All flags:
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--host` | `127.0.0.1` | desk-server host |
-| `--port` | `35138` (env `PORT`) | desk-server port |
-| `--username` | `testuser` (env `DESK_USERNAME`) | only used when auto-login is disabled |
-| `--password` | `test-pass-1234` (env `DESK_PASSWORD`) | only used when auto-login is disabled |
+| `--host` | `127.0.0.1` | roomy-server host |
+| `--port` | `35138` (env `PORT`) | roomy-server port |
+| `--username` | `testuser` (env `ROOMY_USERNAME`) | only used when auto-login is disabled |
+| `--password` | `test-pass-1234` (env `ROOMY_PASSWORD`) | only used when auto-login is disabled |
 | `--workspaces N` | `2` | fresh project workspaces created up front |
 | `--scenarios-per-workspace N` | `5` | scenarios run concurrently within each workspace |
 | `--scenario-budget-ms MS` | `300000` | per-scenario hard deadline |
@@ -159,7 +159,7 @@ After a run that exits non-zero:
    ```
 
 2. Each record has `workspaceId`, `chatId`, `userMessageId`, and
-   `pattern`. Cross-reference with the desk-server log to find the
+   `pattern`. Cross-reference with the roomy-server log to find the
    surrounding `runtime/driver` / `runtime/docker` / `scheduler/runs`
    lines for that run id.
 
@@ -200,12 +200,12 @@ the agent doesn't need prior conversation context. Edit the
 parameters at the top of the prompt to taste before sending.
 
 ```
-Run the Desk chaos test and tell me exactly what broke and why. Do not
+Run the Roomy chaos test and tell me exactly what broke and why. Do not
 fix anything — your job is diagnosis.
 
 ## Parameters
 
-- Repo root: /home/bero/Desk/desk-dev/Desk  (cd here first; all paths below are relative)
+- Repo root: /home/bero/Roomy/roomy-dev/Roomy  (cd here first; all paths below are relative)
 - Workspaces: 2
 - Scenarios per workspace: 6
 - Patterns: weighted default (omit --pattern flags)
@@ -217,7 +217,7 @@ fix anything — your job is diagnosis.
 ## Step 1 — sanity-check the environment
 
 Before running, verify:
-1. `desk-server` is reachable: `curl -fsS http://127.0.0.1:35138/ >/dev/null && echo ok`.
+1. `roomy-server` is reachable: `curl -fsS http://127.0.0.1:35138/ >/dev/null && echo ok`.
    If not, STOP and report the URL/port instead of trying to start anything.
 2. `docker info` succeeds (sandbox runs need it). If not, STOP and report.
 3. `free -h` — note total + available memory. A host with < 1 GiB
@@ -267,7 +267,7 @@ Read the JSONL with `jq`. Produce:
 
 For each bad outcome, look for the corresponding signals:
 
-1. **desk-server logs** (terminal where `npm run start` runs in
+1. **roomy-server logs** (terminal where `npm run start` runs in
    `packages/server/api`, or wherever the process is writing
    stdout/stderr): grep for the runId / messageId. Pull the surrounding
    ~30 lines. The relevant modules to look for:
@@ -282,7 +282,7 @@ For each bad outcome, look for the corresponding signals:
    ```
    Pair OOM-killed PIDs with their container ID (the cgroup path
    contains it) and match the container ID to a workspace via
-   `docker ps -a --filter name=desk-sandbox --format '{{.ID}} {{.Names}}'`.
+   `docker ps -a --filter name=roomy-sandbox --format '{{.ID}} {{.Names}}'`.
 
 3. **Rootless Docker port-bind failures**:
    ```bash
@@ -329,10 +329,10 @@ Write a concise report (max ~600 words) with the structure:
 ## Boundaries
 
 - Do NOT modify any source file.
-- Do NOT restart desk-server, Docker, or any other service.
+- Do NOT restart roomy-server, Docker, or any other service.
 - Do NOT delete chaos-runs JSONL or any other output the user might
   want to diff later.
-- If a step fails (can't reach desk-server, jq not installed,
+- If a step fails (can't reach roomy-server, jq not installed,
   permission denied on journalctl), report that step's failure and
   continue with whatever else you can do. Don't bail on the whole run.
 - Keep the final report under ~600 words. Detail belongs in the

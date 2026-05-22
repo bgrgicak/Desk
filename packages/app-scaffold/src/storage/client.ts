@@ -1,7 +1,7 @@
-// Storage client for Desk's parent-mediated app capability bridge. The app
+// Storage client for Roomy's parent-mediated app capability bridge. The app
 // iframe is sandboxed without same-origin privileges, so persistence must go
-// through `window.desk.storage` instead of localStorage, IndexedDB, or direct
-// Desk API fetches.
+// through `window.roomy.storage` instead of localStorage, IndexedDB, or direct
+// Roomy API fetches.
 
 export interface StorageDoc<T = unknown> {
   id: string
@@ -19,10 +19,10 @@ export interface StorageClient {
 }
 
 export function getStorageClient(): StorageClient {
-  if (!window.desk?.storage) {
-    throw new Error('Desk storage bridge is unavailable. Is this app running inside Desk?')
+  if (!window.roomy?.storage) {
+    throw new Error('Roomy storage bridge is unavailable. Is this app running inside Roomy?')
   }
-  return window.desk.storage
+  return window.roomy.storage
 }
 
 /**
@@ -40,7 +40,7 @@ export interface ChatBridgeClient {
 
 declare global {
   interface Window {
-    desk?: {
+    roomy?: {
       app: { name: string }
       chatId: string
       capabilities: string[]

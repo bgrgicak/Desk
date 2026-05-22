@@ -4,9 +4,9 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, queries } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
+import { Pool, runMigrations, queries } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
 import { createApp, type AppOptions } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearRateLimits } from "../src/auth/rateLimit.js";
@@ -58,14 +58,14 @@ function request(method: string, reqPath: string, body?: unknown): Promise<{ sta
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-signup-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-signup-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-signup-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-signup-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
   vault = new VaultStore(path.join(home, ".vaults"));
 
   server = createApp(appOpts());
@@ -73,32 +73,32 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query("DELETE FROM users WHERE username NOT IN (?)", ["desk"]);
+  await pool.query("DELETE FROM users WHERE username NOT IN (?)", ["roomy"]);
   await clearSessions(pool);
   clearRateLimits();
-  prevSignupEnv = process.env.DESK_ENABLE_SIGNUP;
-  prevVaultPasswordEnv = process.env.DESK_VAULT_PASSWORD;
+  prevSignupEnv = process.env.ROOMY_ENABLE_SIGNUP;
+  prevVaultPasswordEnv = process.env.ROOMY_VAULT_PASSWORD;
 });
 
 afterAll(async () => {
-  if (prevSignupEnv === undefined) delete process.env.DESK_ENABLE_SIGNUP;
-  else process.env.DESK_ENABLE_SIGNUP = prevSignupEnv;
-  if (prevVaultPasswordEnv === undefined) delete process.env.DESK_VAULT_PASSWORD;
-  else process.env.DESK_VAULT_PASSWORD = prevVaultPasswordEnv;
+  if (prevSignupEnv === undefined) delete process.env.ROOMY_ENABLE_SIGNUP;
+  else process.env.ROOMY_ENABLE_SIGNUP = prevSignupEnv;
+  if (prevVaultPasswordEnv === undefined) delete process.env.ROOMY_VAULT_PASSWORD;
+  else process.env.ROOMY_VAULT_PASSWORD = prevVaultPasswordEnv;
   server.close();
   server.closeAllConnections?.();
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 // Bootstrap a user row through the public signup endpoint so the
 // downstream test starts in the post-first-run state. Caller is
 // responsible for any env-var dance — this just creates the user.
 async function bootstrapExistingUser(): Promise<void> {
-  const prev = process.env.DESK_ENABLE_SIGNUP;
-  process.env.DESK_ENABLE_SIGNUP = "1";
+  const prev = process.env.ROOMY_ENABLE_SIGNUP;
+  process.env.ROOMY_ENABLE_SIGNUP = "1";
   const res = await request("POST", "/auth/signup", {
     username: "preexisting",
     email: "preexisting@example.com",
@@ -107,14 +107,14 @@ async function bootstrapExistingUser(): Promise<void> {
   if (res.status !== 200) {
     throw new Error(`bootstrap signup failed (${res.status})`);
   }
-  if (prev === undefined) delete process.env.DESK_ENABLE_SIGNUP;
-  else process.env.DESK_ENABLE_SIGNUP = prev;
+  if (prev === undefined) delete process.env.ROOMY_ENABLE_SIGNUP;
+  else process.env.ROOMY_ENABLE_SIGNUP = prev;
   clearRateLimits();
 }
 
 describe("GET /auth/signup-status", () => {
   it("reports firstRun and enabled on an empty DB", async () => {
-    delete process.env.DESK_ENABLE_SIGNUP;
+    delete process.env.ROOMY_ENABLE_SIGNUP;
     const res = await request("GET", "/auth/signup-status");
     expect(res.status).toBe(200);
     const body = res.body as { enabled: boolean; firstRun: boolean };
@@ -123,9 +123,9 @@ describe("GET /auth/signup-status", () => {
     expect(body.enabled).toBe(true);
   });
 
-  it("returns enabled: false when users exist and DESK_ENABLE_SIGNUP is unset", async () => {
+  it("returns enabled: false when users exist and ROOMY_ENABLE_SIGNUP is unset", async () => {
     await bootstrapExistingUser();
-    delete process.env.DESK_ENABLE_SIGNUP;
+    delete process.env.ROOMY_ENABLE_SIGNUP;
     const res = await request("GET", "/auth/signup-status");
     expect(res.status).toBe(200);
     const body = res.body as { enabled: boolean; firstRun: boolean };
@@ -133,9 +133,9 @@ describe("GET /auth/signup-status", () => {
     expect(body.enabled).toBe(false);
   });
 
-  it("returns enabled: true when DESK_ENABLE_SIGNUP=1", async () => {
+  it("returns enabled: true when ROOMY_ENABLE_SIGNUP=1", async () => {
     await bootstrapExistingUser();
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const res = await request("GET", "/auth/signup-status");
     expect(res.status).toBe(200);
     const body = res.body as { enabled: boolean; firstRun: boolean };
@@ -144,15 +144,15 @@ describe("GET /auth/signup-status", () => {
   });
 
   it("does not require authentication", async () => {
-    delete process.env.DESK_ENABLE_SIGNUP;
+    delete process.env.ROOMY_ENABLE_SIGNUP;
     const res = await request("GET", "/auth/signup-status");
     expect(res.status).toBe(200);
   });
 });
 
 describe("POST /auth/signup", () => {
-  it("allows signup on first-run even without DESK_ENABLE_SIGNUP", async () => {
-    delete process.env.DESK_ENABLE_SIGNUP;
+  it("allows signup on first-run even without ROOMY_ENABLE_SIGNUP", async () => {
+    delete process.env.ROOMY_ENABLE_SIGNUP;
     const res = await request("POST", "/auth/signup", {
       username: "firstuser",
       email: "first@example.com",
@@ -162,9 +162,9 @@ describe("POST /auth/signup", () => {
     expect(typeof (res.body as { token: string }).token).toBe("string");
   });
 
-  it("refuses when DESK_ENABLE_SIGNUP is unset and a user already exists", async () => {
+  it("refuses when ROOMY_ENABLE_SIGNUP is unset and a user already exists", async () => {
     await bootstrapExistingUser();
-    delete process.env.DESK_ENABLE_SIGNUP;
+    delete process.env.ROOMY_ENABLE_SIGNUP;
     const res = await request("POST", "/auth/signup", {
       username: "alice",
       email: "alice@example.com",
@@ -175,7 +175,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("creates a user and returns a session token when enabled", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const res = await request("POST", "/auth/signup", {
       username: "alice",
       email: "alice@example.com",
@@ -197,7 +197,7 @@ describe("POST /auth/signup", () => {
     // as if the user already configured a provider — misleading them about
     // what state exists on their behalf, and blurring the line between
     // "credentials I added" and "rows the server seeded for me".
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const res = await request("POST", "/auth/signup", {
       username: "freshie",
       email: "freshie@example.com",
@@ -210,9 +210,9 @@ describe("POST /auth/signup", () => {
     expect(agents).toEqual([]);
   });
 
-  it("does NOT auto-create a vault at signup, even with DESK_VAULT_PASSWORD set", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
-    process.env.DESK_VAULT_PASSWORD = "would-have-been-auto-applied";
+  it("does NOT auto-create a vault at signup, even with ROOMY_VAULT_PASSWORD set", async () => {
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_VAULT_PASSWORD = "would-have-been-auto-applied";
     const res = await request("POST", "/auth/signup", {
       username: "vaultless",
       email: "vaultless@example.com",
@@ -228,7 +228,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("creates the vault inline when vaultPassword is supplied", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const res = await request("POST", "/auth/signup", {
       username: "vaultuser",
       email: "vaultuser@example.com",
@@ -246,7 +246,7 @@ describe("POST /auth/signup", () => {
     // A weak vault password is caught by enforcePasswordPolicy. The
     // failure has to land before any DB writes so the username can be
     // immediately re-used in the wizard's retry.
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const res = await request("POST", "/auth/signup", {
       username: "rollback",
       email: "rollback@example.com",
@@ -259,7 +259,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("creates an optional first workspace alongside the hub", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const res = await request("POST", "/auth/signup", {
       username: "withroom",
       email: "withroom@example.com",
@@ -276,7 +276,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("treats an empty workspace.name as 'skip' rather than 400", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const res = await request("POST", "/auth/signup", {
       username: "skiproom",
       email: "skiproom@example.com",
@@ -293,7 +293,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("rejects usernames that fail the pattern", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const bad = await request("POST", "/auth/signup", {
       username: "x",
       email: "alice@example.com",
@@ -309,7 +309,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("rejects malformed emails", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const res = await request("POST", "/auth/signup", {
       username: "alice",
       email: "not-an-email",
@@ -319,7 +319,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("rejects passwords shorter than 12 characters", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const res = await request("POST", "/auth/signup", {
       username: "alice",
       email: "alice@example.com",
@@ -329,7 +329,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("rejects the documented seed password", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const res = await request("POST", "/auth/signup", {
       username: "alice",
       email: "alice@example.com",
@@ -339,7 +339,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("rejects duplicate usernames", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const ok = await request("POST", "/auth/signup", {
       username: "alice",
       email: "alice@example.com",
@@ -355,7 +355,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("rejects duplicate emails", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const ok = await request("POST", "/auth/signup", {
       username: "alice",
       email: "alice@example.com",
@@ -371,7 +371,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("rate-limits after 5 attempts per IP per minute", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     let last;
     for (let i = 0; i < 6; i++) {
       last = await request("POST", "/auth/signup", {
@@ -384,7 +384,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("allows the new user to log in with the chosen password", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const signupRes = await request("POST", "/auth/signup", {
       username: "alice",
       email: "alice@example.com",

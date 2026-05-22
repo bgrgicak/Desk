@@ -1,10 +1,10 @@
 import { createServer as httpCreateServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { mkdir as fsMkdir, stat as fsStat } from "node:fs/promises";
 import { dirname as pathDirname, join as pathJoin } from "node:path";
-import { type Pool, queries } from "@agent-desk/db";
-import { DeskError, type WsEvent } from "@agent-desk/shared";
-import { type StorageContext } from "@agent-desk/storage";
-import type { createRunManager } from "@agent-desk/scheduler";
+import { type Pool, queries } from "@roomy-ai/db";
+import { RoomyError, type WsEvent } from "@roomy-ai/shared";
+import { type StorageContext } from "@roomy-ai/storage";
+import type { createRunManager } from "@roomy-ai/scheduler";
 import { enforceMustChangePassword, recordClientTimezone, requireAuth } from "./auth/middleware.js";
 import { requireInternal } from "./auth/internal.js";
 import { errorToStatus } from "./errors.js";
@@ -17,7 +17,7 @@ import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
 import { recordClientPerf } from "./routes/client-perf.js";
 import { VaultStore } from "./vault/store.js";
-import { withModule } from "@agent-desk/shared/logger";
+import { withModule } from "@roomy-ai/shared/logger";
 import { defaultBackupPath, parseBody, sendJson } from "./http/io.js";
 import { parseSearchKinds, parseSearchScope } from "./routes/search-params.js";
 import type { DispatchContext } from "./dispatch/context.js";
@@ -231,11 +231,11 @@ export function createApp(opts: AppOptions): Server {
   // Pre-generate the OpenAPI spec
   const openApiSpec = generateOpenApiSpec();
 
-  // SPA static-serve is opt-in via DESK_SERVE_APP=1 — the CLI flips this
+  // SPA static-serve is opt-in via ROOMY_SERVE_APP=1 — the CLI flips this
   // for published installs, dev never does (Vite serves the SPA on :5173
   // and proxies /api/* here). When off, the request handler skips the
   // static branch entirely and behaves identically to the pre-§3 server.
-  const serveApp = process.env.DESK_SERVE_APP === "1";
+  const serveApp = process.env.ROOMY_SERVE_APP === "1";
   const appDist = serveApp ? resolveAppDist() : null;
 
   const server = httpCreateServer(async (req, res) => {
@@ -310,7 +310,7 @@ export function createApp(opts: AppOptions): Server {
         // We accept the token from:
         //   1. The Authorization header (normal API calls)
         //   2. The ?token= query param (initial iframe navigation)
-        //   3. The `desk-app-token` cookie set when index.html was served
+        //   3. The `roomy-app-token` cookie set when index.html was served
         let appsTokenHeader = req.headers.authorization;
         if (!appsTokenHeader && path.startsWith("/apps/")) {
           const queryToken = url.searchParams.get("token");
@@ -322,8 +322,8 @@ export function createApp(opts: AppOptions): Server {
             const cookieToken = cookieHeader
               .split(";")
               .map((c) => c.trim())
-              .find((c) => c.startsWith("desk-app-token="))
-              ?.slice("desk-app-token=".length);
+              .find((c) => c.startsWith("roomy-app-token="))
+              ?.slice("roomy-app-token=".length);
             if (cookieToken) appsTokenHeader = `Bearer ${decodeURIComponent(cookieToken)}`;
           }
         }
@@ -337,7 +337,7 @@ export function createApp(opts: AppOptions): Server {
         // the public default.
         await enforceMustChangePassword(pool, userId, method, path);
       } catch (err) {
-        if (err instanceof DeskError) {
+        if (err instanceof RoomyError) {
           sendJson(res, errorToStatus(err), { code: err.code, message: err.message });
         } else {
           sendJson(res, 500, { code: "INTERNAL", message: "Internal error" });
@@ -368,7 +368,7 @@ export function createApp(opts: AppOptions): Server {
           message: err.message,
           retryAfterSeconds: err.retryAfterSeconds,
         });
-      } else if (err instanceof DeskError) {
+      } else if (err instanceof RoomyError) {
         sendJson(res, errorToStatus(err), { code: err.code, message: err.message });
       } else {
         log.error({ err }, "Unhandled error");
@@ -402,7 +402,7 @@ export function createApp(opts: AppOptions): Server {
     // on the existing connection, produces a checkpointed snapshot,
     // and works while the server is up — exactly what BACKUP.md needs.
     //
-    // Path defaults to ${DESK_HOME}/Desk/backups/desk-<ISO date>.sqlite3
+    // Path defaults to ${ROOMY_HOME}/Roomy/backups/roomy-<ISO date>.sqlite3
     // (alongside the live DB, on the host mount). Request body may
     // override with `{ "path": "..." }`; the path must not already
     // exist (VACUUM INTO refuses to overwrite).
@@ -431,7 +431,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
-    // Sandbox routes — all /sandbox/* paths share the X-Desk-Sandbox-Token
+    // Sandbox routes — all /sandbox/* paths share the X-Roomy-Sandbox-Token
     // auth scheme and bypass requireAuth. dispatchSandbox returns true when
     // it handled the request; false means the path isn't a sandbox route
     // and we fall through to the next branch.

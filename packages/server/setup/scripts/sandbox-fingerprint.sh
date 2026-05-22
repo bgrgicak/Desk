@@ -4,7 +4,7 @@
 # and app-scaffold package sources.
 #
 # Used by ensure-sandbox-image.sh to decide whether dev.sh needs to
-# rebuild the local desk/sandbox:v1 image.
+# rebuild the local roomy/sandbox:v1 image.
 set -euo pipefail
 
 # Repo root may be passed in (so tests can point us at a fixture) or

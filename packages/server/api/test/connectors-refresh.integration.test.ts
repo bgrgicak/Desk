@@ -16,15 +16,15 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
+import { Pool, runMigrations, seedIfEmpty, queries } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
 import {
   buildDaemonEnv,
   refreshSandboxConnections,
   resolveLocalSourceEnv,
-} from "@agent-desk/runtime";
-import { generateId, type WsEvent } from "@agent-desk/shared";
+} from "@roomy-ai/runtime";
+import { generateId, type WsEvent } from "@roomy-ai/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { addConnection, clearConnections } from "../src/ws/registry.js";
@@ -47,18 +47,18 @@ let agentId: string;
 const refreshCalls: Array<{ userId: string; workspaceId: string | undefined }> = [];
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-connref-api-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-connref-api-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "connref-api";
-  process.env.DESK_SEED_PASSWORD = "connref-pass";
+  process.env.ROOMY_SEED_USERNAME = "connref-api";
+  process.env.ROOMY_SEED_PASSWORD = "connref-pass";
   await seedIfEmpty(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-connref-api-home-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-connref-api-home-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
   const { rows: userRows } = await pool.query<{ id: string }>("SELECT id FROM users LIMIT 1");
   userId = userRows[0].id;
   vault = new VaultStore(path.join(home, ".vaults"));
@@ -399,7 +399,7 @@ describe("legacy /me/providers — sandbox env propagation", () => {
  * agent file's `model:` field into an in-memory cache at daemon startup
  * and ignores subsequent rewrites — and it also ignores per-message
  * `providerID` / `modelID` overrides whenever an `agent` is bound to
- * the session. So changing `agent.model` in Desk only propagates after
+ * the session. So changing `agent.model` in Roomy only propagates after
  * the daemon restarts. PATCH /agents/:id therefore must run the same
  * daemon-refresh pipeline used by connection mutations.
  */

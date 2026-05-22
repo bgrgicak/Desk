@@ -21,6 +21,6 @@ test("sign-out clears the session and renders the LoginScreen", async ({
 
   // Token must stay cleared, not just transiently.
   expect(
-    await loggedInPage.evaluate(() => sessionStorage.getItem('desk.session.token')),
+    await loggedInPage.evaluate(() => sessionStorage.getItem('roomy.session.token')),
   ).toBeNull();
 });

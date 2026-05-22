@@ -14,7 +14,7 @@ import * as os from "os";
 import { ServerManager } from "./server-manager.js";
 import { loadPrefs, savePrefs } from "./prefs.js";
 
-app.setName("Desk");
+app.setName("Roomy");
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -54,13 +54,13 @@ function createTray(serverUrl: string, port: number): void {
     : nativeImage.createEmpty();
 
   tray = new Tray(icon);
-  tray.setToolTip("Desk");
+  tray.setToolTip("Roomy");
 
   const lanUrl = getLanUrl(port);
 
   const menu = Menu.buildFromTemplate([
     {
-      label: "Open Desk",
+      label: "Open Roomy",
       click: () => {
         if (mainWindow) {
           mainWindow.show();
@@ -83,7 +83,7 @@ function createTray(serverUrl: string, port: number): void {
     ] : []),
     { type: "separator" },
     {
-      label: "Quit Desk",
+      label: "Quit Roomy",
       click: () => {
         isQuiting = true;
         app.quit();
@@ -104,7 +104,7 @@ function createMainWindow(serverUrl: string): void {
     y: windowBounds.y,
     minWidth: 800,
     minHeight: 600,
-    title: "Desk",
+    title: "Roomy",
     webPreferences: {
       preload: path.join(import.meta.dirname, "preload.js"),
       contextIsolation: true,
@@ -142,7 +142,7 @@ function buildPrefsHtml(currentUrl: string): string {
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Desk Preferences</title>
+  <title>Roomy Preferences</title>
   <style>
     :root{
       --bg:oklch(1 0 0);
@@ -213,7 +213,7 @@ function buildPrefsHtml(currentUrl: string): string {
   <h2>Preferences</h2>
   <label>Remote server URL</label>
   <input id="url" type="url" placeholder="Leave blank to use the built-in local server" value="${escaped}">
-  <p class="hint">When set, Desk connects to this server instead of starting one locally.</p>
+  <p class="hint">When set, Roomy connects to this server instead of starting one locally.</p>
   <div class="row">
     <button class="primary" onclick="save()">Save &amp; Restart</button>
     <button class="secondary" onclick="window.close()">Cancel</button>
@@ -221,7 +221,7 @@ function buildPrefsHtml(currentUrl: string): string {
   <script>
     function save(){
       const url=document.getElementById('url').value.trim();
-      window.deskDesktop?.savePrefs({serverUrl:url});
+      window.roomyDesktop?.savePrefs({serverUrl:url});
     }
   </script>
 </body>
@@ -238,7 +238,7 @@ function openPreferences(): void {
     width: 500,
     height: 280,
     resizable: false,
-    title: "Desk Preferences",
+    title: "Roomy Preferences",
     webPreferences: {
       preload: path.join(import.meta.dirname, "preload.js"),
       contextIsolation: true,
@@ -269,11 +269,11 @@ async function setupAutoUpdater(): Promise<void> {
   autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on("update-available", () => {
-    tray?.setToolTip("Desk – update downloading…");
+    tray?.setToolTip("Roomy – update downloading…");
   });
 
   autoUpdater.on("update-downloaded", () => {
-    tray?.setToolTip("Desk – restart to update");
+    tray?.setToolTip("Roomy – restart to update");
   });
 
   try {
@@ -350,7 +350,7 @@ async function main(): Promise<void> {
       errWin.loadURL(
         `data:text/html;charset=utf-8,${encodeURIComponent(
           `<html><body style="font-family:system-ui;padding:24px;background:#1a1a2e;color:#ff6b6b">` +
-          `<h2>Failed to start Desk server</h2>` +
+          `<h2>Failed to start Roomy server</h2>` +
           `<pre style="font-size:12px;color:#ccc;white-space:pre-wrap">${String(err)}</pre>` +
           `</body></html>`,
         )}`,

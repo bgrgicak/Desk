@@ -19,30 +19,30 @@ import {
   managedConnectionDefinitions,
   PROVIDER_KEY_VARS,
   SANDBOX_CONNECTION_ENV_VARS,
-} from "@agent-desk/shared";
-import { resolveDeskHome } from "@agent-desk/storage";
+} from "@roomy-ai/shared";
+import { resolveRoomyHome } from "@roomy-ai/storage";
 import {
   bindsFromPlan,
   buildDefaultMountPlan,
   type MountPlan,
 } from "./mounts.js";
 import { detectEngine, type BindMount, type Engine } from "./engine.js";
-import { withModule } from "@agent-desk/shared/logger";
+import { withModule } from "@roomy-ai/shared/logger";
 const log = withModule("runtime/docker");
 
-import type { WorkspaceKind } from "@agent-desk/shared";
+import type { WorkspaceKind } from "@roomy-ai/shared";
 
 /**
- * The sandbox container image used for a desk-agent run. Resolves lazily
- * so a test can flip DESK_SANDBOX_IMAGE between cases (the value is
+ * The sandbox container image used for a roomy-agent run. Resolves lazily
+ * so a test can flip ROOMY_SANDBOX_IMAGE between cases (the value is
  * read on every call rather than cached at import time).
  *
  * `kind` lets the hub take a different image than project workspaces
  * once a distinct hub image is built. Today they resolve to the same
  * image — the env hook is wired up but falls back to
- * `DESK_SANDBOX_IMAGE` so a divergence is one env-var flip away. The
- * default `desk/sandbox:v1` matches what
- * `docker build -t desk/sandbox:v1 packages/server/runtime/Dockerfile.sandbox`
+ * `ROOMY_SANDBOX_IMAGE` so a divergence is one env-var flip away. The
+ * default `roomy/sandbox:v1` matches what
+ * `docker build -t roomy/sandbox:v1 packages/server/runtime/Dockerfile.sandbox`
  * produces (documented in the README). The CLI overrides this in
  * published mode to a registry-published, version-pinned tag (see §4 of
  * npm-publish.md).
@@ -50,12 +50,12 @@ import type { WorkspaceKind } from "@agent-desk/shared";
 export function sandboxImage(kind: WorkspaceKind = "project"): string {
   if (kind === "hub") {
     return (
-      process.env.DESK_HUB_SANDBOX_IMAGE ??
-      process.env.DESK_SANDBOX_IMAGE ??
-      "desk/sandbox:v1"
+      process.env.ROOMY_HUB_SANDBOX_IMAGE ??
+      process.env.ROOMY_SANDBOX_IMAGE ??
+      "roomy/sandbox:v1"
     );
   }
-  return process.env.DESK_SANDBOX_IMAGE ?? "desk/sandbox:v1";
+  return process.env.ROOMY_SANDBOX_IMAGE ?? "roomy/sandbox:v1";
 }
 
 export interface SandboxHandle {
@@ -83,8 +83,8 @@ const SANDBOX_BASELINE_MEMORY_BYTES = 512 * 1024 * 1024;
 const SANDBOX_MAX_PIDS = 4096;
 const SANDBOX_MAX_MEMORY_BYTES = 8 * 1024 * 1024 * 1024;
 const SANDBOX_TMPFS: Record<string, string> = { "/tmp": "size=512m" };
-const SANDBOX_RESOURCE_PROFILE_LABEL = "agent-desk.sandbox-resource-profile";
-const SANDBOX_AGENT_USER_LABEL = "agent-desk.sandbox-agent-user";
+const SANDBOX_RESOURCE_PROFILE_LABEL = "roomy-ai.sandbox-resource-profile";
+const SANDBOX_AGENT_USER_LABEL = "roomy-ai.sandbox-agent-user";
 const SANDBOX_CONTAINER_USER = "0:0";
 const SANDBOX_READY_TIMEOUT_MS = 300_000;
 
@@ -213,7 +213,7 @@ export async function growSandboxForResourceError(
   workspaceId: string,
   kind: ResourceFailureKind,
 ): Promise<GrowthResult> {
-  const containerName = `desk-sandbox-${workspaceId}`;
+  const containerName = `roomy-sandbox-${workspaceId}`;
   const existing = growthInFlight.get(containerName);
   if (existing) return existing;
   const work = (async (): Promise<GrowthResult> => {
@@ -321,7 +321,7 @@ export async function createOrReuse(
   // container the winner just removed, surfacing as the user-visible
   // "container … is no longer present" failure. See PR #125's "known
   // follow-up".
-  const containerName = `desk-sandbox-${workspaceId}`;
+  const containerName = `roomy-sandbox-${workspaceId}`;
   const prev = createOrReuseInFlight.get(containerName);
   const work = (async () => {
     if (prev) await prev.catch(() => {});
@@ -355,11 +355,11 @@ async function createOrReuseImpl(
   workspaceKind: WorkspaceKind = "project",
 ): Promise<SandboxHandle> {
   const engine = await detectEngine();
-  const containerName = `desk-sandbox-${workspaceId}`;
+  const containerName = `roomy-sandbox-${workspaceId}`;
   const expectedResourceProfile = resourceProfileString();
 
-  const deskHome = home ?? resolveDeskHome();
-  const plan = mountPlan ?? buildDefaultMountPlan(deskHome, workspaceSlug);
+  const roomyHome = home ?? resolveRoomyHome();
+  const plan = mountPlan ?? buildDefaultMountPlan(roomyHome, workspaceSlug);
   const expectedBindStrings = bindsFromPlan(plan);
   const expectedBinds = parseBindStrings(expectedBindStrings);
   const expectedUser = SANDBOX_CONTAINER_USER;
@@ -425,7 +425,7 @@ async function createOrReuseImpl(
     // sandbox needs to reach AI provider APIs (Anthropic, OpenAI,
     // pi), GitHub for git operations, and tool registries.
     // Operators running a paranoid deployment can set
-    // DESK_SANDBOX_NETWORK="none" to drop all egress — breaks AI calls
+    // ROOMY_SANDBOX_NETWORK="none" to drop all egress — breaks AI calls
     // and any tooling that downloads from the network, but keeps the
     // sandbox effective for purely-local workloads (file editing,
     // text-only chats with a pre-cached model).
@@ -434,7 +434,7 @@ async function createOrReuseImpl(
     // proxy (squid / mitmproxy in transparent mode) and is out of
     // scope for v1; the two-option knob ("unrestricted" vs "none")
     // covers the realistic deployment matrix.
-    const egressMode = (process.env.DESK_SANDBOX_NETWORK ?? "bridge").toLowerCase();
+    const egressMode = (process.env.ROOMY_SANDBOX_NETWORK ?? "bridge").toLowerCase();
     const network = egressMode === "none" ? "none" : "bridge";
 
     const containerId = await engine.create({
@@ -447,15 +447,15 @@ async function createOrReuseImpl(
       user: expectedUser,
       env: [
         ...providerKeyEnv(providerKeys, extraEnv),
-        `DESK_SANDBOX_AGENT_USER=${agentUser}`,
+        `ROOMY_SANDBOX_AGENT_USER=${agentUser}`,
       ],
       labels: {
         [SANDBOX_RESOURCE_PROFILE_LABEL]: expectedResourceProfile,
         [SANDBOX_AGENT_USER_LABEL]: agentUser,
       },
       network,
-      // host-gateway lets the in-sandbox `desk` CLI reach the host-side
-      // desk-server REST API as `host.docker.internal`. Without it the
+      // host-gateway lets the in-sandbox `roomy` CLI reach the host-side
+      // roomy-server REST API as `host.docker.internal`. Without it the
       // bridge default has no DNS name for the host, so the agent has no
       // route back to /sandbox/messages. `--network none` drops this
       // capability; an operator who picks "none" accepts losing in-
@@ -512,7 +512,7 @@ export async function waitForEntrypointReady(
   while (Date.now() < deadline) {
     const handle = await engine.exec({
       containerId,
-      cmd: ["test", "-f", "/tmp/desk-entrypoint-ready"],
+      cmd: ["test", "-f", "/tmp/roomy-entrypoint-ready"],
       user: SANDBOX_CONTAINER_USER,
     });
     const stderr: Buffer[] = [];
@@ -595,7 +595,7 @@ async function readLocalFilesystemMountMarker(markerPath: string): Promise<{ mou
  * Returns `<uid>:<gid>` that agent commands should run as.
  *
  * Rootful runtime: the workspace bind-mount is owned by whoever runs
- * desk-server; running agent execs as the same uid keeps reads/writes
+ * roomy-server; running agent execs as the same uid keeps reads/writes
  * symmetric without any chown dance. → use process uid/gid.
  *
  * Rootless runtime: host uid N → container uid 0 (the daemon runner is
@@ -603,15 +603,15 @@ async function readLocalFilesystemMountMarker(markerPath: string): Promise<{ mou
  * root:root inside the container, so agent execs must run as 0:0 to
  * write through the bind. → use 0:0.
  *
- * Override via DESK_SANDBOX_USER for the rare case where neither rule
+ * Override via ROOMY_SANDBOX_USER for the rare case where neither rule
  * fits (CI matrices, custom daemons, etc).
  */
 export async function sandboxUser(engine?: Engine): Promise<string> {
-  if (process.env.DESK_SANDBOX_USER) return process.env.DESK_SANDBOX_USER;
+  if (process.env.ROOMY_SANDBOX_USER) return process.env.ROOMY_SANDBOX_USER;
   const e = engine ?? (await detectEngine());
   if (await e.isRootless()) return "0:0";
   // process.getuid()/getgid() are POSIX-only — undefined on Windows. We
-  // never run desk-server on Windows, so the cast keeps types honest
+  // never run roomy-server on Windows, so the cast keeps types honest
   // without a runtime branch.
   const uid = (process.getuid?.() ?? 0);
   const gid = (process.getgid?.() ?? 0);
@@ -682,7 +682,7 @@ export function providerKeyEnv(
 }
 
 /**
- * Per-run env vars sourced from Desk's connector resolver but not exposed
+ * Per-run env vars sourced from Roomy's connector resolver but not exposed
  * through Settings' generic /me/providers surface. Empty for now —
  * connectors that need ad-hoc minted tokens can append here.
  */
@@ -770,7 +770,7 @@ export function connectionEnvNames(): string[] {
 
 /**
  * Reports running sandbox containers whose bind sources don't begin with the
- * supplied DESK_HOME tree. Returned for boot-time logging so a regression in
+ * supplied ROOMY_HOME tree. Returned for boot-time logging so a regression in
  * the home-resolution path (which once silently dropped uploads into a
  * parallel tree) fails loud instead of corrupting state.
  *
@@ -784,18 +784,18 @@ export interface SandboxBindDrift {
 }
 
 export async function auditSandboxMounts(home: string): Promise<SandboxBindDrift[]> {
-  // Workspaces sit directly under DESK_HOME — a legitimate bind source has
+  // Workspaces sit directly under ROOMY_HOME — a legitimate bind source has
   // `home` as its parent directory. Containers from the legacy `workspaces/`
-  // layout (parent `${home}/workspaces`) get pruned along with any DESK_HOME
+  // layout (parent `${home}/workspaces`) get pruned along with any ROOMY_HOME
   // drift in the same check.
   const expectedParent = home.replace(/\/+$/, "");
   const expectedPrefix = `${expectedParent}/`;
   const drift: SandboxBindDrift[] = [];
   try {
     const engine = await detectEngine();
-    const containers = await engine.list({ all: true, namePrefix: "desk-sandbox-" });
+    const containers = await engine.list({ all: true, namePrefix: "roomy-sandbox-" });
     for (const c of containers) {
-      if (!c.name.startsWith("desk-sandbox-")) continue;
+      if (!c.name.startsWith("roomy-sandbox-")) continue;
       let info;
       try {
         info = await engine.inspect(c.id);
@@ -820,7 +820,7 @@ export async function auditSandboxMounts(home: string): Promise<SandboxBindDrift
 }
 
 /**
- * Removes any `desk-sandbox-*` container whose workspace has had no
+ * Removes any `roomy-sandbox-*` container whose workspace has had no
  * `state='running'` rows and no message activity in the last `idleMs`.
  * The next fire's `createOrReuse` builds a fresh container at the
  * baseline 512 / 512 MB — so this also naturally resets a grown
@@ -847,7 +847,7 @@ export async function reapIdleSandboxes(
   }
   let containers: Array<{ id: string; name: string }>;
   try {
-    containers = await engine.list({ namePrefix: "desk-sandbox-", all: false });
+    containers = await engine.list({ namePrefix: "roomy-sandbox-", all: false });
   } catch {
     return removed;
   }
@@ -856,8 +856,8 @@ export async function reapIdleSandboxes(
     // Skip transient reflection sandboxes — they have their own
     // workspace ids and own short lifecycles; a reaper that catches
     // them mid-reflection would kill the in-flight reflection.
-    if (c.name.startsWith("desk-sandbox-reflect-")) continue;
-    const workspaceId = c.name.slice("desk-sandbox-".length);
+    if (c.name.startsWith("roomy-sandbox-reflect-")) continue;
+    const workspaceId = c.name.slice("roomy-sandbox-".length);
     if (recentlyActiveWorkspaceIds.has(workspaceId)) continue;
     // Coordinate with an in-flight grow on the same container: if
     // someone is mid-`docker update`, don't yank the container out
@@ -917,7 +917,7 @@ export async function stopSandbox(handle: SandboxHandle): Promise<void> {
 /**
  * Removes containers reported by auditSandboxMounts as having stale bind
  * mounts. Safe to call at startup: drifted containers are unusable (their
- * workspace path no longer matches DESK_HOME), so removing them lets the
+ * workspace path no longer matches ROOMY_HOME), so removing them lets the
  * next run create a fresh container with the correct mounts rather than
  * waiting for getOrCreateSandbox to detect the mismatch at call time.
  */

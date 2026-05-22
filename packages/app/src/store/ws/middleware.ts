@@ -645,7 +645,7 @@ export const wsMiddleware: Middleware = (storeApi) => {
       if (ev.code === 1008 || ev.code === 4401) {
         // server rejected token — force relogin
         try {
-          sessionStorage.removeItem("desk.session.token");
+          sessionStorage.removeItem("roomy.session.token");
         } catch {
           /* ignore */
         }
@@ -952,7 +952,7 @@ export function applyEventToCache(
           { type: "ChatArtifact", id: `CHAT_${event.payload.path.split("/")[2] ?? ""}` },
         ]),
       );
-      // Feed the derivedSlice so Desk can render "1 update" pills.
+      // Feed the derivedSlice so Roomy can render "1 update" pills.
       dispatch(
         pushArtifactUpdate({
           id: `upd-${event.payload.path}-${event.payload.createdAt}`,

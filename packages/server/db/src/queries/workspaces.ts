@@ -4,7 +4,7 @@ import {
   slugifyWorkspaceName,
   type Workspace,
   type WorkspaceKind,
-} from "@agent-desk/shared";
+} from "@roomy-ai/shared";
 
 function rowToWorkspace(row: Record<string, unknown>): Workspace {
   return WorkspaceSchema.parse({

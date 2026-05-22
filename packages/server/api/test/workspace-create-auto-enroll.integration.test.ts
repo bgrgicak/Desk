@@ -13,11 +13,11 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, queries, hashPassword } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, queries, hashPassword } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -61,14 +61,14 @@ function request(
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ws-autoenroll-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-ws-autoenroll-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ws-autoenroll-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-ws-autoenroll-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const runManager = createRunManager({
     pool,
@@ -99,7 +99,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 async function insertAgent(name: string): Promise<string> {
@@ -166,7 +166,7 @@ describe("POST /workspaces — ensure a default workspace agent", () => {
     const agent = await queries.agents.findById(pool, memberships[0].agentId);
     expect(agent).toMatchObject({
       userId: otherUserId,
-      name: "Desk",
+      name: "Roomy",
       model: "anthropic/claude-haiku-4-5",
     });
 
@@ -222,7 +222,7 @@ describe("POST /workspaces — ensure a default workspace agent", () => {
     const listRes = await request("GET", `/workspaces/${ws.id}/agents`, repairToken);
     expect(listRes.status).toBe(200);
     expect(listRes.body).toMatchObject([
-      { name: "Desk", model: "anthropic/claude-haiku-4-5" },
+      { name: "Roomy", model: "anthropic/claude-haiku-4-5" },
     ]);
 
     const after = await queries.workspaceAgents.listForWorkspace(pool, ws.id);

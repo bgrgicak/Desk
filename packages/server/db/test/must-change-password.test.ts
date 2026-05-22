@@ -15,7 +15,7 @@ let prevEnvSeedUsername: string | undefined;
 let prevEnvSeedPassword: string | undefined;
 
 beforeAll(async () => {
-  dbDir = fs.mkdtempSync(path.join(os.tmpdir(), "desk-mcp-"));
+  dbDir = fs.mkdtempSync(path.join(os.tmpdir(), "roomy-mcp-"));
   pool = new Pool({ path: path.join(dbDir, "test.sqlite3") });
   await runMigrations(pool);
 });
@@ -23,40 +23,40 @@ beforeAll(async () => {
 afterAll(async () => {
   await pool.end();
   fs.rmSync(dbDir, { recursive: true, force: true });
-  if (prevEnvSecret === undefined) delete process.env.DESK_SECRET_KEY_PATH;
-  else process.env.DESK_SECRET_KEY_PATH = prevEnvSecret;
+  if (prevEnvSecret === undefined) delete process.env.ROOMY_SECRET_KEY_PATH;
+  else process.env.ROOMY_SECRET_KEY_PATH = prevEnvSecret;
 });
 
 beforeEach(() => {
-  keyDir = fs.mkdtempSync(path.join(os.tmpdir(), "desk-mcp-key-"));
-  prevEnvSecret = process.env.DESK_SECRET_KEY_PATH;
-  prevEnvSeedUsername = process.env.DESK_SEED_USERNAME;
-  prevEnvSeedPassword = process.env.DESK_SEED_PASSWORD;
-  process.env.DESK_SECRET_KEY_PATH = path.join(keyDir, "secret.key");
+  keyDir = fs.mkdtempSync(path.join(os.tmpdir(), "roomy-mcp-key-"));
+  prevEnvSecret = process.env.ROOMY_SECRET_KEY_PATH;
+  prevEnvSeedUsername = process.env.ROOMY_SEED_USERNAME;
+  prevEnvSeedPassword = process.env.ROOMY_SEED_PASSWORD;
+  process.env.ROOMY_SECRET_KEY_PATH = path.join(keyDir, "secret.key");
 });
 
 describe("must_change_password flag", () => {
   it("seedIfEmpty sets the flag when using the documented default password", async () => {
     // Reset table to ensure seed runs.
     await pool.query("DELETE FROM users", []);
-    delete process.env.DESK_SEED_USERNAME;
-    delete process.env.DESK_SEED_PASSWORD;
+    delete process.env.ROOMY_SEED_USERNAME;
+    delete process.env.ROOMY_SEED_PASSWORD;
 
     await seedIfEmpty(pool);
 
-    const u = await users.findByUsername(pool, "desk");
+    const u = await users.findByUsername(pool, "roomy");
     expect(u).toBeTruthy();
     expect(u!.mustChangePassword).toBe(true);
 
     // Restore.
-    if (prevEnvSeedUsername !== undefined) process.env.DESK_SEED_USERNAME = prevEnvSeedUsername;
-    if (prevEnvSeedPassword !== undefined) process.env.DESK_SEED_PASSWORD = prevEnvSeedPassword;
+    if (prevEnvSeedUsername !== undefined) process.env.ROOMY_SEED_USERNAME = prevEnvSeedUsername;
+    if (prevEnvSeedPassword !== undefined) process.env.ROOMY_SEED_PASSWORD = prevEnvSeedPassword;
   });
 
   it("seedIfEmpty does NOT set the flag when the operator supplies their own seed password", async () => {
     await pool.query("DELETE FROM users", []);
-    process.env.DESK_SEED_USERNAME = "alice";
-    process.env.DESK_SEED_PASSWORD = "my-own-strong-password";
+    process.env.ROOMY_SEED_USERNAME = "alice";
+    process.env.ROOMY_SEED_PASSWORD = "my-own-strong-password";
 
     await seedIfEmpty(pool);
 
@@ -64,28 +64,28 @@ describe("must_change_password flag", () => {
     expect(u).toBeTruthy();
     expect(u!.mustChangePassword).toBe(false);
 
-    if (prevEnvSeedUsername !== undefined) process.env.DESK_SEED_USERNAME = prevEnvSeedUsername;
-    else delete process.env.DESK_SEED_USERNAME;
-    if (prevEnvSeedPassword !== undefined) process.env.DESK_SEED_PASSWORD = prevEnvSeedPassword;
-    else delete process.env.DESK_SEED_PASSWORD;
+    if (prevEnvSeedUsername !== undefined) process.env.ROOMY_SEED_USERNAME = prevEnvSeedUsername;
+    else delete process.env.ROOMY_SEED_USERNAME;
+    if (prevEnvSeedPassword !== undefined) process.env.ROOMY_SEED_PASSWORD = prevEnvSeedPassword;
+    else delete process.env.ROOMY_SEED_PASSWORD;
   });
 
   it("setPassword clears the flag", async () => {
     await pool.query("DELETE FROM users", []);
-    delete process.env.DESK_SEED_USERNAME;
-    delete process.env.DESK_SEED_PASSWORD;
+    delete process.env.ROOMY_SEED_USERNAME;
+    delete process.env.ROOMY_SEED_PASSWORD;
 
     await seedIfEmpty(pool);
-    const u = await users.findByUsername(pool, "desk");
+    const u = await users.findByUsername(pool, "roomy");
     expect(u!.mustChangePassword).toBe(true);
 
     await users.setPassword(pool, u!.id, "change-me-before-first-boot", "a-much-stronger-pw");
 
-    const after = await users.findByUsername(pool, "desk");
+    const after = await users.findByUsername(pool, "roomy");
     expect(after!.mustChangePassword).toBe(false);
 
-    if (prevEnvSeedUsername !== undefined) process.env.DESK_SEED_USERNAME = prevEnvSeedUsername;
-    if (prevEnvSeedPassword !== undefined) process.env.DESK_SEED_PASSWORD = prevEnvSeedPassword;
+    if (prevEnvSeedUsername !== undefined) process.env.ROOMY_SEED_USERNAME = prevEnvSeedUsername;
+    if (prevEnvSeedPassword !== undefined) process.env.ROOMY_SEED_PASSWORD = prevEnvSeedPassword;
   });
 
   it("insert() defaults the flag to false", async () => {
@@ -103,17 +103,17 @@ describe("must_change_password flag", () => {
     // Set up state: one user already exists with mustChangePassword=0
     // (they previously changed their password).
     await pool.query("DELETE FROM users", []);
-    delete process.env.DESK_SEED_USERNAME;
-    delete process.env.DESK_SEED_PASSWORD;
+    delete process.env.ROOMY_SEED_USERNAME;
+    delete process.env.ROOMY_SEED_PASSWORD;
     await seedIfEmpty(pool);
-    const seeded = await users.findByUsername(pool, "desk");
+    const seeded = await users.findByUsername(pool, "roomy");
     await users.setPassword(pool, seeded!.id, "change-me-before-first-boot", "now-rotated-pw");
-    const beforeCleared = await users.findByUsername(pool, "desk");
+    const beforeCleared = await users.findByUsername(pool, "roomy");
     expect(beforeCleared!.mustChangePassword).toBe(false);
 
     // Re-run seedIfEmpty — should be a complete no-op.
     await seedIfEmpty(pool);
-    const after = await users.findByUsername(pool, "desk");
+    const after = await users.findByUsername(pool, "roomy");
     expect(after!.id).toBe(beforeCleared!.id); // same row
     expect(after!.mustChangePassword).toBe(false); // flag stays cleared
   });

@@ -9,10 +9,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -24,16 +24,16 @@ let home: string;
 let dbPath: string;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-multi-ws-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-multi-ws-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
 
   await runMigrations(pool);
-  process.env.DESK_SEED_USERNAME = "testuser";
-  process.env.DESK_SEED_PASSWORD = "test-pass-1234";
+  process.env.ROOMY_SEED_USERNAME = "testuser";
+  process.env.ROOMY_SEED_PASSWORD = "test-pass-1234";
   await seedIfEmpty(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-multi-ws-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-multi-ws-"));
   await ensureLayout(home);
 
   const storage = { pool, home };

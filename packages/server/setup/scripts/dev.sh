@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Starts the full dev stack on the host:
-#   - desk-server in tsx-watch mode on http://127.0.0.1:${PORT:-35138}/
-#   - app Vite dev server on http://127.0.0.1:${DESK_APP_PORT:-5173}/
+#   - roomy-server in tsx-watch mode on http://127.0.0.1:${PORT:-35138}/
+#   - app Vite dev server on http://127.0.0.1:${ROOMY_APP_PORT:-5173}/
 #
 # No VM, no systemd, no port forwards. One Ctrl+C kills both via the
 # process-group trap below.
@@ -31,43 +31,43 @@ if [ ! -x "${REPO_ROOT}/node_modules/.bin/vite" ] || [ ! -x "${REPO_ROOT}/node_m
   (cd "$REPO_ROOT" && npm install --include=optional --no-audit --no-fund)
 fi
 
-# 2. Ensure DESK_VAULT_PASSWORD is persisted in the repo .env (gitignored).
+# 2. Ensure ROOMY_VAULT_PASSWORD is persisted in the repo .env (gitignored).
 #    The server uses it to auto-create and auto-unlock the per-user KDBX
 #    vault on boot; users do not currently have a manual database/vault
 #    unlock flow during setup.
 ENV_FILE="${REPO_ROOT}/.env"
-desk_vault_password=""
+roomy_vault_password=""
 if [ -f "$ENV_FILE" ]; then
-  desk_vault_password="$(grep -E '^DESK_VAULT_PASSWORD=' "$ENV_FILE" 2>/dev/null | tail -n1 \
-    | sed -E 's/^DESK_VAULT_PASSWORD=//; s/^"(.*)"$/\1/; s/^'\''(.*)'\''$/\1/')"
+  roomy_vault_password="$(grep -E '^ROOMY_VAULT_PASSWORD=' "$ENV_FILE" 2>/dev/null | tail -n1 \
+    | sed -E 's/^ROOMY_VAULT_PASSWORD=//; s/^"(.*)"$/\1/; s/^'\''(.*)'\''$/\1/')"
 fi
-if [ -z "$desk_vault_password" ]; then
-  echo "==> Generating DESK_VAULT_PASSWORD → ${ENV_FILE}"
-  desk_vault_password="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
+if [ -z "$roomy_vault_password" ]; then
+  echo "==> Generating ROOMY_VAULT_PASSWORD → ${ENV_FILE}"
+  roomy_vault_password="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
   touch "$ENV_FILE"
   if [ -s "$ENV_FILE" ] && [ -n "$(tail -c1 "$ENV_FILE")" ]; then
     printf '\n' >> "$ENV_FILE"
   fi
-  printf 'DESK_VAULT_PASSWORD=%s\n' "$desk_vault_password" >> "$ENV_FILE"
+  printf 'ROOMY_VAULT_PASSWORD=%s\n' "$roomy_vault_password" >> "$ENV_FILE"
 fi
 
-# 3. Ensure ~/Desk/ exists. desk-server's main.ts mkdirs the rest of the
+# 3. Ensure ~/Roomy/ exists. roomy-server's main.ts mkdirs the rest of the
 #    layout (.database, workspaces, .trash, .tmp, backups) on boot.
-DESK_HOME_DEFAULT="${HOME}/Desk"
-mkdir -p "${DESK_HOME_DEFAULT}"
+ROOMY_HOME_DEFAULT="${HOME}/Roomy"
+mkdir -p "${ROOMY_HOME_DEFAULT}"
 
 # 3a. Build any built-in app that is missing its dist/. Source-mode dev reads
-#     fragments directly from packages/desk-apps/<name>.app/dist/, which is
+#     fragments directly from packages/apps/<name>.app/dist/, which is
 #     only ever produced by an explicit `npm run build`. Without this step,
 #     a freshly pulled new app (sources only, no dist) silently 404s on
 #     attach-artifact.
-DESK_APPS_ROOT="${REPO_ROOT}/packages/desk-apps"
-if [ -d "${DESK_APPS_ROOT}" ]; then
-  for app_dir in "${DESK_APPS_ROOT}"/*.app; do
+ROOMY_APPS_ROOT="${REPO_ROOT}/packages/apps"
+if [ -d "${ROOMY_APPS_ROOT}" ]; then
+  for app_dir in "${ROOMY_APPS_ROOT}"/*.app; do
     [ -d "${app_dir}" ] || continue
     if [ ! -d "${app_dir}/dist" ]; then
       echo "==> Building built-in app: $(basename "${app_dir}")"
-      (cd "$REPO_ROOT" && npm -w @agent-desk/desk-apps run build)
+      (cd "$REPO_ROOT" && npm -w @roomy-ai/apps run build)
       break
     fi
   done
@@ -75,8 +75,8 @@ fi
 
 # 3b. Rebuild the sandbox docker image when its inputs (sandbox-cli source,
 #     Dockerfile, app-scaffold manifests) have changed. Skipped silently
-#     when the existing image's `desk.fingerprint` label still matches.
-if [ -z "${DESK_SKIP_SANDBOX_BUILD:-}" ]; then
+#     when the existing image's `roomy.fingerprint` label still matches.
+if [ -z "${ROOMY_SKIP_SANDBOX_BUILD:-}" ]; then
   bash "${SCRIPT_DIR}/ensure-sandbox-image.sh" || {
     echo "==> sandbox image rebuild failed; continuing with existing image." >&2
   }
@@ -90,7 +90,7 @@ for port in 5173 35138; do
   fi
 done
 
-# 5. Start desk-server (tsx watch) in the background, with auto-restart on crash.
+# 5. Start roomy-server (tsx watch) in the background, with auto-restart on crash.
 #    tsx watch exits when the Node process it runs also exits (e.g. on unhandled
 #    error). We restart up to MAX_SERVER_RESTARTS times before giving up, so a
 #    transient startup failure (e.g. a migration race) doesn't kill the whole dev
@@ -101,23 +101,23 @@ done
   # shellcheck disable=SC1090
   [ -f "$ENV_FILE" ] && . "$ENV_FILE"
   set +a
-  export NODE_OPTIONS="${NODE_OPTIONS:-} --conditions=@agent-desk/dev --no-warnings"
+  export NODE_OPTIONS="${NODE_OPTIONS:-} --conditions=@roomy-ai/dev --no-warnings"
   export PORT="${PORT:-35138}"
-  export DESK_HOME="${DESK_HOME:-$DESK_HOME_DEFAULT}"
+  export ROOMY_HOME="${ROOMY_HOME:-$ROOMY_HOME_DEFAULT}"
 
   MAX_SERVER_RESTARTS=3
   _restarts=0
   while true; do
-    npx tsx watch --conditions=@agent-desk/dev packages/server/api/src/main.ts
+    npx tsx watch --conditions=@roomy-ai/dev packages/server/api/src/main.ts
     _ec=$?
     # 0 = clean shutdown; 130 = SIGINT; 143 = SIGTERM — don't retry on those.
     [ "$_ec" -eq 0 ] || [ "$_ec" -eq 130 ] || [ "$_ec" -eq 143 ] && break
     _restarts=$((_restarts + 1))
     if [ "$_restarts" -ge "$MAX_SERVER_RESTARTS" ]; then
-      echo "==> desk-server: crashed ${MAX_SERVER_RESTARTS} times in a row — giving up." >&2
+      echo "==> roomy-server: crashed ${MAX_SERVER_RESTARTS} times in a row — giving up." >&2
       exit "$_ec"
     fi
-    echo "==> desk-server: crashed (attempt ${_restarts}/${MAX_SERVER_RESTARTS}), restarting in 2s…" >&2
+    echo "==> roomy-server: crashed (attempt ${_restarts}/${MAX_SERVER_RESTARTS}), restarting in 2s…" >&2
     sleep 2
   done
 ) &
@@ -126,14 +126,14 @@ SERVER_PID=$!
 # 6. Start vite (app) in the background.
 (
   cd "$REPO_ROOT"
-  export NODE_OPTIONS="${NODE_OPTIONS:-} --conditions=@agent-desk/dev --no-warnings"
-  export DESK_API_URL="${DESK_API_URL:-http://127.0.0.1:35138}"
-  exec npm -w @agent-desk/app run dev
+  export NODE_OPTIONS="${NODE_OPTIONS:-} --conditions=@roomy-ai/dev --no-warnings"
+  export ROOMY_API_URL="${ROOMY_API_URL:-http://127.0.0.1:35138}"
+  exec npm -w @roomy-ai/app run dev
 ) &
 VITE_PID=$!
 
 SERVER_PORT="${PORT:-35138}"
-APP_PORT="${DESK_APP_PORT:-5173}"
+APP_PORT="${ROOMY_APP_PORT:-5173}"
 
 cleanup() {
   if kill -0 "$VITE_PID" 2>/dev/null; then
@@ -152,7 +152,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "==> desk-server starting (pid $SERVER_PID) on http://127.0.0.1:${SERVER_PORT}/"
+echo "==> roomy-server starting (pid $SERVER_PID) on http://127.0.0.1:${SERVER_PORT}/"
 echo "==> Vite dev server starting (pid $VITE_PID) on http://127.0.0.1:${APP_PORT}/"
 echo "==> Ctrl+C stops both."
 

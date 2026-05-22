@@ -10,7 +10,7 @@ vi.mock("node:child_process", () => ({
   execFile: (...args: unknown[]) => execFileMock(...args),
 }));
 
-describe("desk-agent file to-markdown", () => {
+describe("roomy-agent file to-markdown", () => {
   let stdoutWriteSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -68,7 +68,7 @@ describe("desk-agent file to-markdown", () => {
   });
 
   it("writes to --output when provided", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "desk-file-to-markdown-"));
+    const dir = await mkdtemp(path.join(os.tmpdir(), "roomy-file-to-markdown-"));
     const output = path.join(dir, "report.md");
     execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
       callback(null, "Converted text\n", "");
@@ -80,7 +80,7 @@ describe("desk-agent file to-markdown", () => {
   });
 
   it("passes through plain text and markdown without external tools", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "desk-file-to-markdown-"));
+    const dir = await mkdtemp(path.join(os.tmpdir(), "roomy-file-to-markdown-"));
     const input = path.join(dir, "notes.md");
     await writeFile(input, "Already readable\n", "utf8");
 

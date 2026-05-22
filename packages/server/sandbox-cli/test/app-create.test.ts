@@ -17,22 +17,22 @@ const SCAFFOLD_PATH = path.resolve(here, "..", "..", "..", "app-scaffold");
 
 let homeDir: string;
 let prevHome: string | undefined;
-let prevDeskChatId: string | undefined;
+let prevRoomyChatId: string | undefined;
 
 beforeEach(async () => {
   outputMock.mockReset();
-  homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-app-create-"));
+  homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-app-create-"));
   prevHome = process.env.HOME;
-  prevDeskChatId = process.env.DESK_CHAT_ID;
+  prevRoomyChatId = process.env.ROOMY_CHAT_ID;
   process.env.HOME = homeDir;
-  delete process.env.DESK_CHAT_ID;
+  delete process.env.ROOMY_CHAT_ID;
 });
 
 afterEach(async () => {
   if (prevHome === undefined) delete process.env.HOME;
   else process.env.HOME = prevHome;
-  if (prevDeskChatId === undefined) delete process.env.DESK_CHAT_ID;
-  else process.env.DESK_CHAT_ID = prevDeskChatId;
+  if (prevRoomyChatId === undefined) delete process.env.ROOMY_CHAT_ID;
+  else process.env.ROOMY_CHAT_ID = prevRoomyChatId;
   await fs.rm(homeDir, { recursive: true, force: true });
 });
 
@@ -42,7 +42,7 @@ async function makeChatDir(chatId: string): Promise<void> {
   });
 }
 
-describe("desk-agent app create", () => {
+describe("roomy-agent app create", () => {
   it("clones the scaffold into ~/.chats/<chatId>/artifacts/<name>.app/ and substitutes the name", async () => {
     await makeChatDir("cht_a");
     await run(["--chat", "cht_a", "--template", SCAFFOLD_PATH, "my-todos"]);
@@ -50,7 +50,7 @@ describe("desk-agent app create", () => {
     const target = path.join(homeDir, ".chats", "cht_a", "artifacts", "my-todos.app");
 
     const manifest = JSON.parse(
-      await fs.readFile(path.join(target, "desk.app.json"), "utf-8"),
+      await fs.readFile(path.join(target, "roomy.app.json"), "utf-8"),
     );
     expect(manifest.name).toBe("my-todos");
     expect(manifest.displayName).toBe("my-todos");
@@ -67,7 +67,7 @@ describe("desk-agent app create", () => {
       "fragments/example/Component.tsx",
       "fragments/example/main.tsx",
       "fragments/example/index.html",
-      "fragments/example/desk.fragment.json",
+      "fragments/example/roomy.fragment.json",
       "fragments/example/skill.md",
       "AGENTS.md",
     ]) {
@@ -101,7 +101,7 @@ describe("desk-agent app create", () => {
   });
 
   it("rejects creating app artifacts outside the sandbox run chat", async () => {
-    process.env.DESK_CHAT_ID = "cht_current";
+    process.env.ROOMY_CHAT_ID = "cht_current";
     await makeChatDir("cht_other");
 
     await expect(

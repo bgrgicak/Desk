@@ -75,8 +75,8 @@ describe("classifyResourceError", () => {
 });
 
 describe("bindsSatisfy — subset semantics for mount drift", () => {
-  const workspace = "/home/bero/Desk/proj:/home/agent:rw";
-  const skills = "/home/bero/Desk/.skills:/opt/desk-skills:ro";
+  const workspace = "/home/bero/Roomy/proj:/home/agent:rw";
+  const skills = "/home/bero/Roomy/.skills:/opt/roomy-skills:ro";
   const projectsLocal = "/home/bero/Projects:/home/agent/Projects:rw";
   const downloadsLocal = "/home/bero/Downloads:/home/agent/Downloads:ro";
 
@@ -109,7 +109,7 @@ describe("bindsSatisfy — subset semantics for mount drift", () => {
     // container is pointed at the wrong workspace dir on disk.
     expect(
       bindsSatisfy(
-        ["/home/bero/Desk/OTHER:/home/agent:rw", skills],
+        ["/home/bero/Roomy/OTHER:/home/agent:rw", skills],
         [workspace, skills],
       ),
     ).toBe(false);

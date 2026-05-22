@@ -1,6 +1,6 @@
-import { type Pool } from "@agent-desk/db";
-import { reapIdleSandboxes, softReapIdleDaemons } from "@agent-desk/runtime";
-import { withModule } from "@agent-desk/shared/logger";
+import { type Pool } from "@roomy-ai/db";
+import { reapIdleSandboxes, softReapIdleDaemons } from "@roomy-ai/runtime";
+import { withModule } from "@roomy-ai/shared/logger";
 
 const log = withModule("scheduler/sandbox-sweep");
 
@@ -39,7 +39,7 @@ export async function getActiveWorkspaceIds(pool: Pool, idleMs: number): Promise
  */
 export async function sweepIdleSandboxes(
   pool: Pool,
-  idleMs: number = parseInt(process.env.DESK_SANDBOX_IDLE_MS ?? `${30 * 60 * 1000}`, 10),
+  idleMs: number = parseInt(process.env.ROOMY_SANDBOX_IDLE_MS ?? `${30 * 60 * 1000}`, 10),
 ): Promise<string[]> {
   const active = await getActiveWorkspaceIds(pool, idleMs);
   // Pass `idleMs` as the per-container minimum age so a brand-new
@@ -74,7 +74,7 @@ export function startIdleSweeper(pool: Pool, intervalMs: number = 60_000): NodeJ
 export async function sweepIdleDaemons(
   pool: Pool,
   softIdleMs: number = parseInt(
-    process.env.DESK_SANDBOX_SOFT_IDLE_MS ?? `${10 * 60 * 1000}`,
+    process.env.ROOMY_SANDBOX_SOFT_IDLE_MS ?? `${10 * 60 * 1000}`,
     10,
   ),
 ): Promise<string[]> {

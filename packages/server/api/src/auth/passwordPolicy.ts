@@ -1,4 +1,4 @@
-import { ValidationError } from "@agent-desk/shared";
+import { ValidationError } from "@roomy-ai/shared";
 
 /**
  * Single source of truth for user-account password rules.

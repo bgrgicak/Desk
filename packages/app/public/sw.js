@@ -1,4 +1,4 @@
-// Desk PWA service worker.
+// Roomy PWA service worker.
 //
 // Caching strategy:
 //   - Hashed /assets/* (Vite build outputs): cache-first. The hash is the
@@ -26,7 +26,7 @@
 // in vite.config.ts; in unbuilt copies it stays as the literal placeholder
 // (the SW only runs from a production build, so that's fine).
 const VERSION = '__APP_VERSION__';
-const CACHE_NAME = `desk-app-${VERSION}`;
+const CACHE_NAME = `roomy-app-${VERSION}`;
 const SHELL_URLS = [
   '/',
   '/index.html',

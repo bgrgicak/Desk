@@ -1,12 +1,12 @@
 /**
  * PR-E: library `<name>.app/` recognition + promote-from-chat-to-library.
  *
- * Real desk-server, real SQLite, real fs. Creates a `<name>.app/` chat
+ * Real roomy-server, real SQLite, real fs. Creates a `<name>.app/` chat
  * artifact, promotes it via `POST /chats/:id/save-artifact-to-library`,
  * and confirms:
  *   - the source disappears from the chat artifacts dir;
  *   - the destination appears in the library list as a single item with
- *     `isDir: true` and `mime: 'application/vnd.desk.app+directory'`;
+ *     `isDir: true` and `mime: 'application/vnd.roomy.app+directory'`;
  *   - the library walker does NOT recurse into the `.app/` directory
  *     (no node_modules / dist children leak into the listing);
  *   - `POST /apps/library/<appName>/issue` mints a session, the bootstrap
@@ -19,15 +19,15 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { Pool, runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 import {
   chatArtifactsDir,
   ensureLayout,
   ensureWorkspaceLayout,
   workspaceRootPath,
-} from "@agent-desk/storage";
+} from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -46,18 +46,18 @@ let authToken: string;
 const APP_NAME = "promoter-app";
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-promote-int-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-promote-int-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "promote-int-user";
-  process.env.DESK_SEED_PASSWORD = "pw";
+  process.env.ROOMY_SEED_USERNAME = "promote-int-user";
+  process.env.ROOMY_SEED_PASSWORD = "pw";
   await seedIfEmpty(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-promote-int-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-promote-int-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const { rows: wsRows } = await pool.query<{ id: string; path: string }>(
     "SELECT id, path FROM workspaces LIMIT 1",
@@ -83,7 +83,7 @@ beforeAll(async () => {
   await fs.mkdir(path.join(appRoot, "dist", "assets"), { recursive: true });
   await fs.mkdir(path.join(appRoot, "node_modules", "react"), { recursive: true });
   await fs.writeFile(
-    path.join(appRoot, "desk.app.json"),
+    path.join(appRoot, "roomy.app.json"),
     JSON.stringify({
       name: APP_NAME,
       capabilities: ["library.read"],
@@ -136,7 +136,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 interface RawResponse {
@@ -204,7 +204,7 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
       recursive: true,
     });
     await fs.writeFile(
-      path.join(wsRoot, "preexisting-app.app", "desk.app.json"),
+      path.join(wsRoot, "preexisting-app.app", "roomy.app.json"),
       JSON.stringify({ name: "preexisting-app", capabilities: [] }),
       "utf8",
     );
@@ -222,7 +222,7 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
     const appItem = body.items.find((it) => it.name === "preexisting-app.app");
     expect(appItem, `expected preexisting-app.app in items`).toBeTruthy();
     expect(appItem?.isDir).toBe(true);
-    expect(appItem?.mime).toBe("application/vnd.desk.app+directory");
+    expect(appItem?.mime).toBe("application/vnd.roomy.app+directory");
     // The walker must NOT have recursed — no `node_modules/react/...`
     // child entries should leak into the listing.
     expect(
@@ -249,7 +249,7 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
     const result = res.bodyJson as { path: string; name: string; isDir: boolean; mime: string };
     expect(result.path).toBe(`${APP_NAME}.app`);
     expect(result.isDir).toBe(true);
-    expect(result.mime).toBe("application/vnd.desk.app+directory");
+    expect(result.mime).toBe("application/vnd.roomy.app+directory");
 
     // Source should be gone
     await expect(
@@ -283,7 +283,7 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
       capabilities: string[];
     };
     expect(issued.token.startsWith("app_")).toBe(true);
-    expect(issued.cookieName.startsWith("desk_libapp_")).toBe(true);
+    expect(issued.cookieName.startsWith("roomy_libapp_")).toBe(true);
     expect(issued.url).toMatch(new RegExp(`^/apps/library/${workspaceId}/[a-f0-9]{64}/${APP_NAME}\\.app/dist/\\?t=`));
 
     // Bootstrap now serves index inline (200); see apps.ts for why the
@@ -298,7 +298,7 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
     const issuedPath = issued.url.split("?")[0];
     expect(issuedPath.startsWith(cookiePath)).toBe(true);
 
-    expect(bootstrap.body).toContain("window.desk");
+    expect(bootstrap.body).toContain("window.roomy");
     expect(bootstrap.body).toContain(`"name":"${APP_NAME}"`);
     expect(bootstrap.body).toContain('./assets/index.js');
     // Library scope: chatId is the empty string in the bridge payload so
@@ -313,7 +313,7 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
     const nestedAppRoot = path.join(wsRoot, nestedAppPath);
     await fs.mkdir(path.join(nestedAppRoot, "dist", "fragments", "list"), { recursive: true });
     await fs.writeFile(
-      path.join(nestedAppRoot, "desk.app.json"),
+      path.join(nestedAppRoot, "roomy.app.json"),
       JSON.stringify({ name: "nested-app", capabilities: [] }),
       "utf8",
     );
@@ -349,7 +349,7 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
 
     // Bootstrap response is the fragment HTML inline (no 302 round-trip).
     expect(bootstrap.body).toContain("Nested fragment");
-    expect(bootstrap.body).toContain("window.desk");
+    expect(bootstrap.body).toContain("window.roomy");
   });
 
   it("serves library app JS assets without cookies for opaque sandbox subresource loads", async () => {
@@ -409,7 +409,7 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
     );
     await fs.mkdir(path.join(appRoot, "dist"), { recursive: true });
     await fs.writeFile(
-      path.join(appRoot, "desk.app.json"),
+      path.join(appRoot, "roomy.app.json"),
       JSON.stringify({ name: DELETE_NAME, capabilities: [] }),
       "utf8",
     );
@@ -447,7 +447,7 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
     const appRoot = path.join(wsRoot, `${DELETE_NAME}.app`);
     await fs.mkdir(path.join(appRoot, "dist"), { recursive: true });
     await fs.writeFile(
-      path.join(appRoot, "desk.app.json"),
+      path.join(appRoot, "roomy.app.json"),
       JSON.stringify({ name: DELETE_NAME, capabilities: [] }),
       "utf8",
     );

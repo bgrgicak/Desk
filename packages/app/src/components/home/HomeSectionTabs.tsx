@@ -1,4 +1,4 @@
-import { cn } from '@agent-desk/ui'
+import { cn } from '@roomy-ai/ui'
 import { motion } from 'framer-motion'
 import { HOME_SECTION_LABELS, type HomeSectionKey } from '@/hooks/use-home-sections'
 
@@ -18,7 +18,7 @@ interface HomeSectionTabsProps {
 
 /**
  * Tab-pill row for Home's section anchors. Renders in the top bar
- * (centred between the Desk wordmark and the right-side controls) when
+ * (centred between the Roomy wordmark and the right-side controls) when
  * the user has scrolled past the Summary block, so the section labels
  * stay reachable while the headings themselves are off-screen.
  *

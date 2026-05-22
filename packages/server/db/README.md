@@ -1,14 +1,14 @@
-# @agent-desk/db
+# @roomy-ai/db
 
-Database layer for Desk. Manages schema migrations and typed query helpers on top of SQLite.
+Database layer for Roomy. Manages schema migrations and typed query helpers on top of SQLite.
 
 ## Install
 
 ```sh
-npm install @agent-desk/db@alpha
+npm install @roomy-ai/db@alpha
 ```
 
-This package is an internal server component published so that `@agent-desk/cli` can depend on it.
+This package is an internal server component published so that `@roomy-ai/cli` can depend on it.
 
 ## License
 

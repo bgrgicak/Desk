@@ -1,5 +1,5 @@
 import { type Pool } from "../pool.js";
-import { WorkspaceAgentSchema, type WorkspaceAgent, NotFoundError } from "@agent-desk/shared";
+import { WorkspaceAgentSchema, type WorkspaceAgent, NotFoundError } from "@roomy-ai/shared";
 
 function rowToWorkspaceAgent(row: Record<string, unknown>): WorkspaceAgent {
   return WorkspaceAgentSchema.parse({

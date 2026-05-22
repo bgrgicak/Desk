@@ -11,13 +11,13 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
-import { createRunManager } from "@agent-desk/scheduler";
+import { createRunManager } from "@roomy-ai/scheduler";
 
 let pool: Pool;
 let server: http.Server;
@@ -26,18 +26,18 @@ let home: string;
 let dbPath: string;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-providers-del-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-providers-del-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "prov-test";
-  process.env.DESK_SEED_PASSWORD = "prov-pass";
+  process.env.ROOMY_SEED_USERNAME = "prov-test";
+  process.env.ROOMY_SEED_PASSWORD = "prov-pass";
   await seedIfEmpty(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-providers-del-home-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-providers-del-home-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
   const storage = { pool, home };
   const runManager = createRunManager({
     pool,

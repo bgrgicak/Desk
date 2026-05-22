@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Button } from '@agent-desk/ui'
+import { Button } from '@roomy-ai/ui'
 
 // Single source of truth for the "example" fragment UI. Imported by the
 // full app's App.tsx (rendered at /example) and by this fragment's own

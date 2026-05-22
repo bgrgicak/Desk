@@ -7,7 +7,7 @@ import { useGetLibraryFileQuery } from '@/store/api'
 interface PathChipProps {
   /** Original sandbox-absolute path, e.g. /home/agent/report.md */
   sandboxPath: string
-  /** User-visible translated path, e.g. ~/Desk/desk/report.md */
+  /** User-visible translated path, e.g. ~/Roomy/roomy/report.md */
   displayPath: string
   /** Workspace UUID — when provided, clicking opens the file in the library. */
   workspaceId?: string

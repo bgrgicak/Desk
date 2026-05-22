@@ -4,16 +4,16 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, queries } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, queries } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 import { createApp, type AppOptions } from "../src/app.js";
 import { issueSession, clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 
-// Static-serve is opt-in via DESK_SERVE_APP=1 + DESK_APP_DIST. The CLI sets
+// Static-serve is opt-in via ROOMY_SERVE_APP=1 + ROOMY_APP_DIST. The CLI sets
 // these in published installs. This file exercises both: with the env on,
 // the API serves the SPA and strips /api/* from incoming requests; with
 // the env off (the existing dev path), it behaves exactly as before.
@@ -81,14 +81,14 @@ function fetchRaw(
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-static-app-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-static-app-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-static-app-home-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-static-app-home-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   userId = generateId("user");
   await queries.users.insert(pool, {
@@ -98,22 +98,22 @@ beforeAll(async () => {
     email: "static@example.com",
   });
 
-  // Stand up a fake @agent-desk/app/dist that the API can serve.
-  distRoot = await fs.mkdtemp(path.join(os.tmpdir(), "desk-static-app-dist-"));
+  // Stand up a fake @roomy-ai/app/dist that the API can serve.
+  distRoot = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-static-app-dist-"));
   await fs.writeFile(
     path.join(distRoot, "index.html"),
-    "<!doctype html><html><body>desk-app-spa</body></html>",
+    "<!doctype html><html><body>roomy-app-spa</body></html>",
   );
   await fs.mkdir(path.join(distRoot, "assets"), { recursive: true });
   await fs.writeFile(
     path.join(distRoot, "assets", "main.js"),
-    'console.log("desk-app-bundle");',
+    'console.log("roomy-app-bundle");',
   );
   // PWA assets — the manifest needs the application/manifest+json
   // content-type or some browsers refuse the install prompt.
   await fs.writeFile(
     path.join(distRoot, "manifest.webmanifest"),
-    '{"name":"Desk","start_url":"/","display":"standalone"}',
+    '{"name":"Roomy","start_url":"/","display":"standalone"}',
   );
 });
 
@@ -128,53 +128,53 @@ afterAll(async () => {
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
   if (distRoot) await fs.rm(distRoot, { recursive: true, force: true });
-  delete process.env.DESK_HOME;
-  delete process.env.DESK_SERVE_APP;
-  delete process.env.DESK_APP_DIST;
+  delete process.env.ROOMY_HOME;
+  delete process.env.ROOMY_SERVE_APP;
+  delete process.env.ROOMY_APP_DIST;
 });
 
-describe("static-serve when DESK_SERVE_APP=1", () => {
+describe("static-serve when ROOMY_SERVE_APP=1", () => {
   it("GET / returns the SPA index.html", async () => {
-    process.env.DESK_SERVE_APP = "1";
-    process.env.DESK_APP_DIST = distRoot;
+    process.env.ROOMY_SERVE_APP = "1";
+    process.env.ROOMY_APP_DIST = distRoot;
     const server = await startServer();
     const res = await fetchRaw(getServerPort(server), "/");
     expect(res.status).toBe(200);
     expect(res.contentType).toMatch(/text\/html/);
-    expect(res.body).toContain("desk-app-spa");
+    expect(res.body).toContain("roomy-app-spa");
   });
 
   it("GET /assets/main.js returns the asset with JS content-type", async () => {
-    process.env.DESK_SERVE_APP = "1";
-    process.env.DESK_APP_DIST = distRoot;
+    process.env.ROOMY_SERVE_APP = "1";
+    process.env.ROOMY_APP_DIST = distRoot;
     const server = await startServer();
     const res = await fetchRaw(getServerPort(server), "/assets/main.js");
     expect(res.status).toBe(200);
     expect(res.contentType).toMatch(/javascript/);
-    expect(res.body).toContain("desk-app-bundle");
+    expect(res.body).toContain("roomy-app-bundle");
   });
 
   it("GET /chats/some-id falls back to index.html for SPA client routing", async () => {
-    process.env.DESK_SERVE_APP = "1";
-    process.env.DESK_APP_DIST = distRoot;
+    process.env.ROOMY_SERVE_APP = "1";
+    process.env.ROOMY_APP_DIST = distRoot;
     const server = await startServer();
     const res = await fetchRaw(getServerPort(server), "/chats/some-id");
     expect(res.status).toBe(200);
     expect(res.contentType).toMatch(/text\/html/);
-    expect(res.body).toContain("desk-app-spa");
+    expect(res.body).toContain("roomy-app-spa");
   });
 
   it("GET /api/me without auth returns 401 (API still gated)", async () => {
-    process.env.DESK_SERVE_APP = "1";
-    process.env.DESK_APP_DIST = distRoot;
+    process.env.ROOMY_SERVE_APP = "1";
+    process.env.ROOMY_APP_DIST = distRoot;
     const server = await startServer();
     const res = await fetchRaw(getServerPort(server), "/api/me");
     expect(res.status).toBe(401);
   });
 
   it("GET /api/me with auth returns the account payload", async () => {
-    process.env.DESK_SERVE_APP = "1";
-    process.env.DESK_APP_DIST = distRoot;
+    process.env.ROOMY_SERVE_APP = "1";
+    process.env.ROOMY_APP_DIST = distRoot;
     const server = await startServer();
     const token = await issueSession(pool, userId);
     const res = await fetchRaw(getServerPort(server), "/api/me", { token });
@@ -184,18 +184,18 @@ describe("static-serve when DESK_SERVE_APP=1", () => {
   });
 
   it("GET /manifest.webmanifest returns application/manifest+json", async () => {
-    process.env.DESK_SERVE_APP = "1";
-    process.env.DESK_APP_DIST = distRoot;
+    process.env.ROOMY_SERVE_APP = "1";
+    process.env.ROOMY_APP_DIST = distRoot;
     const server = await startServer();
     const res = await fetchRaw(getServerPort(server), "/manifest.webmanifest");
     expect(res.status).toBe(200);
     expect(res.contentType).toMatch(/application\/manifest\+json/);
-    expect(JSON.parse(res.body).name).toBe("Desk");
+    expect(JSON.parse(res.body).name).toBe("Roomy");
   });
 
   it("path traversal attempts (/../) cannot escape distRoot", async () => {
-    process.env.DESK_SERVE_APP = "1";
-    process.env.DESK_APP_DIST = distRoot;
+    process.env.ROOMY_SERVE_APP = "1";
+    process.env.ROOMY_APP_DIST = distRoot;
     const server = await startServer();
     // Decoded "%2e%2e/%2e%2e/etc/passwd" should fall back to index.html,
     // not return /etc/passwd.
@@ -205,14 +205,14 @@ describe("static-serve when DESK_SERVE_APP=1", () => {
     );
     expect(res.status).toBe(200);
     expect(res.contentType).toMatch(/text\/html/);
-    expect(res.body).toContain("desk-app-spa");
+    expect(res.body).toContain("roomy-app-spa");
   });
 });
 
-describe("default mode (DESK_SERVE_APP unset) — no behaviour change", () => {
+describe("default mode (ROOMY_SERVE_APP unset) — no behaviour change", () => {
   it("GET / still returns hello world", async () => {
-    delete process.env.DESK_SERVE_APP;
-    delete process.env.DESK_APP_DIST;
+    delete process.env.ROOMY_SERVE_APP;
+    delete process.env.ROOMY_APP_DIST;
     const server = await startServer();
     const res = await fetchRaw(getServerPort(server), "/");
     expect(res.status).toBe(200);
@@ -220,8 +220,8 @@ describe("default mode (DESK_SERVE_APP unset) — no behaviour change", () => {
   });
 
   it("GET /chats/some-id returns 401 without auth, not the SPA", async () => {
-    delete process.env.DESK_SERVE_APP;
-    delete process.env.DESK_APP_DIST;
+    delete process.env.ROOMY_SERVE_APP;
+    delete process.env.ROOMY_APP_DIST;
     const server = await startServer();
     const res = await fetchRaw(getServerPort(server), "/chats/some-id");
     // Without static-serve, the path goes through the auth middleware
@@ -232,8 +232,8 @@ describe("default mode (DESK_SERVE_APP unset) — no behaviour change", () => {
 
 describe("/api/* prefix stripping (always on)", () => {
   it("GET /api/openapi.json returns the same spec as /openapi.json", async () => {
-    delete process.env.DESK_SERVE_APP;
-    delete process.env.DESK_APP_DIST;
+    delete process.env.ROOMY_SERVE_APP;
+    delete process.env.ROOMY_APP_DIST;
     const server = await startServer();
     const port = getServerPort(server);
     const direct = await fetchRaw(port, "/openapi.json");

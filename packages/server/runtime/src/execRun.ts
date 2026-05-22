@@ -9,9 +9,9 @@
  * extensions.
  */
 
-import { type Pool } from "@agent-desk/db";
+import { type Pool } from "@roomy-ai/db";
 import { networkInterfaces } from "node:os";
-import { type WorkspaceKind } from "@agent-desk/shared";
+import { type WorkspaceKind } from "@roomy-ai/shared";
 import type { SandboxHandle } from "./docker.js";
 import type { ExecResult, LogEvent } from "./driver.js";
 import { createDriver } from "./driver.js";
@@ -19,7 +19,7 @@ import { mintToken, revokeToken } from "./sessions.js";
 import { projectMounts, teardownMounts, type MountPlan } from "./mounts.js";
 import { writeAgentFile, writeWorkspaceMcpConfig, chatNeedsBrowser, type AgentFileInput } from "./agentFile.js";
 import { detectEngine, type Engine } from "./engine.js";
-import { withModule } from "@agent-desk/shared/logger";
+import { withModule } from "@roomy-ai/shared/logger";
 const log = withModule("runtime/execRun");
 
 /**
@@ -49,7 +49,7 @@ async function withMcpLock<T>(workspaceId: string, fn: () => Promise<T>): Promis
 
 /**
  * Idempotently start an Xvfb display inside the container for the
- * playwright-mcp server the desk-mcp-bridge extension will spawn.
+ * playwright-mcp server the roomy-mcp-bridge extension will spawn.
  * Skipped entirely for non-browser-goal chats so the ~68 MiB
  * framebuffer doesn't sit warm for sandboxes that never open a browser.
  *
@@ -66,7 +66,7 @@ export async function ensureContainerXvfb(
       "set -e",
       "if pgrep -x Xvfb >/dev/null 2>&1; then exit 0; fi",
       "DISPLAY=\"${DISPLAY:-:99}\"",
-      "Xvfb \"$DISPLAY\" -screen 0 \"${XVFB_SCREEN:-1920x1080x24}\" -nolisten tcp >/tmp/desk-xvfb.log 2>&1 &",
+      "Xvfb \"$DISPLAY\" -screen 0 \"${XVFB_SCREEN:-1920x1080x24}\" -nolisten tcp >/tmp/roomy-xvfb.log 2>&1 &",
       "for _ in 1 2 3 4 5 6 7 8 9 10; do",
       "  [ -S \"/tmp/.X11-unix/X${DISPLAY#:}\" ] && exit 0",
       "  sleep 0.1",
@@ -123,7 +123,7 @@ function safeNetworkInterfaces(): ReturnType<typeof networkInterfaces> {
 }
 
 function defaultSandboxApiUrl(): string {
-  const configured = process.env.DESK_SANDBOX_API_URL;
+  const configured = process.env.ROOMY_SANDBOX_API_URL;
   if (configured) return configured;
 
   const port = process.env.PORT ?? "35138";
@@ -179,8 +179,8 @@ export async function execRun(
     // Xvfb is expensive (~68 MiB resident). Start it lazily whenever
     // playwright is enabled — idempotent, so a no-op when already up.
     // Order matters: Xvfb must exist *before* pi spawns its
-    // desk-mcp-bridge → playwright-mcp → firefox child.
-    if (process.env.DESK_SANDBOX_DRIVER !== "fake" && chatNeedsBrowser(opts.agent.goal)) {
+    // roomy-mcp-bridge → playwright-mcp → firefox child.
+    if (process.env.ROOMY_SANDBOX_DRIVER !== "fake" && chatNeedsBrowser(opts.agent.goal)) {
       try {
         const engine = await detectEngine();
         await ensureContainerXvfb(engine, handle.containerId).catch(() => {
@@ -204,11 +204,11 @@ export async function execRun(
       agentFileId: opts.agent.agentId,
       attachments: opts.attachments,
       sandboxToken: token,
-      // When DESK_SANDBOX_NETWORK=none the host-gateway entry is
+      // When ROOMY_SANDBOX_NETWORK=none the host-gateway entry is
       // dropped, so `host.docker.internal` won't resolve. Suppressing
-      // DESK_API_URL surfaces the existing "DESK_API_URL is not set"
+      // ROOMY_API_URL surfaces the existing "ROOMY_API_URL is not set"
       // error from the in-sandbox CLI immediately, not a TCP timeout.
-      apiUrl: process.env.DESK_SANDBOX_NETWORK === "none"
+      apiUrl: process.env.ROOMY_SANDBOX_NETWORK === "none"
         ? undefined
         : (opts.apiUrl ?? defaultSandboxApiUrl()),
       model: opts.agent.model,

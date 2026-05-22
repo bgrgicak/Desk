@@ -1,8 +1,8 @@
 -- First-run safety flag on users.must_change_password.
 --
--- A fresh `desk-server` install seeds a user with the documented
--- DESK_SEED_PASSWORD (default "change-me-before-first-boot"). When the
--- operator never sets DESK_SEED_PASSWORD, that account ships with a
+-- A fresh `roomy-server` install seeds a user with the documented
+-- ROOMY_SEED_PASSWORD (default "change-me-before-first-boot"). When the
+-- operator never sets ROOMY_SEED_PASSWORD, that account ships with a
 -- known-public password — the seed routine now sets this flag so the
 -- SPA can prompt the user to change it before doing anything else.
 --

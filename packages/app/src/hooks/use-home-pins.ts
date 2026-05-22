@@ -21,8 +21,8 @@ export interface HomePinRef {
   label: string
 }
 
-const KEY = 'desk.home-pins.v1'
-const CHANGE_EVENT = 'desk:home-pins-changed'
+const KEY = 'roomy.home-pins.v1'
+const CHANGE_EVENT = 'roomy:home-pins-changed'
 
 function refKey(kind: HomePinKind, id: string): string {
   return `${kind}:${id}`

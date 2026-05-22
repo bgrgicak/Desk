@@ -1,5 +1,5 @@
-import { type Pool } from "@agent-desk/db";
-import { queries } from "@agent-desk/db";
+import { type Pool } from "@roomy-ai/db";
+import { queries } from "@roomy-ai/db";
 import {
   MESSAGE_KINDS,
   MESSAGE_STATES,
@@ -8,7 +8,7 @@ import {
   type MessageKind,
   type MessageState,
   type TaskStatus,
-} from "@agent-desk/shared";
+} from "@roomy-ai/shared";
 import { requireOwnedChat, requireOwnedWorkspace } from "../auth/ownership.js";
 
 const WORKSPACE_ID_PATTERN = /^wks_[A-Za-z0-9_-]+$/;

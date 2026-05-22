@@ -27,7 +27,7 @@ Keys are never returned in plaintext over the API. The masking function lives in
 
 Keys are passed to containers as environment variables via `runtime/src/docker.ts → providerKeyEnv()` at create time and `providerKeyExecEnv()` per run. This means container-scoped credentials are visible to code running in the sandbox; create-time values may also be visible via `docker inspect` on the host. Because sandboxed code must be able to use the keys, switching to a tmpfs file does not reduce exposure — any code running in the container can read either.
 
-GitHub connections are exposed as both `GITHUB_TOKEN` and `GH_TOKEN` for CLI compatibility. The UI guides users to create a classic personal access token with the `repo` scope, plus `workflow` if agents should edit GitHub Actions workflow files. Classic tokens are broad, but they are currently the simplest compatible path for `gh`, GitHub API calls, private repo git operations, pull requests, issues, and HTTPS `git` from sandboxes. Deleting the connection removes Desk's local vault entry; users can revoke or rotate the token in GitHub settings. The runtime also creates a temporary `GIT_ASKPASS` helper during pi runs so HTTPS `git` operations can authenticate non-interactively without requiring the `gh` CLI to be installed.
+GitHub connections are exposed as both `GITHUB_TOKEN` and `GH_TOKEN` for CLI compatibility. The UI guides users to create a classic personal access token with the `repo` scope, plus `workflow` if agents should edit GitHub Actions workflow files. Classic tokens are broad, but they are currently the simplest compatible path for `gh`, GitHub API calls, private repo git operations, pull requests, issues, and HTTPS `git` from sandboxes. Deleting the connection removes Roomy's local vault entry; users can revoke or rotate the token in GitHub settings. The runtime also creates a temporary `GIT_ASKPASS` helper during pi runs so HTTPS `git` operations can authenticate non-interactively without requiring the `gh` CLI to be installed.
 
 The real risk is `docker inspect` access on the host, which requires Docker socket access (root-equivalent). Mitigated sufficiently by host access controls.
 
@@ -73,7 +73,7 @@ CREATE TABLE provider_key_access_log (
 
 User-stored credentials (logins for sites the user wants their agents
 to act on) live in a per-user [KDBX 4](https://keepass.info/help/kb/kdbx_4.html)
-file at `${DESK_HOME}/.vaults/{userId}.kdbx`, encrypted with a master
+file at `${ROOMY_HOME}/.vaults/{userId}.kdbx`, encrypted with a master
 password the user sets.
 
 ### Threat model
@@ -84,7 +84,7 @@ is useless without it. A vanilla provider-keys-style on-disk key
 file would have leaked everything in those scenarios.
 
 The thing it doesn't defeat: a host-root attacker who can dump the
-running desk-server process's memory while the vault is unlocked.
+running roomy-server process's memory while the vault is unlocked.
 Out of scope for v1; would need an HSM or hardware enclave.
 
 ### Lifecycle
@@ -96,7 +96,7 @@ Out of scope for v1; would need an HSM or hardware enclave.
 | Lock | `POST /vault/lock` and `handleLogout` | Master Buffer is `fill(0)`'d, reference dropped |
 | Server restart | Process exit | All in-memory masters die with the process |
 | Read by user | (no endpoint) | The SPA cannot read plaintext, by design |
-| Read by agent | `GET /sandbox/secrets/:title` (X-Desk-Sandbox-Token) | Agent's `userId` resolves the vault |
+| Read by agent | `GET /sandbox/secrets/:title` (X-Roomy-Sandbox-Token) | Agent's `userId` resolves the vault |
 | Write by user | `POST /secrets`, `PUT /secrets/:title` | Add or overwrite via KDBX entry fields |
 
 The master password is held as a `Buffer` (not a JS String) so we
@@ -130,7 +130,7 @@ only an explicit logout does.
 
 - OS keyring integration (would let the master persist across server
   restarts on user-session hosts).
-- `DESK_VAULT_PASSWORD` env-var unlock (would let headless deploys
+- `ROOMY_VAULT_PASSWORD` env-var unlock (would let headless deploys
   auto-unlock at boot).
 - App-write capability path (waits on per-app identity from #47).
 - Audit log for vault reads (mirror of `provider_key_access_log`).
@@ -171,7 +171,7 @@ Per-IP buckets fall back to a per-user bucket where relevant.
 
 When over budget the server returns `429` with the standard `{code,
 message}` shape plus a `Retry-After` header (seconds). Tests and one-off
-scripts can disable the limiter entirely with `DESK_RATE_LIMIT_DISABLED=1`
+scripts can disable the limiter entirely with `ROOMY_RATE_LIMIT_DISABLED=1`
 (used by the e2e fixture; production never sets it).
 
 ### WebSocket Origin allowlist
@@ -182,10 +182,10 @@ mitigation, `api/src/app.ts → isWsOriginAllowed`).
 - Any `http(s)://localhost` / `http(s)://127.0.0.1` / `http://[::1]`
   origin is accepted on any port — loopback can't legitimately serve
   a remote attacker page from the victim's machine.
-- Additional production origins via `DESK_ALLOWED_ORIGINS`
+- Additional production origins via `ROOMY_ALLOWED_ORIGINS`
   (comma-separated list).
-- `DESK_ALLOWED_HOSTS` (same env var the Vite dev/preview server
-  reads, default `desk.test`) expands into `http://host` +
+- `ROOMY_ALLOWED_HOSTS` (same env var the Vite dev/preview server
+  reads, default `roomy.test`) expands into `http://host` +
   `https://host` allowlist entries so the bundled nginx fixture works
   without configuring two parallel allowlists.
 - Missing `Origin` header is allowed (CLI tools, integration tests,
@@ -200,7 +200,7 @@ be used to probe whether a token is valid from a cross-site context.
 `POST /vault/setup` (`api/src/routes/vault.ts → enforceVaultPasswordPolicy`):
 
 - Min length 12 (NIST 800-63B favours length over composition).
-- Rejects the documented `DESK_SEED_PASSWORD` string verbatim so a
+- Rejects the documented `ROOMY_SEED_PASSWORD` string verbatim so a
   first-boot operator can't accidentally re-use it for the vault.
 
 Deliberately **not** enforced on `/vault/unlock` — that would lock out
@@ -210,38 +210,38 @@ weak passwords hard to set," not retroactive invalidation.
 ### Signup gate
 
 `POST /auth/signup` is disabled by default. Operators opt in with
-`DESK_ENABLE_SIGNUP=1`; the unauthenticated `GET /auth/signup-status`
+`ROOMY_ENABLE_SIGNUP=1`; the unauthenticated `GET /auth/signup-status`
 lets the SPA decide whether to render the live link vs the "coming
 soon" placeholder. Single-user-per-host deployments leave it off.
 
 When enabled: username (3–32 chars `[a-zA-Z0-9_-]`), valid email,
 password ≥ 12 chars and ≠ the documented seed. Creates the user row,
 bootstraps a hub workspace (matching `main.ts` boot behaviour), sets
-up the per-user vault when `DESK_VAULT_PASSWORD` is set, returns a
+up the per-user vault when `ROOMY_VAULT_PASSWORD` is set, returns a
 session token. Same rate-limit shape as `/auth/login`.
 
 ### First-run seed-password flag
 
 The seed user gets `must_change_password = 1` when the install boots on
-the documented public `DESK_SEED_PASSWORD`. The flag clears on the next
+the documented public `ROOMY_SEED_PASSWORD`. The flag clears on the next
 successful `POST /me/password` (or any login-time hash upgrade). `GET
 /me` surfaces it so the SPA can prompt for a change.
 
-Operators who supply their own `DESK_SEED_PASSWORD` skip the flag —
+Operators who supply their own `ROOMY_SEED_PASSWORD` skip the flag —
 they chose their own secret and don't need the prompt.
 
 ### Audit-log retention
 
-`provider_key_access_log` rows older than `DESK_KEY_ACCESS_LOG_RETENTION_DAYS`
+`provider_key_access_log` rows older than `ROOMY_KEY_ACCESS_LOG_RETENTION_DAYS`
 (default 90) are pruned on boot and then on a daily cadence by the
 reaper in `api/src/main.ts`. Surfaced read-only at `GET
 /me/key-access-log` (user-scoped, paginated, ISO timestamps).
 
 ### Misleading-log fix
 
-`api/src/main.ts` previously logged "auto-unlocked via DESK_SECRET_KEY"
+`api/src/main.ts` previously logged "auto-unlocked via ROOMY_SECRET_KEY"
 during vault auto-unlock. The variable actually read is
-`DESK_VAULT_PASSWORD` (a distinct env var from the AES-256 key for
+`ROOMY_VAULT_PASSWORD` (a distinct env var from the AES-256 key for
 SQLite at-rest encryption). Fixed.
 
 ---
@@ -261,7 +261,7 @@ healthcheck, k8s readinessProbe) can probe without a token.
 ### Graceful shutdown
 
 `SIGINT` / `SIGTERM` triggers a bounded shutdown
-(`DESK_SHUTDOWN_GRACE_MS`, default 30000):
+(`ROOMY_SHUTDOWN_GRACE_MS`, default 30000):
 
 - Re-entrancy guard so double-signal doesn't run cleanup twice.
 - Awaits `server.close()` (calls `closeIdleConnections()` first so
@@ -274,9 +274,9 @@ healthcheck, k8s readinessProbe) can probe without a token.
 ### Pre-migration DB snapshot
 
 Before `runMigrations()`, the SQLite DB is snapshotted to
-`${DESK_HOME}/backups/pre-migration-<ISO>.db` via `VACUUM INTO` (same
+`${ROOMY_HOME}/backups/pre-migration-<ISO>.db` via `VACUUM INTO` (same
 code path as `/internal/backup`). Skipped on a truly-empty file (first
-boot). Retention bounded by `DESK_PRE_MIGRATION_BACKUP_KEEP` (default
+boot). Retention bounded by `ROOMY_PRE_MIGRATION_BACKUP_KEEP` (default
 10), oldest pruned first.
 
 A backup failure is logged and the boot continues — losing the safety
@@ -285,7 +285,7 @@ net is preferable to refusing to start.
 ### Slow-query log
 
 The SQLite pool wraps every query and warns when elapsed time exceeds
-`DESK_SLOW_QUERY_MS` (default 50ms). Log line carries the prepared SQL
+`ROOMY_SLOW_QUERY_MS` (default 50ms). Log line carries the prepared SQL
 text (normalised + truncated to 240 chars) and row count; bind values
 are never logged. Set to 0 to disable.
 
@@ -293,12 +293,12 @@ are never logged. Set to 0 to disable.
 
 ## Sandbox-side controls
 
-### Egress policy (`DESK_SANDBOX_NETWORK`)
+### Egress policy (`ROOMY_SANDBOX_NETWORK`)
 
 | Value | Behaviour |
 |---|---|
 | `bridge` (default) | Default Docker bridge network. Sandbox can reach AI provider APIs, GitHub, package registries — every URL the runtime needs. |
-| `none` | `--network none`. No outbound connectivity. Drops the `host.docker.internal:host-gateway` extra-host entry. The in-sandbox `desk` CLI gets a clear "DESK_API_URL is not set" error (rather than a TCP timeout) when invoked, because the runtime now omits `DESK_API_URL` in this mode. |
+| `none` | `--network none`. No outbound connectivity. Drops the `host.docker.internal:host-gateway` extra-host entry. The in-sandbox `roomy` CLI gets a clear "ROOMY_API_URL is not set" error (rather than a TCP timeout) when invoked, because the runtime now omits `ROOMY_API_URL` in this mode. |
 
 `none` is the right pick for paranoid deployments running agent
 workloads that only need on-disk file editing + a pre-cached local
@@ -312,7 +312,7 @@ two-option knob covers the realistic deployment matrix today.
 
 ### Reproducible-build sanity check
 
-The CI workflow builds `desk/sandbox:v1` twice on every run (same
+The CI workflow builds `roomy/sandbox:v1` twice on every run (same
 source, same `SOURCE_DATE_EPOCH`) and compares the resulting image
 digests. **Drift is advisory today**: a `::warning::` annotation
 shows up on the job summary instead of a hard failure. Promoting it

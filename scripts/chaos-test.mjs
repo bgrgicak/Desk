@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Desk API chaos test.
+ * Roomy API chaos test.
  *
  * Stress-tests sandbox robustness by hammering the API directly: spins
  * up fresh project workspaces, opens many chats in parallel, fires a
@@ -36,8 +36,8 @@ function parseArgs(argv) {
   const args = {
     host: "127.0.0.1",
     port: Number(process.env.PORT ?? 35138),
-    username: process.env.DESK_USERNAME ?? "testuser",
-    password: process.env.DESK_PASSWORD ?? "test-pass-1234",
+    username: process.env.ROOMY_USERNAME ?? "testuser",
+    password: process.env.ROOMY_PASSWORD ?? "test-pass-1234",
     workspaces: 2,
     scenariosPerWorkspace: 5,
     scenarioBudgetMs: 300_000,
@@ -78,13 +78,13 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  process.stdout.write(`chaos-test — exercise the Desk API with concurrent, varied chat traffic
+  process.stdout.write(`chaos-test — exercise the Roomy API with concurrent, varied chat traffic
 
 Flags:
   --host HOST                 (default 127.0.0.1)
   --port PORT                 (default 35138, env PORT)
-  --username NAME             (default testuser, env DESK_USERNAME)
-  --password PASS             (default test-pass-1234, env DESK_PASSWORD)
+  --username NAME             (default testuser, env ROOMY_USERNAME)
+  --password PASS             (default test-pass-1234, env ROOMY_PASSWORD)
   --workspaces N              fresh project workspaces to create (default 2)
   --scenarios-per-workspace N (default 5)
   --scenario-budget-ms MS     per-scenario hard deadline (default 300000)
@@ -113,7 +113,7 @@ function makePrng(seed) {
 
 // ─── HTTP client (fetch-based; no third-party deps) ───────────────────
 
-class DeskClient {
+class RoomyClient {
   constructor({ host, port }) {
     this.base = `http://${host}:${port}`;
     this.token = null;
@@ -128,7 +128,7 @@ class DeskClient {
   }
 
   async login(username, password) {
-    // Dev mode usually has DESK_AUTO_LOGIN enabled — try the
+    // Dev mode usually has ROOMY_AUTO_LOGIN enabled — try the
     // credential-less path first because credentials in dev rarely
     // match the seed values. Fall back to username/password when
     // auto-login is disabled (production-shaped deployments).
@@ -198,7 +198,7 @@ class DeskClient {
       if (!r.ok) throw new Error(`sendMessage ${r.status}: ${await r.text()}`);
       return r.json();
     }
-    const boundary = `----desk-chaos-${crypto.randomBytes(8).toString("hex")}`;
+    const boundary = `----roomy-chaos-${crypto.randomBytes(8).toString("hex")}`;
     const chunks = [];
     chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="content"\r\n\r\n${content}\r\n`));
     for (const att of attachments) {
@@ -680,7 +680,7 @@ async function main() {
     `workspaces=${args.workspaces} scenarios/workspace=${args.scenariosPerWorkspace} ` +
     `seed=${args.seed}\n`);
 
-  const client = new DeskClient({ host: args.host, port: args.port });
+  const client = new RoomyClient({ host: args.host, port: args.port });
   const rng = makePrng(args.seed);
 
   // 1. Auth

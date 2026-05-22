@@ -24,7 +24,7 @@ import {
   Dialog,
   DialogContent,
   DialogTitle,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import type { Task } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 import { initialsOf } from '@/lib/initials'

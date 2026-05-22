@@ -1,11 +1,11 @@
 /**
- * Playwright global setup/teardown — boots a single disposable desk-server
+ * Playwright global setup/teardown — boots a single disposable roomy-server
  * AND the Vite preview server for the whole run.
  *
  * Playwright's built-in `webServer` starts before globalSetup runs, which
- * means a closure in vite.config.ts (const API_TARGET = process.env.DESK_API_URL ?? …)
+ * means a closure in vite.config.ts (const API_TARGET = process.env.ROOMY_API_URL ?? …)
  * captures the wrong target. Starting both services from globalSetup
- * sequences them correctly: server first, then Vite with DESK_API_URL set
+ * sequences them correctly: server first, then Vite with ROOMY_API_URL set
  * to the server's real URL.
  */
 import * as fs from "node:fs/promises";
@@ -15,9 +15,9 @@ import * as path from "node:path";
 import * as net from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { startDeskServer, type DiskServer } from "./server";
+import { startRoomyServer, type RoomyServer } from "./server";
 
-const HANDLE_FILE = path.join(os.tmpdir(), "desk-app-e2e-handle.json");
+const HANDLE_FILE = path.join(os.tmpdir(), "roomy-app-e2e-handle.json");
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(__dirname, "..", "..");
 
@@ -73,13 +73,13 @@ async function startVite(
   port: number,
 ): Promise<ChildProcess> {
   await killListenersOnPort(port);
-  // Build once (inherits DESK_API_URL so the config closure captures it),
+  // Build once (inherits ROOMY_API_URL so the config closure captures it),
   // then run preview. Keep stderr/stdout piped so we can surface issues.
-  // DESK_APP_PORT overrides the default 5173 baked into vite.config.ts.
+  // ROOMY_APP_PORT overrides the default 5173 baked into vite.config.ts.
   const env = {
     ...process.env,
-    DESK_API_URL: apiUrl,
-    DESK_APP_PORT: String(port),
+    ROOMY_API_URL: apiUrl,
+    ROOMY_APP_PORT: String(port),
   } as NodeJS.ProcessEnv;
 
   await new Promise<void>((resolve, reject) => {
@@ -127,19 +127,19 @@ export async function globalSetup(): Promise<void> {
   // ~/.codex/auth.json (which would otherwise leak through `...process.env`).
   // The file does not need to exist up front — `getCodexAuthStatus` returns
   // `available: false` when missing, which is the expected default state.
-  process.env.DESK_CODEX_AUTH_PATH = path.join(
+  process.env.ROOMY_CODEX_AUTH_PATH = path.join(
     os.tmpdir(),
-    `desk-app-e2e-codex-auth-${Date.now()}.json`,
+    `roomy-app-e2e-codex-auth-${Date.now()}.json`,
   );
 
-  const server = await startDeskServer({
+  const server = await startRoomyServer({
     username: "e2e",
     password: "e2e",
   });
   // eslint-disable-next-line no-console
-  console.log(`[e2e] desk-server up at ${server.url}`);
+  console.log(`[e2e] roomy-server up at ${server.url}`);
 
-  const vitePort = Number(process.env.DESK_E2E_VITE_PORT ?? 5179);
+  const vitePort = Number(process.env.ROOMY_E2E_VITE_PORT ?? 5179);
   const viteUrl = `http://127.0.0.1:${vitePort}`;
   const viteProc = await startVite(server.url, vitePort);
   // eslint-disable-next-line no-console
@@ -161,12 +161,12 @@ export async function globalSetup(): Promise<void> {
       home: server.home,
     },
     vite: { pid: viteProc.pid ?? -1, url: viteUrl },
-    codexAuthPath: process.env.DESK_CODEX_AUTH_PATH!,
+    codexAuthPath: process.env.ROOMY_CODEX_AUTH_PATH!,
   };
   await fs.writeFile(HANDLE_FILE, JSON.stringify(handle), "utf8");
   // Let the test fixtures find the URLs.
-  process.env.DESK_API_URL = server.url;
-  process.env.DESK_E2E_APP_URL = viteUrl;
+  process.env.ROOMY_API_URL = server.url;
+  process.env.ROOMY_E2E_APP_URL = viteUrl;
 
   // We can't use closures across setup/teardown reliably, but the PIDs give
   // teardown everything it needs.
@@ -212,5 +212,5 @@ export async function globalTeardown(): Promise<void> {
 }
 
 // Keep references to avoid unused-symbol lint.
-export type _DiskServer = DiskServer;
+export type _RoomyServer = RoomyServer;
 export default globalSetup;

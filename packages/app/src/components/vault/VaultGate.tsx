@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { Loader2 } from 'lucide-react'
-import { Toaster, TooltipProvider } from '@agent-desk/ui'
+import { Toaster, TooltipProvider } from '@roomy-ai/ui'
 import { useGetVaultStatusQuery } from '@/store/api'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { closeVaultDialog } from '@/store/slices/uiSlice'

@@ -1,5 +1,5 @@
 {
-  "name": "@agent-desk/scheduler",
+  "name": "@roomy-ai/scheduler",
   "version": "0.1.0-alpha.0",
   "license": "MIT",
   "type": "module",
@@ -7,7 +7,7 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "@agent-desk/dev": "./src/index.ts",
+      "@roomy-ai/dev": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
@@ -32,10 +32,10 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@agent-desk/db": ">=0.1.0-0",
-    "@agent-desk/runtime": ">=0.1.0-0",
-    "@agent-desk/shared": ">=0.1.0-0",
-    "@agent-desk/storage": ">=0.1.0-0",
+    "@roomy-ai/db": ">=0.1.0-0",
+    "@roomy-ai/runtime": ">=0.1.0-0",
+    "@roomy-ai/shared": ">=0.1.0-0",
+    "@roomy-ai/storage": ">=0.1.0-0",
     "croner": "^10.0.1"
   },
   "devDependencies": {

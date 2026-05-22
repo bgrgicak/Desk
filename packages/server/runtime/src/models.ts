@@ -60,7 +60,7 @@ export async function listModels(
   workspaceSlug: string,
   opts: ListModelsOptions = {},
 ): Promise<ModelRef[]> {
-  if (process.env.DESK_SANDBOX_DRIVER === "fake") {
+  if (process.env.ROOMY_SANDBOX_DRIVER === "fake") {
     return opts.provider
       ? FAKE_DRIVER_MODELS.filter((model) => model.provider === opts.provider)
       : FAKE_DRIVER_MODELS;

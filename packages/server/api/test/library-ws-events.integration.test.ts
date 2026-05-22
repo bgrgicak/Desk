@@ -12,10 +12,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -27,18 +27,18 @@ let home: string;
 let dbPath: string;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-lib-ws-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-lib-ws-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "testuser";
-  process.env.DESK_SEED_PASSWORD = "test-pass-1234";
+  process.env.ROOMY_SEED_USERNAME = "testuser";
+  process.env.ROOMY_SEED_PASSWORD = "test-pass-1234";
   await seedIfEmpty(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-lib-ws-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-lib-ws-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const storage = { pool, home };
   const runManager = createRunManager({
@@ -103,7 +103,7 @@ async function uploadFile(
   filename: string,
   content: string,
 ): Promise<string> {
-  const boundary = `----desk-test-${crypto.randomBytes(8).toString("hex")}`;
+  const boundary = `----roomy-test-${crypto.randomBytes(8).toString("hex")}`;
   const body = Buffer.concat([
     Buffer.from(
       `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: text/plain\r\n\r\n`,

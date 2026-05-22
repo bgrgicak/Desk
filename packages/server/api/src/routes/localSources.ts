@@ -1,5 +1,5 @@
 /**
- * HTTP surface for "local sources" — model providers Desk auto-detects on
+ * HTTP surface for "local sources" — model providers Roomy auto-detects on
  * the user's host machine (Codex CLI auth today; LM Studio, Ollama, and
  * similar in the future).
  *
@@ -7,14 +7,14 @@
  *                                    detection status + this user's opt-in.
  * PUT  /me/providers/local/:kind  — `{ enabled: boolean }` toggles opt-in.
  */
-import { type Pool, queries } from "@agent-desk/db";
-import { NotFoundError, ValidationError } from "@agent-desk/shared";
+import { type Pool, queries } from "@roomy-ai/db";
+import { NotFoundError, ValidationError } from "@roomy-ai/shared";
 import {
   LOCAL_SOURCE_KINDS,
   detectLocalSource,
   type LocalSourceKind,
   type LocalSourceStatus,
-} from "@agent-desk/runtime";
+} from "@roomy-ai/runtime";
 
 export interface LocalSourceConnectionState extends LocalSourceStatus {
   /** User has opted in to using this source in their sandboxes. */

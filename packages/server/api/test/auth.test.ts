@@ -2,9 +2,9 @@ import { describe, it, expect, afterEach, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { hashPassword, runMigrations, queries } from "@agent-desk/db";
-import { generateId } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { hashPassword, runMigrations, queries } from "@roomy-ai/db";
+import { generateId } from "@roomy-ai/shared";
 import {
   issueSession,
   revokeSession,
@@ -19,7 +19,7 @@ let dbPath: string;
 
 beforeAll(async () => {
   // Per-test-file SQLite file so workers don't collide.
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-auth-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-auth-"));
   dbPath = path.join(tmpDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
@@ -37,8 +37,8 @@ beforeAll(async () => {
 afterEach(async () => {
   await clearSessions(pool);
   await pool.query("DELETE FROM users WHERE username = ?", ["second-user"]);
-  delete process.env.DESK_AUTO_LOGIN;
-  delete process.env.DESK_SEED_USERNAME;
+  delete process.env.ROOMY_AUTO_LOGIN;
+  delete process.env.ROOMY_SEED_USERNAME;
 });
 
 afterAll(async () => {
@@ -48,7 +48,7 @@ afterAll(async () => {
 
 describe("auto-login", () => {
   it("issues a session for the configured local user without a password", async () => {
-    process.env.DESK_SEED_USERNAME = "auth-test";
+    process.env.ROOMY_SEED_USERNAME = "auth-test";
 
     const { token } = await handleAutoLogin(pool);
 
@@ -57,15 +57,15 @@ describe("auto-login", () => {
   });
 
   it("falls back to the first local user when the configured seed user is absent", async () => {
-    process.env.DESK_SEED_USERNAME = "missing-user";
+    process.env.ROOMY_SEED_USERNAME = "missing-user";
 
     const { token } = await handleAutoLogin(pool);
 
     expect(await verifySession(pool, token)).toBe(userId);
   });
 
-  it("can be disabled with DESK_AUTO_LOGIN=off", async () => {
-    process.env.DESK_AUTO_LOGIN = "off";
+  it("can be disabled with ROOMY_AUTO_LOGIN=off", async () => {
+    process.env.ROOMY_AUTO_LOGIN = "off";
 
     await expect(handleAutoLogin(pool)).rejects.toThrow("Auto-login is disabled");
   });
@@ -78,7 +78,7 @@ describe("auto-login", () => {
       passwordHash: await hashPassword("unused"),
       email: "second-user@example.com",
     });
-    process.env.DESK_SEED_USERNAME = "second-user";
+    process.env.ROOMY_SEED_USERNAME = "second-user";
 
     const { token } = await handleAutoLogin(pool);
 

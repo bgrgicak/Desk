@@ -1,5 +1,5 @@
 import type { Chat as UiChat, ChatGoalKind } from "@/data/ui-types";
-import { GOAL_KEYS } from "@agent-desk/shared";
+import { GOAL_KEYS } from "@roomy-ai/shared";
 import type { ServerChat } from "../types";
 
 const VALID_CHAT_GOALS = new Set<string>(GOAL_KEYS);

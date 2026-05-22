@@ -3,10 +3,10 @@ import { CliError, parseFlags } from "../errors.js";
 import { output } from "../index.js";
 
 export const usage =
-  "desk-agent chat attach-artifact [--chat <id>] [--name <text>] [--param key=value]... <workspace-relative-path>";
+  "roomy-agent chat attach-artifact [--chat <id>] [--name <text>] [--param key=value]... <workspace-relative-path>";
 
 export const help = `\
-desk-agent chat attach-artifact — surface a generated artifact in a chat by
+roomy-agent chat attach-artifact — surface a generated artifact in a chat by
 creating an artifactRef message.
 
 By default the artifact is attached to the sandbox run's own chat. Pass
@@ -29,18 +29,18 @@ Required:
 
 Examples:
   # Attach to the run's own chat
-  desk-agent chat attach-artifact \\
+  roomy-agent chat attach-artifact \\
       .chats/cht_abc/artifacts/report.md
 
   # Cross-chat: agent in chat A surfaces in chat B
-  desk-agent chat attach-artifact --chat cht_B \\
+  roomy-agent chat attach-artifact --chat cht_B \\
       .chats/cht_A/artifacts/report.md
 
-  desk-agent chat attach-artifact --chat cht_abc \\
+  roomy-agent chat attach-artifact --chat cht_abc \\
       --name "Weekly report" \\
       library/reports/weekly.md
 
-  desk-agent chat attach-artifact --chat cht_abc \\
+  roomy-agent chat attach-artifact --chat cht_abc \\
       --param note_id=abc-123 \\
       notes.app/dist/fragments/note-editor
 

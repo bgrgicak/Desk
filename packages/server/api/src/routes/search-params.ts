@@ -1,4 +1,4 @@
-import { ValidationError } from "@agent-desk/shared";
+import { ValidationError } from "@roomy-ai/shared";
 
 export type SearchScope = "artifacts" | "chats" | "library" | "files" | "all";
 export type SearchKind = "chat" | "message" | "summary" | "library_file" | "attachment" | "artifact";

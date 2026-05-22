@@ -6,7 +6,7 @@ import {
   ValidationError,
   ConflictError,
   InternalError,
-} from "@agent-desk/shared";
+} from "@roomy-ai/shared";
 import { errorToStatus } from "../src/errors.js";
 
 describe("errorToStatus", () => {

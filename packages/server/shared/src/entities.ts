@@ -50,7 +50,7 @@ export const WorkspaceSchema = z.object({
   description: z.string(),
   icon: z.string(),
   color: z.string(),
-  /** On-disk directory name under `~/Desk/`. Derived from `name`
+  /** On-disk directory name under `~/Roomy/`. Derived from `name`
    * at create time, renamed in lock-step when the workspace is renamed. */
   path: z.string(),
   /** Discriminator that drives capability resolution at the API layer.

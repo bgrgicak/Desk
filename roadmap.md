@@ -1,4 +1,4 @@
-# Roadmap — Desk app, private-beta cut
+# Roadmap — Roomy app, private-beta cut
 
 ## Context
 
@@ -15,7 +15,7 @@ Status: **REAL** = wired to `packages/server`; **MOCK** = local simulator;
 
 ### Real
 - Chat (send/receive, history, WS push) — [App.tsx:30](packages/app/src/App.tsx#L30)
-- Desk artifact gallery
+- Roomy artifact gallery
 - Tasks board + calendar — *modeled as `messages` with `kind=task`* — [App.tsx:187](packages/app/src/App.tsx#L187)
 - Context Library (full CRUD: upload, folder, link, move, delete)
 - Global command palette (`/api/search`, scoped)

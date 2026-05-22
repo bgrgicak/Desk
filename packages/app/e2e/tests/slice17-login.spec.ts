@@ -17,7 +17,7 @@ async function simulateSignedOut(page: import("@playwright/test").Page): Promise
   await page.goto(APP_URL);
   await page.evaluate(() => {
     try {
-      sessionStorage.removeItem('desk.session.token');
+      sessionStorage.removeItem('roomy.session.token');
     } catch { /* ignore */ }
   });
   await page.reload();
@@ -43,7 +43,7 @@ test("login form rejects bad credentials and accepts good ones", async ({ page }
   await expect(page.getByTestId('account-avatar')).toBeVisible({ timeout: 10_000 });
 });
 
-test("signup affordance is hidden when DESK_ENABLE_SIGNUP is off", async ({ page }) => {
+test("signup affordance is hidden when ROOMY_ENABLE_SIGNUP is off", async ({ page }) => {
   await simulateSignedOut(page);
   // Login form must still render, but neither signup affordance.
   await expect(page.getByTestId('login-submit')).toBeVisible();

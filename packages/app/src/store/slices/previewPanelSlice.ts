@@ -47,12 +47,12 @@ interface PreviewPanelState {
 }
 
 const DEFAULT_SPLIT_RATIO = 0.35;
-const SPLIT_RATIO_STORAGE_KEY = "desk.previewPanel.splitRatio";
+const SPLIT_RATIO_STORAGE_KEY = "roomy.previewPanel.splitRatio";
 const DEFAULT_LIBRARY_DETAIL_SPLIT_RATIO = 0.65;
 const LIBRARY_DETAIL_SPLIT_RATIO_STORAGE_KEY =
-  "desk.libraryDetail.splitRatio";
+  "roomy.libraryDetail.splitRatio";
 const DEFAULT_TASKS_SPLIT_RATIO = 0.5;
-const TASKS_SPLIT_RATIO_STORAGE_KEY = "desk.tasks.splitRatio";
+const TASKS_SPLIT_RATIO_STORAGE_KEY = "roomy.tasks.splitRatio";
 
 /**
  * Read a previously-saved split ratio from localStorage so resizing

@@ -1,14 +1,14 @@
-# @agent-desk/runtime
+# @roomy-ai/runtime
 
-Sandboxed agent runtime for Desk. Spawns and manages Docker containers that execute agent code in isolation.
+Sandboxed agent runtime for Roomy. Spawns and manages Docker containers that execute agent code in isolation.
 
 ## Install
 
 ```sh
-npm install @agent-desk/runtime@alpha
+npm install @roomy-ai/runtime@alpha
 ```
 
-This package is an internal server component published so that `@agent-desk/cli` can depend on it.
+This package is an internal server component published so that `@roomy-ai/cli` can depend on it.
 
 ## License
 
