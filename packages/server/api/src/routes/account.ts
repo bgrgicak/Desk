@@ -8,6 +8,7 @@ import {
   LOCAL_FILESYSTEM_PROVIDER_ID,
   NotFoundError,
   ValidationError,
+  VaultLockedError,
 } from "@agent-desk/shared";
 import { workspaceRootPath } from "@agent-desk/storage";
 import type { LocalFilesystemConnectionMetadata, LocalFilesystemDirectoryConfig } from "@agent-desk/shared";
@@ -569,7 +570,7 @@ export async function createConnection(pool: Pool, vault: VaultStore, userId: st
   // before creating the row so a locked vault does not produce an
   // orphaned active row with no credentials.
   if (credentials && vault.isLocked(userId)) {
-    throw new ValidationError("Secrets vault must be unlocked to store connector credentials");
+    throw new VaultLockedError("Secrets vault must be unlocked to store connector credentials");
   }
 
   const connection = await queries.connectors.createConnection(pool, {
@@ -609,7 +610,7 @@ export async function updateConnection(pool: Pool, vault: VaultStore, userId: st
   const updateCredentials = credentialsField !== undefined;
   const newCredentials = credentialsField === null ? null : (asRecord(credentialsField, "credentials") ?? null);
   if (updateCredentials && newCredentials !== null && vault.isLocked(userId)) {
-    throw new ValidationError("Secrets vault must be unlocked to store connector credentials");
+    throw new VaultLockedError("Secrets vault must be unlocked to store connector credentials");
   }
 
   if (current.providerId === LOCAL_FILESYSTEM_PROVIDER_ID) {

@@ -17,7 +17,10 @@ import type { DispatchContext } from "./context.js";
  * workspace-relative path rides as a `?path=` query parameter rather
  * than being embedded in the URL — avoids slash-encoding gymnastics.
  *
- *   GET    /library                 list (cursor, limit, showHidden, pinned)
+ *   GET    /library?path=...        list one folder's immediate children
+ *   GET    /library?pinned=true     list every pinned entry workspace-wide
+ *   GET    /library/folders         folders-only recursive tree (no file metadata)
+ *   GET    /library/search?q=...    capped recursive name search
  *   POST   /library                 multipart upload
  *   PATCH  /library                 move (from → to)
  *   DELETE /library?path=...        remove
@@ -43,13 +46,46 @@ export async function dispatchLibrary(
 
   if (path === "/library" && method === "GET") {
     const wsId = await resolveWorkspaceId(pool, userId, query);
-    const cursor = query.get("cursor") ?? undefined;
-    const limit = query.get("limit") ? parseInt(query.get("limit")!) : undefined;
+    if (!wsId) {
+      sendJson(res, 200, { items: [], folders: [] });
+      return true;
+    }
     const showHidden = query.get("showHidden") === "true";
     const pinned = query.get("pinned") === "true";
-    const result = wsId
-      ? await libraryRoutes.list(storage, userId, wsId, { cursor, limit, showHidden, pinned })
-      : { items: [] };
+    if (pinned) {
+      const result = await libraryRoutes.listPinned(storage, userId, wsId);
+      sendJson(res, 200, result);
+      return true;
+    }
+    const folderPath = query.get("path") ?? undefined;
+    const result = await libraryRoutes.list(storage, userId, wsId, {
+      path: folderPath,
+      showHidden,
+    });
+    sendJson(res, 200, result);
+    return true;
+  }
+  if (path === "/library/folders" && method === "GET") {
+    const wsId = await resolveWorkspaceId(pool, userId, query);
+    if (!wsId) {
+      sendJson(res, 200, { folders: [] });
+      return true;
+    }
+    const showHidden = query.get("showHidden") === "true";
+    const result = await libraryRoutes.listFolders(storage, userId, wsId, { showHidden });
+    sendJson(res, 200, result);
+    return true;
+  }
+  if (path === "/library/search" && method === "GET") {
+    const wsId = await resolveWorkspaceId(pool, userId, query);
+    if (!wsId) {
+      sendJson(res, 200, { items: [], folders: [], truncated: false });
+      return true;
+    }
+    const q = query.get("q") ?? "";
+    const showHidden = query.get("showHidden") === "true";
+    const limit = query.get("limit") ? parseInt(query.get("limit")!) : undefined;
+    const result = await libraryRoutes.search(storage, userId, wsId, { q, showHidden, limit });
     sendJson(res, 200, result);
     return true;
   }

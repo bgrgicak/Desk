@@ -20,3 +20,4 @@ workspaces/
 desk/.chats/
 .tmp/
 desk/
+.chaos-runs/

@@ -14,7 +14,6 @@ vi.mock("../src/index.js", () => ({
 beforeEach(() => {
   postJsonMock.mockReset();
   postJsonMock.mockResolvedValue({ id: "msg_artifact" });
-  delete process.env.DESK_CHAT_ID;
 });
 
 describe("desk-agent chat attach-artifact", () => {
@@ -23,6 +22,14 @@ describe("desk-agent chat attach-artifact", () => {
 
     expect(postJsonMock).toHaveBeenCalledWith("/sandbox/artifacts", {
       chatId: "cht_a",
+      path: ".chats/cht_a/artifacts/report.md",
+    });
+  });
+
+  it("omits chatId when --chat isn't passed — server defaults to the run's chat", async () => {
+    await run([".chats/cht_a/artifacts/report.md"]);
+
+    expect(postJsonMock).toHaveBeenCalledWith("/sandbox/artifacts", {
       path: ".chats/cht_a/artifacts/report.md",
     });
   });
@@ -37,10 +44,18 @@ describe("desk-agent chat attach-artifact", () => {
     });
   });
 
-  it("rejects missing arguments", async () => {
+  it("rejects when the artifact path is missing", async () => {
     await expect(run(["--chat", "cht_a"])).rejects.toThrow(/Missing artifact path/);
-    await expect(run([".chats/cht_a/artifacts/report.md"])).rejects.toThrow(/Missing --chat/);
     expect(postJsonMock).not.toHaveBeenCalled();
+  });
+
+  it("allows --chat pointing at a different chat than the run's (server enforces same-workspace)", async () => {
+    await run(["--chat", "cht_other", ".chats/cht_source/artifacts/report.md"]);
+
+    expect(postJsonMock).toHaveBeenCalledWith("/sandbox/artifacts", {
+      chatId: "cht_other",
+      path: ".chats/cht_source/artifacts/report.md",
+    });
   });
 
   it("collects repeated --param flags", async () => {
@@ -59,14 +74,5 @@ describe("desk-agent chat attach-artifact", () => {
       path: "notes.app/dist/fragments/editor",
       params: { note_id: "abc", mode: "edit" },
     });
-  });
-
-  it("rejects attaching to a different chat than the sandbox run chat", async () => {
-    process.env.DESK_CHAT_ID = "cht_current";
-
-    await expect(
-      run(["--chat", "cht_other", ".chats/cht_other/artifacts/report.md"]),
-    ).rejects.toMatchObject({ code: "WRONG_CHAT" });
-    expect(postJsonMock).not.toHaveBeenCalled();
   });
 });

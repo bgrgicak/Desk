@@ -40,7 +40,7 @@ import { getArtifactIcon } from '@/data/ui-types'
 import { fileKindForItem, fileKindFrom, iconForItem, isMarkdownFile, isHtmlFile } from '@/data/file-kind'
 import {
   useDeleteLibraryFileMutation,
-  useGetLibraryQuery,
+  useGetLibraryFoldersQuery,
   useMoveLibraryEntryMutation,
 } from '@/store/api'
 import { downloadLibraryFile, fetchLibraryContent, saveLibraryContent } from '@/store/library-download'
@@ -57,7 +57,6 @@ import {
 } from './AppPreview'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { FileChatPanel } from '@/components/context/FileChatPanel'
-import { toArtifactFromFile } from '@/store/selectors/artifacts'
 import { toFolderList, type MoveTarget } from '@/store/selectors/library'
 import { FileActionMenuItems } from '@/components/library/FileActionMenuItems'
 import { MoveToFolderDialog } from '@/components/library/MoveToFolderDialog'
@@ -562,19 +561,19 @@ export function ContextDetail({ item, onBack, onCompose, onRenameItem, isPinned,
   }
 
   // "Related artifacts" — the server has no explicit artifact-to-context
-  // relation yet (tracked as a roadmap feature; not a code gap).  We
-  // hydrate against the library and filter by the ids the UI already
-  // tracks on the item; the list is empty for server-backed items
-  // today.
-  const { data: libraryResp } = useGetLibraryQuery(
+  // relation yet and `relatedArtifactIds` is always empty for
+  // server-backed items today. The previous client-side hydration
+  // walked the whole library to resolve those ids, which is no longer
+  // possible (and unnecessary while the list stays empty).
+  const relatedArtifacts: Artifact[] = []
+  // Destination folders for the shared Move dialog. Lazy: only fetch
+  // when the move dialog is actually opened. The dialog mounts on
+  // `moveTargets !== null`, so the data is in cache by the time it renders.
+  const { data: foldersResp } = useGetLibraryFoldersQuery(
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
-    { skip: !activeWorkspaceId },
+    { skip: !activeWorkspaceId || moveTargets === null },
   )
-  const libraryArtifacts: Artifact[] = (libraryResp?.items ?? []).map(f => toArtifactFromFile(f))
-  const relatedArtifacts = libraryArtifacts.filter(a => item.relatedArtifactIds.includes(a.id))
-  // Destination folders for the shared Move dialog (same selector the
-  // Library list uses; its own query instance).
-  const folders = toFolderList(libraryResp?.folders ?? [], activeWorkspaceId ?? '')
+  const folders = toFolderList(foldersResp?.folders ?? [], activeWorkspaceId ?? '')
   const FileIcon = iconForItem(item)
 
   return (

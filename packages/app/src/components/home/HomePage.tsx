@@ -81,6 +81,7 @@ import { useHomePins, removeHomePin, type HomePinKind } from '@/hooks/use-home-p
 import { useHomeSections, HOME_SECTION_LABELS, type HomeSectionKey } from '@/hooks/use-home-sections'
 import { generateHomeDigest, type HomeDigest } from '@/lib/home-summary'
 import { buildPath } from '@/router/nav'
+import { buildDefaultViewPath } from '@/App'
 import { logout } from '@/auth/session'
 import { DeskWordmark } from './DeskWordmark'
 import { CreateWorkspaceModal } from './CreateWorkspaceModal'
@@ -353,6 +354,7 @@ export function HomePage() {
   const selectedTaskId = searchParams.get('task')
   const { data: workspaces } = useGetWorkspacesQuery()
   const { data: me } = useGetMeQuery()
+  const { defaultView } = usePrefs()
   const userAvatarUrl = useAvatarUrl(me?.id)
   const [createOpen, setCreateOpen] = useState(false)
   const [myAccountOpen, setMyAccountOpen] = useState(false)
@@ -575,7 +577,7 @@ export function HomePage() {
 
   const openRoom = (ws: ServerWorkspace) => {
     setLeaving(true)
-    window.setTimeout(() => navigate(buildPath(ws.id, 'tasks')), 200)
+    window.setTimeout(() => navigate(buildDefaultViewPath(ws.id, defaultView)), 200)
   }
   // Card click + Replies button → dock the task's chat in a side
   // panel on Home (URL becomes `?task=<id>`). The card's own `href`

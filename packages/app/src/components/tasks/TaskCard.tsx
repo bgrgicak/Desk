@@ -1,3 +1,4 @@
+import { memo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   MessageSquare,
@@ -7,44 +8,75 @@ import {
   Pause,
   RotateCcw,
   Trash2,
+  CalendarClock,
 } from 'lucide-react'
+import { formatDistanceToNow } from 'date-fns'
 import {
   cn,
   Button,
+  Avatar,
+  AvatarImage,
+  AvatarFallback,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  Dialog,
+  DialogContent,
+  DialogTitle,
 } from '@agent-desk/ui'
 import type { Task } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
-import { ShowInHomeMenuItem } from '@/components/shared/ShowInHomeMenuItem'
-import { useLatestAgentMessage } from '@/hooks/use-latest-agent-message'
-import type { HomePinRef } from '@/hooks/use-home-pins'
-import { TaskPills } from './task-badges'
+import { initialsOf } from '@/lib/initials'
+import { TaskPills, PRIORITY_LABELS } from './task-badges'
+import { describeCron } from './schedule-utils'
+import { SchedulePickerForm, type SchedulePickerValue } from './SchedulePicker'
+
+/** Fraction (0–1) of the way from the previous run (or the task's
+ *  creation) to the next scheduled run. Kept out of the component so
+ *  the `Date.now()` read isn't a render-purity violation. */
+function nextRunProgressFor(task: Task): number {
+  if (!task.nextRun) return 0
+  const lastEnd = task.history
+    .filter((o) => o.status !== 'scheduled')
+    .reduce((max, o) => Math.max(max, o.endedAt.getTime()), 0)
+  const start = lastEnd || task.startedAt.getTime()
+  const total = task.nextRun.getTime() - start
+  return total > 0 ? (Date.now() - start) / total : 0
+}
+
+/** Tiny circular progress ring — fraction of the way from the
+ *  previous run to the next scheduled run. */
+function NextRunRing({ value }: { value: number }) {
+  const r = 5
+  const circ = 2 * Math.PI * r
+  const v = Math.min(1, Math.max(0, value))
+  return (
+    <svg viewBox="0 0 12 12" className="h-3 w-3 shrink-0 -rotate-90" aria-hidden>
+      <circle cx="6" cy="6" r={r} fill="none" strokeWidth="2" className="stroke-foreground/15" />
+      <circle
+        cx="6"
+        cy="6"
+        r={r}
+        fill="none"
+        strokeWidth="2"
+        strokeLinecap="round"
+        className="stroke-foreground/50"
+        strokeDasharray={circ}
+        strokeDashoffset={circ * (1 - v)}
+      />
+    </svg>
+  )
+}
 
 export interface TaskCardProps {
   task: Task
   /** Total messages on the backing chat — the "N replies" button. */
   repliesCount?: number
-  /** Accepted for backward compatibility (legacy callers still pass
-   *  the requester's display name and avatar). The redesigned card
-   *  shows the *room* avatar at the bottom instead, so these are
-   *  currently unused — kept on the prop surface so removing them
-   *  doesn't ripple through every call site. */
+  /** Display name for the author avatar. Defaults to "You". */
   authorName?: string
+  /** Current user's avatar (data URL). Falls back to initials. */
   authorAvatarUrl?: string | null
-  /** Owning room name — shown next to the room avatar at the bottom
-   *  of the card. */
-  roomName?: string
-  /** Owning room accent color — backs the room-avatar swatch when no
-   *  `roomIconUrl` is set; falls back to a neutral background if also
-   *  no name is provided. */
-  roomColor?: string
-  /** Owning room icon — when set, renders as the small rounded
-   *  thumbnail at the bottom of the card. Falls back to initials on a
-   *  colored swatch when absent. */
-  roomIconUrl?: string | null
   /** Selected → its chat is docked in the sidebar; styled like the
    *  chat view's active item card. */
   isActive?: boolean
@@ -57,170 +89,196 @@ export interface TaskCardProps {
   onSelect: () => void
   /** Mark the task done / dismiss it. */
   onMarkDone: () => void
-  /** Reopen a completed task — moves it back to "todo". When the task
-   *  is already in `complete` status, the primary action button flips
-   *  to "Reopen" and calls this. Optional so legacy callers stay
-   *  compatible (the button stays disabled if this isn't wired). */
-  onReopen?: () => void
   /** Caret menu actions — omitted ones are hidden. */
   onRunNow?: () => void
   onPause?: () => void
   onDelete?: () => void
-  /** When provided, adds a "Show in Home" toggle to the kebab. */
-  homePinRef?: HomePinRef
+  /** Reopen a completed task — moves it back to "todo". When omitted,
+   *  the menu hides the entry. */
+  onReopen?: () => void
+  /** Edit the task's schedule (executeAt + cron). Receives the new
+   *  value, or `null` to clear the schedule entirely. */
+  onSchedule?: (next: SchedulePickerValue | null) => void
   className?: string
 }
 
-/** Small round room icon shown at the bottom of the card — identical
- *  affordance to the rooms list in the Home sidebar: the uploaded
- *  workspace icon when present, otherwise a colored ring (not a
- *  filled swatch with initials, so the bottom meta line stays light
- *  and the ring colour reads as a room marker). */
-function RoomAvatar({
-  roomColor,
-  roomIconUrl,
-}: {
-  roomColor?: string
-  roomIconUrl?: string | null
-}) {
-  if (roomIconUrl) {
-    return (
-      <img
-        src={roomIconUrl}
-        alt=""
-        aria-hidden
-        className="h-4 w-4 shrink-0 rounded-full object-cover"
-      />
-    )
-  }
-  return (
-    <span
-      aria-hidden
-      className="h-4 w-4 shrink-0 rounded-full border-2"
-      style={{ borderColor: roomColor ?? 'var(--color-slate-400)' }}
-    />
-  )
-}
-
 /**
- * The task card used on Home and the Tasks list (Figma 742-8340).
- *
- * Layout — top to bottom:
- *   1. Status pill (left) + Replies / Mark-as-done split (right).
- *   2. Task title (bold) + body preview (`line-clamp-4`). The body
- *      shows the latest agent message in the task's chat when one
- *      exists, otherwise the user's original task body — see
- *      `useLatestAgentMessage`.
- *   3. Room avatar + room name · last-update time.
- *
- * The whole card is a router `<Link>` to its docked-chat URL so
- * middle-click / cmd-click opens the task in a new tab.
- *
- * The card uses `px-6 pt-6` matching the standard p-6 padding, but a
- * custom `pb-[20px]` (intentionally off the Tailwind scale) — the
- * bottom meta line reads heavier than a single-line of body so the
- * visual balance wants slightly less padding underneath than above.
+ * The bulletin-board task row. Store-agnostic (task + callbacks only)
+ * so Home can reuse it. The whole card is a router `<Link>` to the
+ * task's docked-chat URL so middle-click / cmd-click opens it in a
+ * new tab; the footer keeps a "N replies" button (same action) plus a
+ * "Mark as done" split (Run now / Pause / Delete). A single status pill
+ * sits in the header (Needs input subsumes "unread" — opening the task
+ * clears both); an active card gets the chat-view item-card highlight.
  */
-export function TaskCard({
+export const TaskCard = memo(function TaskCard({
   task,
   repliesCount = 0,
-  roomName,
-  roomColor,
-  roomIconUrl,
+  authorName = 'You',
+  authorAvatarUrl,
   isActive = false,
   href,
   onSelect,
   onMarkDone,
-  onReopen,
   onRunNow,
   onPause,
   onDelete,
-  homePinRef,
+  onReopen,
+  onSchedule,
   className,
 }: TaskCardProps) {
-  const isDone = task.status === 'complete'
+  const [scheduleOpen, setScheduleOpen] = useState(false)
 
-  const hasMenu = !!(onRunNow || onPause || onDelete || homePinRef)
-  // Don't let action-row controls trigger the card-level link.
+  // Derive the picker's initial value from the task's current
+  // executeAt/cron. The Task UI type carries a free-form `schedule`
+  // string (the cron) plus `scheduledFor` (the next run / executeAt).
+  const initialSchedule: SchedulePickerValue | null =
+    task.schedule || task.scheduledFor
+      ? {
+          executeAt: task.scheduledFor ? task.scheduledFor.toISOString() : null,
+          cron:      task.schedule ?? null,
+          endDate:   task.scheduleEndDate
+            ? `${task.scheduleEndDate.getFullYear()}-${String(task.scheduleEndDate.getMonth() + 1).padStart(2, '0')}-${String(task.scheduleEndDate.getDate()).padStart(2, '0')}`
+            : null,
+        }
+      : null
+  const isDone = task.status === 'complete'
+  const isNeedsInput = task.status === 'needs_input'
+  const isRunning = task.messageState === 'running'
+  const isPaused = task.messageState === 'paused'
+  // Humanize the raw cron (`describeCron` returns the input unchanged
+  // for non-cron / free-form values, so this is safe either way).
+  const scheduleText = task.schedule?.trim()
+    ? describeCron(task.schedule.trim())
+    : undefined
+  const nextRunText =
+    task.nextRun && !isPaused && task.status !== 'complete'
+      ? `Next ${formatDistanceToNow(task.nextRun, { addSuffix: true })}`
+      : undefined
+
+  // Meta as plain text fragments, shown after the timestamp.
+  const metaParts: string[] = []
+  if (task.priority) metaParts.push(PRIORITY_LABELS[task.priority])
+  if (isRunning) metaParts.push('Running')
+  else if (isPaused) metaParts.push('Paused')
+  if (scheduleText && !isRunning) metaParts.push(scheduleText)
+
+  // Ring next to "Next …": how far from the previous run to the next
+  // scheduled run we are.
+  const showNextRun = !!nextRunText && !isRunning
+  const nextRunProgress = showNextRun ? nextRunProgressFor(task) : 0
+
+  const hasMenu = !!(onRunNow || onPause || onDelete || onSchedule || onReopen)
+  // Don't let footer controls trigger the card-level open. The card is
+  // an `<a>` (react-router Link), so we also preventDefault to stop the
+  // anchor's native navigation — stopPropagation alone leaves the
+  // browser's default action intact and the task view opens anyway.
   const stop = (fn: () => void) => (e: React.MouseEvent) => {
-    e.stopPropagation()
     e.preventDefault()
+    e.stopPropagation()
     fn()
   }
-
-  // Latest agent reply in the task's chat — preferred body content +
-  // last-update timestamp. Falls back to the user's original task body
-  // and creation date when the agent hasn't responded yet (or for
-  // mock-data cards with no real chat).
-  const latest = useLatestAgentMessage(task.chatId)
-  const bodyPreview = latest?.text ?? task.description ?? task.name
-  const lastUpdateAt = latest?.createdAt ?? task.startedAt
 
   return (
     <Link
       to={href}
       draggable={false}
       className={cn(
-        'relative flex cursor-pointer flex-col rounded-2xl border px-6 pt-6 pb-[20px] no-underline text-inherit transition-colors',
-        // Hover state — a `:before` overlay layered ABOVE bg-background
-        // and BELOW the card's children (children are made `relative`
-        // via `[&>*]:relative` so their stacking context paints on
-        // top of the absolute pseudo-element). Replacing `bg-background`
-        // on hover instead would let the BackgroundBlobs show through,
-        // which read as the card going darker.
-        '[&>*]:relative before:pointer-events-none before:absolute before:inset-0 before:rounded-2xl before:bg-foreground/[0.03] before:opacity-0 before:transition-opacity hover:before:opacity-100',
+        'flex cursor-pointer flex-col gap-4 rounded-2xl border p-6 no-underline text-inherit transition-colors',
         isActive
           ? 'border-foreground/40 bg-secondary shadow-sm'
-          : 'bg-background border-border',
+          : cn(
+              'bg-background hover:bg-foreground/[0.02]',
+              // Needs-input cards get an amber border so they stand
+              // out in the list.
+              isNeedsInput
+                ? 'border-[var(--color-amber-400)]'
+                : 'border-border',
+            ),
+        isDone && !isActive && 'opacity-60',
         className,
       )}
       data-testid={`task-card-${task.id}`}
     >
-      {/* Top row — status pill (left) + Replies + Mark-as-done /
-          Reopen split (right). */}
-      <div className="flex items-center justify-between gap-2">
-        <TaskPills status={task.status} />
-        <div className="flex items-center gap-2">
+      {/* Header — author + time, unread/status pills right */}
+      <div className="flex items-start gap-3">
+        <Avatar className="h-10 w-10 shrink-0 select-none">
+          {authorAvatarUrl ? (
+            <AvatarImage src={authorAvatarUrl} alt={authorName} />
+          ) : null}
+          <AvatarFallback className="bg-accent text-sm font-semibold text-foreground">
+            {initialsOf(authorName)}
+          </AvatarFallback>
+        </Avatar>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <span className="text-sm font-medium text-foreground">{authorName}</span>
+          {/* Meta wraps on narrow widths so the schedule/next-run text
+              flows below the timestamp instead of running under the
+              status pills on the right. Items are spaced with gap-x
+              rather than interpunct prefixes — a leading "·" reads as
+              a list bullet once items wrap onto their own line. */}
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+            <span className="truncate">{getRelativeTime(task.startedAt)}</span>
+            {metaParts.map((part) => (
+              <span key={part} className="truncate">
+                {part}
+              </span>
+            ))}
+            {showNextRun && (
+              <span className="flex shrink-0 items-center gap-1">
+                <NextRunRing value={nextRunProgress} />
+                <span className="truncate">{nextRunText}</span>
+              </span>
+            )}
+          </span>
+        </div>
+        <div className="shrink-0">
+          <TaskPills status={task.status} />
+        </div>
+      </div>
+
+      {/* Title (AI-generated, like a chat title) + the body message */}
+      <div className="flex flex-col gap-1.5">
+        {task.title && (
+          <h3 className="text-base font-semibold leading-6 text-foreground break-words">
+            {task.title}
+          </h3>
+        )}
+        <p className="line-clamp-2 text-sm leading-6 text-foreground break-words">
+          {task.description ?? task.name}
+        </p>
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center gap-2 border-t border-border pt-4">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-8 gap-1.5"
+          onClick={stop(onSelect)}
+          data-testid={`task-replies-${task.id}`}
+        >
+          <MessageSquare className="h-4 w-4" />
+          {repliesCount > 0 ? `${repliesCount} replies` : 'Replies'}
+        </Button>
+
+        {/* Mark as done split button */}
+        <div className="flex items-center">
           <Button
             type="button"
             size="sm"
             variant="outline"
-            className="h-8 gap-1.5"
-            onClick={stop(onSelect)}
-            data-testid={`task-replies-${task.id}`}
+            className="h-8 gap-1.5 rounded-r-none"
+            onClick={stop(onMarkDone)}
+            disabled={isDone}
+            data-testid={`task-done-${task.id}`}
           >
-            <MessageSquare className="h-4 w-4" />
-            {repliesCount > 0 ? `${repliesCount} replies` : 'Replies'}
+            <CheckCircle2 className="h-4 w-4" />
+            {isDone ? 'Done' : 'Mark as done'}
           </Button>
-
-          <div className="flex items-center">
-            {isDone ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="h-8 gap-1.5 rounded-r-none"
-                onClick={onReopen ? stop(onReopen) : undefined}
-                disabled={!onReopen}
-                data-testid={`task-reopen-${task.id}`}
-              >
-                <RotateCcw className="h-4 w-4" />
-                Reopen
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="h-8 gap-1.5 rounded-r-none"
-                onClick={stop(onMarkDone)}
-                data-testid={`task-done-${task.id}`}
-              >
-                <CheckCircle2 className="h-4 w-4" />
-                Mark as done
-              </Button>
-            )}
-            {hasMenu && (
+          {hasMenu && (
+            <>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -230,15 +288,28 @@ export function TaskCard({
                     className="h-8 w-8 -ml-px rounded-l-none"
                     aria-label="More task actions"
                     onClick={(e) => {
-                      e.stopPropagation()
                       e.preventDefault()
+                      e.stopPropagation()
                     }}
                     data-testid={`task-menu-${task.id}`}
                   >
                     <ChevronDown className="h-4 w-4" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuContent
+                  align="end"
+                  className="w-44"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {onReopen && (
+                    <DropdownMenuItem
+                      onClick={stop(onReopen)}
+                      data-testid={`task-reopen-${task.id}`}
+                    >
+                      <RotateCcw className="h-4 w-4 mr-2" />
+                      Reopen
+                    </DropdownMenuItem>
+                  )}
                   {onRunNow && (
                     <DropdownMenuItem onClick={stop(onRunNow)}>
                       <Play className="h-4 w-4 mr-2" />
@@ -251,7 +322,24 @@ export function TaskCard({
                       Pause
                     </DropdownMenuItem>
                   )}
-                  {homePinRef && <ShowInHomeMenuItem pin={homePinRef} />}
+                  {onSchedule && (
+                    <DropdownMenuItem
+                      // Defer the dialog open by a tick so Radix can
+                      // tear down the dropdown's focus scope first.
+                      // Without the gap the menu's focus-return briefly
+                      // re-trips the dialog's "outside interaction"
+                      // detector and the dialog closes as fast as it
+                      // mounts.
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setTimeout(() => setScheduleOpen(true), 0)
+                      }}
+                      data-testid={`task-schedule-${task.id}`}
+                    >
+                      <CalendarClock className="h-4 w-4 mr-2" />
+                      {initialSchedule ? 'Edit schedule' : 'Schedule'}
+                    </DropdownMenuItem>
+                  )}
                   {onDelete && (
                     <DropdownMenuItem onClick={stop(onDelete)}>
                       <Trash2 className="h-4 w-4 mr-2" />
@@ -260,41 +348,40 @@ export function TaskCard({
                   )}
                 </DropdownMenuContent>
               </DropdownMenu>
-            )}
-          </div>
-        </div>
-      </div>
 
-      {/* Title + body preview. `mt-3` = 12 px between the action
-          row and the title; `flex-1` absorbs extra height when the
-          card is stretched to a row's common height so the bottom
-          meta line stays anchored. */}
-      <div className="mt-3 flex flex-1 flex-col gap-1.5">
-        <h3 className="text-base font-semibold leading-6 text-foreground break-words">
-          {task.title || task.name}
-        </h3>
-        <p className="text-sm leading-6 text-foreground whitespace-pre-wrap break-words line-clamp-4">
-          {bodyPreview}
-        </p>
-      </div>
-
-      {/* Bottom meta — room avatar + name · last update time.
-          `mt-3` = 12 px between the body and the meta line. The
-          outer wrapper handles the 8 px avatar→text gap; the inner
-          wrapper uses a tighter `gap-1` (4 px) so the `·` separator
-          hugs the text on either side. */}
-      <div className="mt-3 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-        <RoomAvatar roomColor={roomColor} roomIconUrl={roomIconUrl} />
-        <div className="flex min-w-0 items-center gap-1">
-          {roomName && (
-            <>
-              <span className="truncate max-w-[12rem]">{roomName}</span>
-              <span aria-hidden>·</span>
+              {/* Schedule editor — Dialog (modal). Earlier iterations
+                  used a Popover anchored to the caret button, but the
+                  dropdown-menu → popover handoff lost the popover to
+                  focus competition: Radix DropdownMenu returns focus to
+                  its trigger as it unmounts, which fires immediately
+                  after the popover mounts and closes it. Dialog runs
+                  its own focus trap so the bounce no longer dismisses
+                  the editor. */}
+              {onSchedule && (
+                <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
+                  <DialogContent
+                    className="sm:max-w-md p-4"
+                    onClick={(e) => e.stopPropagation()}
+                    data-testid={`task-schedule-dialog-${task.id}`}
+                  >
+                    <DialogTitle className="text-sm font-semibold">
+                      {initialSchedule ? 'Edit schedule' : 'Schedule task'}
+                    </DialogTitle>
+                    <SchedulePickerForm
+                      initial={initialSchedule}
+                      onSave={(next) => {
+                        onSchedule?.(next)
+                        setScheduleOpen(false)
+                      }}
+                      onCancel={() => setScheduleOpen(false)}
+                    />
+                  </DialogContent>
+                </Dialog>
+              )}
             </>
           )}
-          <span className="truncate">{getRelativeTime(lastUpdateAt)}</span>
         </div>
       </div>
     </Link>
   )
-}
+})

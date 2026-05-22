@@ -28,6 +28,7 @@ import {
   pruneDriftedContainers,
   refreshSandboxConnections,
   resolveLocalSourceEnv,
+  writeBuiltinApps,
   writeGoalSkillFiles,
 } from "@agent-desk/runtime";
 import { createApp } from "./app.js";
@@ -36,7 +37,7 @@ import { broadcast, clearConnections } from "./ws/registry.js";
 import { ensureHubsForAllUsers } from "./routes/workspaces.js";
 import { VaultStore } from "./vault/store.js";
 import { resolveProviderKeys } from "./providerKeys.js";
-import { ensureVaultPasswordEnv } from "./envFile.js";
+import { resolveVaultPasswordEnv } from "./envFile.js";
 import type { WsEvent } from "@agent-desk/shared";
 import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("api/main");
@@ -151,6 +152,7 @@ async function main(): Promise<void> {
   }
   await ensureLayout(DESK_HOME);
   await writeGoalSkillFiles(DESK_HOME);
+  await writeBuiltinApps(DESK_HOME);
   // Per-user hub auto-create. Runs before the workspace layout backfill
   // so a fresh hub immediately has its on-disk tree. Idempotent — does
   // nothing for users that already have a hub.
@@ -279,31 +281,58 @@ async function main(): Promise<void> {
 
   const vault = new VaultStore(path.join(DESK_HOME, "vaults"));
 
-  // Ensure DESK_VAULT_PASSWORD exists, then use it as the vault master
-  // password so the vault is automatically unlocked on every boot — no UI
-  // prompt needed.
+  // DESK_VAULT_PASSWORD is now opt-in (no longer auto-generated). When
+  // set, boot auto-unlocks every existing vault with it and can
+  // auto-create missing ones if DESK_VAULT_AUTO_SETUP=on. When unset,
+  // boot doesn't touch vaults at all — users pick their own password
+  // through the VaultDialog on first credential save.
   {
-    const vaultPassword = await ensureVaultPasswordEnv({
-      deskHome: DESK_HOME,
-      log: (message) => {
-        log.info(message);
-      },
-    });
+    const vaultPassword = await resolveVaultPasswordEnv({ deskHome: DESK_HOME });
+    if (!vaultPassword) {
+      log.info("vault: no DESK_VAULT_PASSWORD configured — boot auto-unlock skipped");
+    } else {
+    // `DESK_VAULT_AUTO_SETUP=on` (explicit opt-in) lets boot create
+    // vaults for users who don't have one yet. Default is off: missing
+    // vaults stay missing so the modal owns first-time setup. Auto-
+    // unlock of *existing* vaults is unconditional whenever a password
+    // is configured — it's just a cache refill for the in-memory
+    // master, doesn't disclose anything new.
+    const autoSetup = (process.env.DESK_VAULT_AUTO_SETUP ?? "off").toLowerCase() === "on";
+
     const { rows: allUsers } = await pool.query<{ id: string }>("SELECT id FROM users");
+    let unlocked = 0;
+    let setup = 0;
+    let failed = 0;
+    let skipped = 0;
     for (const user of allUsers) {
       const { exists } = await vault.status(user.id);
       try {
         if (!exists) {
+          if (!autoSetup) {
+            skipped += 1;
+            continue;
+          }
           await vault.setup(user.id, vaultPassword);
-          log.info(`vault: auto-setup for user ${user.id} via DESK_VAULT_PASSWORD`);
+          setup += 1;
+          log.info({ userId: user.id }, "vault: auto-setup via DESK_VAULT_PASSWORD");
         } else {
           await vault.unlock(user.id, vaultPassword);
+          unlocked += 1;
         }
       } catch (err) {
-        log.warn({ userId: user.id, err }, "vault: auto-unlock failed");
+        failed += 1;
+        // Most likely cause: DESK_VAULT_PASSWORD drifted from the value
+        // the vault was sealed with. The vault stays locked and the
+        // user must unlock it through the VaultDialog. We surface this
+        // loudly so it's not silently swallowed.
+        log.warn(
+          { userId: user.id, err: (err as Error).message },
+          "vault: auto-unlock failed (password mismatch?) — user will need to unlock via UI",
+        );
       }
     }
-    log.info("vault: auto-unlocked via DESK_VAULT_PASSWORD");
+    log.info({ unlocked, setup, failed, skipped }, "vault: boot auto-unlock complete");
+    }
   }
 
   const runManager = createRunManager({

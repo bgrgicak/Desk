@@ -176,8 +176,9 @@ describe("library-pins accepts directories", () => {
     });
     expect(pin.status).toBe(201);
 
-    // GET /library should include the folder with pinned: true.
-    const list = await request("GET", `/library?workspaceId=${encodeURIComponent(alpha.workspaceId)}`, alpha.token);
+    // GET /library?pinned=true returns every pinned entry workspace-wide;
+    // the sidebar uses this view rather than walking the recursive tree.
+    const list = await request("GET", `/library?workspaceId=${encodeURIComponent(alpha.workspaceId)}&pinned=true`, alpha.token);
     expect(list.status).toBe(200);
     const folders = (list.body as { folders: { path: string; pinned?: boolean }[] }).folders;
     const ours = folders.find((f) => f.path === folderPath);
@@ -189,10 +190,9 @@ describe("library-pins accepts directories", () => {
     });
     expect(unpin.status).toBe(200);
 
-    const after = await request("GET", `/library?workspaceId=${encodeURIComponent(alpha.workspaceId)}`, alpha.token);
+    const after = await request("GET", `/library?workspaceId=${encodeURIComponent(alpha.workspaceId)}&pinned=true`, alpha.token);
     const foldersAfter = (after.body as { folders: { path: string; pinned?: boolean }[] }).folders;
-    const ourAfter = foldersAfter.find((f) => f.path === folderPath);
-    expect(ourAfter?.pinned ?? false).toBe(false);
+    expect(foldersAfter.find((f) => f.path === folderPath)).toBeUndefined();
   });
 
   it("still accepts regular files (regression — relaxing the stat check shouldn't break files)", async () => {

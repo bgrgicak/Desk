@@ -25,17 +25,17 @@ describe("desk-agent task schedule", () => {
     });
   });
 
-  it("can request a fresh chat for a simple manual task with attachments", async () => {
+  it("forwards a manual task with source-chat context attachments", async () => {
+    // The task always lands in a fresh chat server-side; --chat is the
+    // source chat used for attachment scope and originating-chat context.
     await run([
       "--chat", "ch_source",
-      "--new-chat",
       "--title", "Investigate blank replies",
       "--attach", ".chats/ch_source/artifacts/report.md",
       "Fix", "blank", "replies",
     ]);
     expect(postJsonMock).toHaveBeenCalledWith("/sandbox/messages", {
       chatId: "ch_source",
-      newChat: true,
       content: "Fix blank replies",
       title: "Investigate blank replies",
       attachments: [{ path: ".chats/ch_source/artifacts/report.md", name: "report.md" }],
@@ -72,23 +72,6 @@ describe("desk-agent task schedule", () => {
     await expect(
       run(["--chat", "ch_a", "--at", "2026-05-01T00:00:00Z", "--cron", "* * * * *", "x"]),
     ).rejects.toThrow(/mutually exclusive/);
-    expect(postJsonMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects --new-chat for scheduled or recurring tasks", async () => {
-    await expect(
-      run(["--chat", "ch_a", "--new-chat", "--at", "2026-05-01T00:00:00Z", "x"]),
-    ).rejects.toThrow(/only for simple manual tasks/);
-    await expect(
-      run(["--chat", "ch_a", "--new-chat", "--cron", "* * * * *", "x"]),
-    ).rejects.toThrow(/only for simple manual tasks/);
-    expect(postJsonMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects --new-chat with a non-task kind", async () => {
-    await expect(
-      run(["--chat", "ch_a", "--new-chat", "--kind", "chat", "x"]),
-    ).rejects.toThrow(/--kind must be omitted or task/);
     expect(postJsonMock).not.toHaveBeenCalled();
   });
 

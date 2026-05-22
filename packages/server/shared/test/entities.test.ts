@@ -251,4 +251,23 @@ describe("MessageContent summary / summary_request", () => {
       MessageSchema.parse({ ...base, role: "agent", content: { type: "summary", body: 123 } }),
     ).toThrow();
   });
+
+  it("parses feedback content", () => {
+    const msg = {
+      ...base,
+      role: "system",
+      content: { type: "feedback", rating: "up", targetMessageId: "msg_target" },
+    };
+    expect(MessageSchema.parse(msg)).toEqual(msg);
+  });
+
+  it("rejects feedback with an unknown rating", () => {
+    expect(() =>
+      MessageSchema.parse({
+        ...base,
+        role: "system",
+        content: { type: "feedback", rating: "meh", targetMessageId: "msg_target" },
+      }),
+    ).toThrow();
+  });
 });

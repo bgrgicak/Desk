@@ -28,23 +28,47 @@ export function taskStatusFromMessage(input: {
 }): Task['status'] {
   if (input.state === 'running') return 'active'
   if (input.state === 'succeeded' || input.state === 'cancelled') return 'complete'
+  // `failed` is internal — a run errored out. Surface it as Open so the
+  // user retries from the same kanban column instead of learning a new
+  // status name. The detailed "Failed" text is still available via
+  // statusText for users who hover the card.
   if (input.executeAt || input.cron) return 'scheduled'
   return 'todo'
 }
 
 /**
- * Parent task rows are user-owned: only an explicit user gesture should move
- * the stored task definition between To do / Scheduled / Complete. Live
- * conversation signals (the chat's in-flight agent_turn, the chat's
- * `unread` flag) are layered on as display-only overlays — they shift
- * the card between Active / Needs input / Todo / Scheduled without rewriting
- * the durable task state, so the same row can move through the chat
- * lifecycle multiple times. Order: terminal task state wins, then "anyone is
- * working" (parent running, task_run running, chat agent_turn running), then
- * schedule (a scheduled task with stale agent chatter is still primarily a
- * scheduled task — the user set a time and expects the badge to reflect it),
- * then "ball is in user's court" (chat.unread — agent has activity the user
- * hasn't opened yet; only agent messages flip this flag), then idle.
+ * Parent task rows are user-owned: explicit user gestures move the stored
+ * task definition between To do / Scheduled / Complete, and the server
+ * lifecycle-glue (sandbox auto-fire, afterTaskRun) drives the
+ * `pending → running → succeeded/failed` arc on agent-authored
+ * sub-tasks. Live conversation signals (a child task_run in flight, the
+ * chat's in-flight agent_turn, a fresh unread agent reply) are layered
+ * on so the card reflects whichever is most actionable for the user.
+ *
+ * Priority order, top to bottom:
+ *  1. Terminal completion (succeeded / cancelled) → Done. Sticky once
+ *     written — no live signal can override an explicit complete.
+ *  2. A child task_run in `running` state → Active. Real execution.
+ *  3. The chat's agent_turn currently running → Active.
+ *  4. `executeAt` or `cron` set → Scheduled. The user picked a time;
+ *     respect it even if stale agent chatter flipped chat.unread.
+ *  5. `chat.unread` → Needs input. An agent posted something the user
+ *     hasn't read; surface it above the sticky kanban-Active label so a
+ *     finished sub-task doesn't sit silently in Active when the user
+ *     could be reading the reply.
+ *  6. Parent `state='running'` → Active. The sandbox auto-fire path
+ *     promoted the anchor to running when it issued the task_run, and
+ *     keeps it there until afterTaskRun mirrors a terminal state. This
+ *     rule is what makes Active sticky across the run-terminate gap;
+ *     without it the card would dip back to Open the instant the
+ *     task_run finished.
+ *  7. Idle → Open.
+ *
+ * `state='failed'` is deliberately not promoted to a UI status — when
+ * the task fails is internal to the agent. It surfaces as Open (the
+ * implicit fall-through) so the user keeps acting on it from the same
+ * column; statusText still says "Failed" so the detail panel can show
+ * the cause.
  */
 export function taskStatusFromTaskAndRuns(
   task: { state: MessageState; executeAt?: string | null; cron?: string | null },
@@ -52,11 +76,11 @@ export function taskStatusFromTaskAndRuns(
   chat?: { unread?: boolean; running?: boolean },
 ): Task['status'] {
   if (task.state === 'succeeded' || task.state === 'cancelled') return 'complete'
-  if (task.state === 'running') return 'active'
   if (runs.some(run => run.state === 'running')) return 'active'
   if (chat?.running) return 'active'
   if (task.executeAt || task.cron) return 'scheduled'
   if (chat?.unread) return 'needs_input'
+  if (task.state === 'running') return 'active'
   return 'todo'
 }
 
@@ -88,6 +112,11 @@ export function buildTaskStatusMove(
   if (actor !== 'user') return { kind: 'none' }
   if (!canUserChangeTaskStatus(task)) return { kind: 'none' }
   if (newStatus === task.status && !isPausedTask(task)) return { kind: 'none' }
+  // `needs_input` is server-driven (an unread agent reply), never a
+  // kanban target. Refuse to translate it — there is no valid state
+  // mutation that would land the card there, and silently falling
+  // through to the scheduled branch would surprise the caller.
+  if (newStatus === 'needs_input') return { kind: 'none' }
   if (newStatus === 'active') return { kind: 'run', optimisticStatus: 'active' }
   if (newStatus === 'complete') return { kind: 'patch', optimisticStatus: 'complete', patch: { state: 'cancelled' } }
   if (newStatus === 'todo') return { kind: 'patch', optimisticStatus: 'todo', patch: { executeAt: null, cron: null, state: 'pending' } }

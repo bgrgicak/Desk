@@ -76,6 +76,13 @@ function buildFakeEngine(): Engine {
         },
         binds: bindStrings,
         running: true,
+        // Carry a published-ports map so the createOrReuse drift check
+        // doesn't classify the reused container as
+        // "opencode-serve-port-unbound" and recreate it. Mirrors the
+        // shape `engine.inspect` returns for a healthy live container.
+        publishedPorts: {
+          "9105/tcp": [{ hostIp: "127.0.0.1", hostPort: 34123 }],
+        },
       } as ContainerInfo);
       return id;
     },
@@ -105,7 +112,12 @@ function buildFakeEngine(): Engine {
       } as ExecHandle;
     },
     execDetached: async () => {},
-    port: async () => null,
+    // The post-create pre-flight in `createOrReuse` calls `engine.port()`
+    // to confirm the host-side publish wired up. The mutex test doesn't
+    // care which port number comes back — return a stable fake binding
+    // so the pre-flight passes and the reuse / drift logic actually
+    // exercises.
+    port: async () => ({ hostIp: "127.0.0.1", hostPort: 34123 }),
     top: async () => [],
     isRootless: async () => false,
   };

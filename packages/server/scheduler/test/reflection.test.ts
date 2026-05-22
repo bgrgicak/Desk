@@ -207,6 +207,85 @@ describe("runWorkspaceReflection", () => {
     });
   });
 
+  it("includes 👍 / 👎 feedback system messages in workspace activity", async () => {
+    // Reactions left via the thumbs buttons in the chat are persisted as
+    // `role: 'system'` messages with `feedback` content. The daily
+    // reflection should see them rendered as readable lines alongside
+    // the surrounding conversation, so the prompt can use them as
+    // explicit user verdicts on prior replies.
+    //
+    // The test creates a self-contained workspace + chat and tears them
+    // down at the end so downstream `runDailyReflection` assertions
+    // about which workspaces had activity stay deterministic.
+    const wsId = generateId("workspace");
+    const wsSlug = `reflect-feedback-${wsId.slice(-6)}`;
+    await pool.query(
+      `INSERT INTO workspaces (id, user_id, name, path) VALUES (?, ?, ?, ?)`,
+      [wsId, userId, "WS Feedback", wsSlug],
+    );
+    await queries.workspaceAgents.addToWorkspace(pool, wsId, agentId);
+    const chatId = generateId("chat");
+    await pool.query(
+      `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
+      [chatId, wsId, agentId, "Feedback Chat"],
+    );
+    try {
+      await createMessage(chatId, "agent", "Here's a draft.", `${REFLECTION_DATE}T09:00:00.000Z`);
+      await pool.query(
+        `INSERT INTO messages (id, chat_id, role, content, kind, created_at)
+         VALUES (?, ?, 'system', ?, 'chat', ?)`,
+        [
+          generateId("message"),
+          chatId,
+          JSON.stringify({ type: "feedback", rating: "up", targetMessageId: "msg_target_up" }),
+          `${REFLECTION_DATE}T09:01:00.000Z`,
+        ],
+      );
+      await pool.query(
+        `INSERT INTO messages (id, chat_id, role, content, kind, created_at)
+         VALUES (?, ?, 'system', ?, 'chat', ?)`,
+        [
+          generateId("message"),
+          chatId,
+          JSON.stringify({ type: "feedback", rating: "down", targetMessageId: "msg_target_down" }),
+          `${REFLECTION_DATE}T09:02:00.000Z`,
+        ],
+      );
+
+      let captured: WorkspaceReflectionInput | null = null;
+      const reflectWorkspace: ReflectFn<WorkspaceReflectionInput> = async (input) => {
+        captured = input;
+        return { journal: "# stub\n" };
+      };
+      await runWorkspaceReflection({
+        pool,
+        home,
+        date: REFLECTION_DATE,
+        workspaceId: wsId,
+        workspaceSlug: wsSlug,
+        workspaceName: "WS Feedback",
+        userId,
+        userName: "reflector",
+        agent: { id: agentId, name: "Reflector", model: "opencode/big-pickle" },
+        reflectWorkspace,
+      });
+
+      expect(captured).not.toBeNull();
+      const activity = captured!.activity;
+      const feedbackLines = activity.filter((row) => row.body.startsWith("User reacted"));
+      expect(feedbackLines).toHaveLength(2);
+      expect(feedbackLines[0].body).toContain("👍 helpful");
+      expect(feedbackLines[0].body).toContain("msg_target_up");
+      expect(feedbackLines[1].body).toContain("👎 not helpful");
+      expect(feedbackLines[1].body).toContain("msg_target_down");
+    } finally {
+      await pool.query(`DELETE FROM messages WHERE chat_id = ?`, [chatId]);
+      await pool.query(`DELETE FROM chats WHERE id = ?`, [chatId]);
+      await pool.query(`DELETE FROM workspace_agents WHERE workspace_id = ?`, [wsId]);
+      await pool.query(`DELETE FROM workspaces WHERE id = ?`, [wsId]);
+    }
+  });
+
   it("skips silently when the workspace had no activity for the date", async () => {
     const reflectWorkspace: ReflectFn<WorkspaceReflectionInput> = async () => {
       throw new Error("should not be called");
@@ -315,6 +394,36 @@ describe("runWorkspaceReflection", () => {
     const final = await fs.readFile(memoryAbs, "utf-8");
     expect(final).toMatch(/^# Concurrency prefs/);
     expect(final).toMatch(/iteration=/);
+  });
+
+  it("translates codex/* agent models so the daemon agent file lands on openai-codex/*", async () => {
+    // The agent file the reflection sandbox writes ends up with the
+    // `model:` line passed via `input.agent.model`. Pi exposes
+    // OAuth-authed OpenAI under the provider id `openai-codex`; `codex`
+    // is a Desk-side UI relabel. Without translation here the daemon
+    // resolves the agent against an unknown provider and 500s every
+    // reflection.
+    let captured: WorkspaceReflectionInput | null = null;
+    const reflectWorkspace: ReflectFn<WorkspaceReflectionInput> = async (input) => {
+      captured = input;
+      return { journal: "# noop\n", memoryEdits: [] };
+    };
+    await runWorkspaceReflection({
+      pool,
+      home,
+      date: REFLECTION_DATE,
+      workspaceId: workspaceAId,
+      workspaceSlug: workspaceASlug,
+      workspaceName: "WS A",
+      userId,
+      userName: "reflector",
+      agent: { id: agentId, name: "Reflector", model: "codex/gpt-5.5" },
+      providerKeys: { OPENAI_API_KEY: "sk-key" },
+      extraEnv: { OPENCODE_AUTH_CONTENT: JSON.stringify({ openai: { type: "oauth" } }) },
+      reflectWorkspace,
+    });
+    expect(captured).not.toBeNull();
+    expect(captured!.agent.model).toBe("openai-codex/gpt-5.5");
   });
 
   it("rejects malformed memory-edit paths (path traversal / non-md)", async () => {

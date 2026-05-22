@@ -285,6 +285,128 @@ describe("createThread — same workspace from project parent", () => {
     ).rejects.toThrow();
   });
 
+  it("derives the thread title from the anchor message, not the parent chat or the thread-start", async () => {
+    const anchorId = await seedAnchor(alpha.projectChat, "Refactor the auth middleware");
+    const result = await createThread(
+      pool,
+      alpha.projectChat,
+      anchorId,
+      { content: "expand on this please" },
+      () => {},
+      { actorUserId: alpha.userId, userId: alpha.userId },
+    );
+    expect(result.threadChat.title).toBe("Refactor the auth middleware");
+  });
+
+  it("strips markdown emphasis from the derived title", async () => {
+    const anchorId = generateId("message");
+    await queries.messages.insert(pool, {
+      id: anchorId,
+      chatId: alpha.projectChat,
+      role: "agent",
+      content: {
+        type: "events",
+        log: [
+          { kind: "event", event: { type: "text", part: { text: "**Clarifying next steps**\n\nLet's break this down." } } },
+        ],
+      },
+    });
+    const result = await createThread(
+      pool,
+      alpha.projectChat,
+      anchorId,
+      { content: "follow-up" },
+      () => {},
+      { actorUserId: alpha.userId, userId: alpha.userId },
+    );
+    expect(result.threadChat.title).toBe("Clarifying next steps");
+  });
+
+  it("strips markdown headings, links, and list markers from the derived title", async () => {
+    const anchorId = await seedAnchor(
+      alpha.projectChat,
+      "## See [the design doc](https://example.com/doc)",
+    );
+    const result = await createThread(
+      pool,
+      alpha.projectChat,
+      anchorId,
+      { content: "follow-up" },
+      () => {},
+      { actorUserId: alpha.userId, userId: alpha.userId },
+    );
+    expect(result.threadChat.title).toBe("See the design doc");
+  });
+
+  it("skips reasoning events when deriving the title from an agent anchor", async () => {
+    const anchorId = generateId("message");
+    await queries.messages.insert(pool, {
+      id: anchorId,
+      chatId: alpha.projectChat,
+      role: "agent",
+      content: {
+        type: "events",
+        log: [
+          // Reasoning part — chain-of-thought, hidden in the UI. Its
+          // accompanying `text` events carry the same part id and should
+          // be skipped by the title derivation too.
+          { kind: "event", event: { type: "reasoning", part: { id: "prt_reason" } } },
+          { kind: "event", event: { type: "text", part: { id: "prt_reason", text: "**Clarifying next steps**" } } },
+          // The actual user-facing reply.
+          { kind: "event", event: { type: "text", part: { id: "prt_reply", text: "Now we let the task thread do its thing." } } },
+        ],
+      },
+    });
+    const result = await createThread(
+      pool,
+      alpha.projectChat,
+      anchorId,
+      { content: "follow-up" },
+      () => {},
+      { actorUserId: alpha.userId, userId: alpha.userId },
+    );
+    expect(result.threadChat.title).toBe("Now we let the task thread do its thing.");
+  });
+
+  it("derives the thread title from an agent anchor with events content", async () => {
+    const anchorId = generateId("message");
+    await queries.messages.insert(pool, {
+      id: anchorId,
+      chatId: alpha.projectChat,
+      role: "agent",
+      content: {
+        type: "events",
+        log: [
+          { kind: "event", event: { type: "text", part: { text: "Migrate the storage backend to Postgres" } } },
+        ],
+      },
+    });
+    const result = await createThread(
+      pool,
+      alpha.projectChat,
+      anchorId,
+      { content: "follow-up" },
+      () => {},
+      { actorUserId: alpha.userId, userId: alpha.userId },
+    );
+    expect(result.threadChat.title).toBe("Migrate the storage backend to Postgres");
+  });
+
+  it("truncates long anchor text with an ellipsis", async () => {
+    const long = "a".repeat(120);
+    const anchorId = await seedAnchor(alpha.projectChat, long);
+    const result = await createThread(
+      pool,
+      alpha.projectChat,
+      anchorId,
+      { content: "follow-up" },
+      () => {},
+      { actorUserId: alpha.userId, userId: alpha.userId },
+    );
+    expect(result.threadChat.title.endsWith("…")).toBe(true);
+    expect(result.threadChat.title.length).toBeLessThanOrEqual(60);
+  });
+
   it("returns 409 when the anchor already has a thread", async () => {
     const anchorId = await seedAnchor(alpha.projectChat, "two-thread anchor");
     await createThread(

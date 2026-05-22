@@ -24,6 +24,8 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PROMPTS_DIR = path.resolve(here, "prompts");
 
+// Prompt files (.md under PROMPTS_DIR) are cached in-process; tsx watch only
+// reloads on .ts changes, so .md edits in dev land after the next .ts touch.
 const rawCache = new Map<string, string>();
 
 function readRaw(rel: string): string {
@@ -125,6 +127,15 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
       agentName: input.agentName,
       userName: input.userName,
     }),
+  // Always-loaded routing rule for chat turns. Tells the agent when
+  // "as a task" / substantial project work should become a Desk task
+  // (via `desk-agent task schedule`) instead of being implemented
+  // inline. Skipped for summary and reflection runs — those have their
+  // own fixed shape and never spawn user-facing tasks.
+  (input) =>
+    input.runMode === "summary" || input.runMode === "reflection"
+      ? null
+      : loadAndSub("task-routing.md", {}),
   (input) => {
     if (input.runMode === "summary") {
       const chatPaths = input.chatId

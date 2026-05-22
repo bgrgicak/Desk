@@ -52,18 +52,9 @@ export function HomeTaskList({
         <TaskCard
           key={`${h.workspaceId}:${h.task.id}`}
           task={h.task}
-          roomName={h.roomName}
-          roomColor={h.roomColor}
-          roomIconUrl={h.roomIconUrl}
           authorName={authorName}
           authorAvatarUrl={authorAvatarUrl}
           isActive={selectedTaskId === h.task.id}
-          homePinRef={{
-            kind: 'task',
-            id: h.task.id,
-            workspaceId: h.workspaceId,
-            label: h.task.title || h.task.name,
-          }}
           // Card href keeps the user on Home but sets `?task=<id>`,
           // which opens the docked task chat. cmd-click / middle-
           // click on the card opens the same deep-linked view in a

@@ -38,6 +38,11 @@ export const LOCAL_SOURCE_KINDS: readonly LocalSourceKind[] = Object.keys(LOCAL_
  */
 export const LOCAL_SOURCE_ENV_NAMES: readonly string[] = [
   "OPENCODE_AUTH_CONTENT",
+  // Pi reads this in piClient.ts to seed each per-invocation auth.json
+  // from the host's OAuth credentials (e.g. ~/.codex/auth.json). Empty
+  // means "no codex/oauth-based provider — pi falls back to env-vars
+  // or its own auth.json if one exists".
+  "PI_AUTH_JSON_BASE64",
 ];
 
 /** Run every registered detector. Order is `LOCAL_SOURCE_KINDS`. */

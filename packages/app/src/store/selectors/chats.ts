@@ -47,11 +47,6 @@ export function toUiChat(c: ServerChat): UiChat {
     goal: narrowChatGoal(c.goal),
     kind: c.kind,
     pinned: c.pinned ?? false,
-    // Pass the optional thread-nesting fields through. Until the
-    // backend populates these (see
-    // `packages/server/docs/plans/threads-nesting.md`), they are always
-    // undefined here and `useChatHierarchy` falls back to the message-
-    // walk derivation.
     parentChatId: c.parentChatId,
     anchorMessageId: c.anchorMessageId,
   };

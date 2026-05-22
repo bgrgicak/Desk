@@ -1,0 +1,11 @@
+{
+  "name": "date",
+  "description": "Renders a question with a date picker. Agents attach with --param question=\"...\" to ask the user for a calendar date (YYYY-MM-DD) via UI.",
+  "capabilities": ["chats.write"],
+  "params": {
+    "question": {
+      "type": "string",
+      "description": "The question to display."
+    }
+  }
+}

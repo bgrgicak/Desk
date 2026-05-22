@@ -37,7 +37,9 @@ describe("Desk skills", () => {
         expect(name).toMatch(/^desk-[a-z0-9-]+$/);
         expect(skill).toContain(`name: ${name}\n`);
         expect(skill).toMatch(/description: "?(Use when|Use before)/);
-        expect(skill).toContain("compatibility: opencode");
+        // No opencode-specific compatibility marker — pi uses the
+        // standard Agent Skills frontmatter (name + description).
+        expect(skill).not.toContain("compatibility:");
         expect(skill).toContain("metadata:\n  source: desk");
         expect(skill).toMatch(/^---\n[\s\S]+\n---\n\n\S/);
       }
@@ -72,7 +74,7 @@ describe("Desk skills", () => {
       expect(schedule).not.toContain("## desk-agent chat attach-artifact");
 
       expect(attach).toContain("## desk-agent chat attach-artifact");
-      expect(attach).toContain("desk-agent chat attach-artifact --chat <id>");
+      expect(attach).toContain("desk-agent chat attach-artifact [--chat <id>]");
       expect(attach).not.toContain("## desk-agent task schedule");
 
       expect(convert).toContain("## desk-agent file to-markdown");

@@ -39,6 +39,60 @@ export function isNonEmpty(v: string | undefined): boolean {
   return typeof v === "string" && v.length > 0;
 }
 
+/**
+ * Reasons `resolveModelForRun` returned a model other than the requested
+ * one. `null` means "the requested model was used as-is".
+ */
+export type ModelResolutionReason =
+  | null
+  | "codex-oauth"             // codex/* → openai-codex/* via OAuth path (Codex enabled)
+  | "codex-fallback-api-key"; // codex/* → openai/* via API-key fallback (Codex disabled, OPENAI key present)
+
+/**
+ * Translate a Desk model id to pi's view of the world.
+ *
+ * Desk exposes Codex (ChatGPT-subscription) OpenAI models under a UI
+ * relabel `codex/<name>`; pi's actual provider id for that channel is
+ * `openai-codex`. So a saved agent with `model: "codex/gpt-5.5"` needs
+ * to land at pi as `openai-codex/gpt-5.5` when the OAuth bridge is on,
+ * or as `openai/gpt-5.5` when only an API key is configured.
+ *
+ * Other models pass through unchanged. When the requested provider has
+ * no live auth, pi itself surfaces the error to the user — Desk no
+ * longer substitutes a fallback. This matches pi's CLI semantics: pick
+ * a model, get a clear error if its auth is missing.
+ *
+ * Lives in helpers (not runs.ts) so reflection can use the same
+ * resolver without creating a runs ↔ reflection import cycle.
+ */
+export function resolveModelForRun(
+  model: string,
+  providerKeys: Record<string, string>,
+  extraEnv?: Record<string, string>,
+): {
+  runtimeModel: string;
+  providerKeys: Record<string, string>;
+  reason: ModelResolutionReason;
+} {
+  const hasOpenAiKey = isNonEmpty(providerKeys.OPENAI_API_KEY);
+  const oauthAvailable = isNonEmpty(extraEnv?.OPENCODE_AUTH_CONTENT);
+
+  if (model.startsWith("codex/")) {
+    const suffix = model.slice("codex/".length);
+    if (oauthAvailable) {
+      return { runtimeModel: `openai-codex/${suffix}`, providerKeys, reason: "codex-oauth" };
+    }
+    if (hasOpenAiKey) {
+      return { runtimeModel: `openai/${suffix}`, providerKeys, reason: "codex-fallback-api-key" };
+    }
+    // Neither channel is live. Let pi raise its own "No API key found
+    // for openai-codex" — clearer than substituting a different model.
+    return { runtimeModel: `openai-codex/${suffix}`, providerKeys, reason: null };
+  }
+
+  return { runtimeModel: model, providerKeys, reason: null };
+}
+
 export function computeNextRun(cronExpr: string): string {
   const next = new Cron(cronExpr).nextRun();
   if (!next) throw new Error(`cron expression "${cronExpr}" has no future occurrences`);
@@ -144,6 +198,10 @@ export function messageTextForPrompt(message: Message): string | null {
       return content.body;
     case "events":
       return deriveTextFromLog(content.log) || null;
+    case "feedback": {
+      const rating = content.rating === "down" ? "👎 not helpful" : "👍 helpful";
+      return `User reacted ${rating} on a prior agent reply (message ${content.targetMessageId}).`;
+    }
     default:
       return null;
   }
@@ -183,6 +241,11 @@ export function shouldIncludeInPromptContext(message: Message, taskRunParentIds:
   // row, so exclude those children too.
   if (message.parentId && taskRunParentIds.has(message.parentId)) return false;
   if (message.state === "pending" || message.state === "running") return false;
+  // Feedback rows are `role: 'system'` 👍/👎 reactions. Surface them in
+  // the transcript context so an agent picking up the chat — including
+  // the daily workspace reflection — can read the user's verdict on
+  // earlier replies.
+  if (type === "feedback") return true;
   return message.role === "user" || message.role === "agent" || type === "summary";
 }
 
@@ -214,10 +277,13 @@ export function errorLogLines(err: unknown): string[] {
 }
 
 export function isUnscheduledTask(task: Message): boolean {
-  // Unscheduled tasks are kanban cards first and execution prompts second.
-  // A completed agent run is history on a task_run child; it must not
-  // silently move the parent card out of Todo/Active regardless of who
-  // authored the parent task.
+  // True for any task with no schedule. User-authored cards remain kanban
+  // cards (sticky column, runs never auto-close them); agent-authored
+  // sub-tasks created via `desk-agent task schedule` are "go do this now"
+  // work items and the afterTaskRun policy mirrors their run's terminal
+  // state onto the parent so they don't appear stuck in Active after the
+  // agent finishes. The role distinction is owned by afterTaskRun; this
+  // helper only answers the schedule question.
   return task.kind === "task" && !task.executeAt && !task.cron;
 }
 

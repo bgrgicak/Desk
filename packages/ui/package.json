@@ -24,7 +24,7 @@
     "tag": "alpha"
   },
   "engines": {
-    "node": ">=23.4.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "build": "tsc",

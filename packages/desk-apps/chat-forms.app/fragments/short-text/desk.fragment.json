@@ -1,0 +1,15 @@
+{
+  "name": "short-text",
+  "description": "Renders a question with a single-line text input. Agents attach with --param question=\"...\" to ask the user for a short free-text answer via UI.",
+  "capabilities": ["chats.write"],
+  "params": {
+    "question": {
+      "type": "string",
+      "description": "The question to display."
+    },
+    "placeholder": {
+      "type": "string",
+      "description": "Optional placeholder text shown inside the empty input."
+    }
+  }
+}

@@ -1,4 +1,4 @@
-import { ValidationError, VaultLockedError } from "@agent-desk/shared";
+import { VaultLockedError } from "@agent-desk/shared";
 import type { VaultStore } from "../vault/store.js";
 
 /**
@@ -51,7 +51,7 @@ export async function writeCredentials(
   credentials: CredentialBag,
 ): Promise<void> {
   if (vault.isLocked(userId)) {
-    throw new ValidationError("Secrets vault must be unlocked to store connector credentials");
+    throw new VaultLockedError("Secrets vault must be unlocked to store connector credentials");
   }
   await vault.upsert(userId, {
     title: credentialTitle(userId, connection.providerId, connection.id),

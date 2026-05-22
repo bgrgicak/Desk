@@ -97,19 +97,16 @@ export function createApp(opts: AppOptions): Server {
    *     fired right after the settings mutation could pick a session
    *     bound to the prior auth/model.
    *
-   *   - **Background**: restart any warm opencode-serve daemons with
-   *     fresh env, and broadcast `connection.changed` so open UIs
-   *     refetch. The daemon restart can take 1–5+ seconds in the worst
-   *     case (graceful kill + waitForReady), and blocking the route on
-   *     it made Settings toggles feel broken: the UI waited on the
-   *     mutation before re-rendering, so the toggle visibly stayed in
-   *     its old position until the docker churn finished.
+   *   - **Background**: clear persisted pi session ids for the affected
+   *     chats so the next turn starts a fresh session bound to the new
+   *     auth/model, and broadcast `connection.changed` so open UIs
+   *     refetch. Under the pi runtime there is no daemon to restart —
+   *     every turn spawns pi via `docker exec` with current env, so a
+   *     provider-key change automatically reaches the next turn.
    *
-   *     Skipping the await is safe: `ensureOpencodeServer` does its
-   *     own env-digest check on every call, so the next chat turn
-   *     respawns the daemon with the new env regardless. The proactive
-   *     restart here is a perf nice-to-have (avoids cold-spawn latency
-   *     on that first message), not a correctness lever.
+   *     Skipping the await is safe: the only durable state we touch is
+   *     the chats.opencode_session_id column, and clearing that takes
+   *     milliseconds.
    *
    *   Failures in either phase are swallowed and logged — a flaky engine
    *   must not turn a successful settings mutation into a 500.
@@ -367,7 +364,7 @@ export function createApp(opts: AppOptions): Server {
       if (handled) return;
     }
 
-    // /apps/* surface — covers storage, chat/library issue+delete,
+    // /apps/* surface — covers storage, chat/library/global issue+delete,
     // and workspace-scoped dist serving.  These paths intentionally
     // bypass requireAuth; each branch enforces its own auth (Bearer
     // for issue/DELETE, HttpOnly app-token cookie for static dist).

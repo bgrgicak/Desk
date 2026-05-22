@@ -8,9 +8,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Pool } from "@agent-desk/db";
+import { queries, type Pool } from "@agent-desk/db";
 import { generateId } from "@agent-desk/shared";
 import { createOrReuse } from "./docker.js";
+import { buildWorkspaceMountPlan } from "./mounts.js";
 import { execRun } from "./opencode.js";
 
 // Local copies of the scheduler types. We can't depend on
@@ -199,13 +200,37 @@ async function callReflection(
   const runId = generateId("message");
   let stdout = "";
   let stderr = "";
+  // Reuse the workspace's existing sandbox by reproducing the mount plan
+  // a regular chat fire would build. Without this, a hub reflection
+  // recreates the container with only the 2-bind default plan and the
+  // very next chat turn drift-recreates it back to the full sibling-
+  // mount plan — opencode-serve never stays up long enough for a turn
+  // to complete. Mirrors scheduler/runs.ts:fireMessage.
+  const workspace = await queries.workspaces.findById(input.pool, input.workspaceId);
+  const workspaceKind: "project" | "hub" = workspace?.kind === "hub" ? "hub" : "project";
+  const siblingSlugs = workspaceKind === "hub" && input.userId
+    ? (await queries.workspaces.listByUser(input.pool, input.userId))
+        .filter((w) => w.id !== input.workspaceId)
+        .map((w) => w.path)
+    : [];
+  const localFsResolution = await buildWorkspaceMountPlan(input.pool, {
+    home: input.home,
+    workspaceId: input.workspaceId,
+    workspaceSlug: input.workspaceSlug,
+    userId: input.userId || null,
+    siblingWorkspaceSlugs: siblingSlugs,
+  });
+  const mountPlan = workspaceKind === "hub" || localFsResolution.agentDirectories.length > 0
+    ? localFsResolution.mountPlan
+    : undefined;
   const handle = await createOrReuse(
     input.workspaceId,
     input.workspaceSlug,
     input.home,
     input.providerKeys,
-    undefined,
+    mountPlan,
     input.extraEnv,
+    workspaceKind,
   );
   const result = await execRun(input.pool, handle, {
     runId,
@@ -223,6 +248,7 @@ async function callReflection(
     },
     providerKeys: input.providerKeys,
     extraEnv: input.extraEnv,
+    mountPlan,
     onLog: (event) => {
       // The runtime emits per-turn output as `kind: "event"` (translated
       // SSE events from opencode-serve, each a JSON line like
@@ -236,7 +262,11 @@ async function callReflection(
     },
   });
   if (result.exitCode !== 0) {
-    return degraded(`sandbox reflection exited ${result.exitCode}: ${stderr.trim().slice(0, 400)}`);
+    // The driver now folds the daemon's own `/tmp/opencode-serve.log`
+    // tail into stderr on failure paths (see driver.ts), so the message
+    // length budget has to be larger than the old 400 char cap or the
+    // useful part gets clipped.
+    return degraded(`sandbox reflection exited ${result.exitCode}: ${stderr.trim().slice(0, 4000)}`);
   }
   const parsed = parseReflection(stdout);
   if (!parsed) {

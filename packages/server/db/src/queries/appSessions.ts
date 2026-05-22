@@ -1,12 +1,12 @@
 import { type Pool } from "../pool.js";
 
-export type AppScope = "chat" | "library";
+export type AppScope = "chat" | "library" | "global";
 
 export interface AppSession {
   id: string;
   userId: string;
   scope: AppScope;
-  /** Null for library-scope sessions. */
+  /** Null for library-scope sessions. Set for chat-scope and global-scope sessions. */
   chatId: string | null;
   workspaceId: string;
   appName: string;

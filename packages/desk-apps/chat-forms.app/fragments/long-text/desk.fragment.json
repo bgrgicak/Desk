@@ -1,0 +1,15 @@
+{
+  "name": "long-text",
+  "description": "Renders a question with a multi-line textarea. Agents attach with --param question=\"...\" to ask the user for a paragraph-length free-text answer via UI.",
+  "capabilities": ["chats.write"],
+  "params": {
+    "question": {
+      "type": "string",
+      "description": "The question to display."
+    },
+    "placeholder": {
+      "type": "string",
+      "description": "Optional placeholder text shown inside the empty textarea."
+    }
+  }
+}

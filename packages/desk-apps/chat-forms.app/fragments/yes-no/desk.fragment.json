@@ -1,0 +1,11 @@
+{
+  "name": "yes-no",
+  "description": "Renders a yes/no question as a centered card with two buttons. Agents can attach this fragment with --param question=\"...\" to ask the user a structured yes/no question via UI instead of free-text.",
+  "capabilities": ["chats.write"],
+  "params": {
+    "question": {
+      "type": "string",
+      "description": "The yes/no question to display."
+    }
+  }
+}

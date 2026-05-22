@@ -1,36 +1,11 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { pino } from "pino";
 import { Writable } from "node:stream";
+// Import the production scrubber so the test exercises the actual
+// implementation, not a copy that can silently drift from it.
+import { scrubSensitive, _isSecretNameForTest as isSecretName } from "../src/logger.js";
 
-// Re-implement the scrubber + redact contract from logger.ts here so
-// we exercise the actual config shape pino is initialised with. The
-// production logger writes to process.stdout via sonic-boom, which
-// makes it harder to inspect in tests — so this test constructs a
-// matching pino with a memory stream and asserts the same redaction
-// behaviour.
-
-const ALWAYS_REDACT_KEYS = new Set([
-  "authorization", "cookie", "token", "password", "currentpassword",
-  "newpassword", "apikey", "api_key", "credentials", "secret",
-  "refreshtoken", "accesstoken",
-]);
 const REDACT_PLACEHOLDER = "[REDACTED]";
-
-function scrubSensitive(value: unknown, depth = 0): unknown {
-  if (depth >= 8) return value;
-  if (value === null || value === undefined) return value;
-  if (Array.isArray(value)) return value.map((v) => scrubSensitive(v, depth + 1));
-  if (typeof value !== "object") return value;
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    if (ALWAYS_REDACT_KEYS.has(k.toLowerCase())) {
-      out[k] = REDACT_PLACEHOLDER;
-    } else {
-      out[k] = scrubSensitive(v, depth + 1);
-    }
-  }
-  return out;
-}
 
 function makeLogger(): { log: pino.Logger; lines: string[] } {
   const lines: string[] = [];
@@ -147,5 +122,78 @@ describe("logger redaction depth coverage", () => {
     // we'd rather log unscrubbed than refuse the log entirely.
     // Below MAX_SCRUB_DEPTH the redaction works (covered above).
     expect(lines.length).toBeGreaterThan(0);
+  });
+
+  it("redacts provider-prefixed API keys without an allowlist update", () => {
+    // The universal SECRET_NAME_RE must catch any *_API_KEY /
+    // *_TOKEN / *_SECRET pattern so a brand-new provider env var
+    // doesn't leak the first time it's logged.
+    const { log, lines } = makeLogger();
+    log.info(
+      {
+        ANTHROPIC_API_KEY: "sk-ant-leak-1",
+        OPENAI_API_KEY: "sk-openai-leak-2",
+        GROQ_API_KEY: "gsk-leak-3",
+        STRIPE_API_KEY: "sk_live_leak-4",
+        NOTION_SECRET: "secret_leak-5",
+        SLACK_BOT_TOKEN: "xoxb-leak-6",
+        AWS_SECRET_ACCESS_KEY: "leak-7",
+        OPENCODE_SERVER_PASSWORD: "leak-8",
+        OPENCODE_AUTH_CONTENT: "leak-9",
+        REFRESH_TOKEN: "leak-10",
+        bearerToken: "leak-11",
+      },
+      "msg",
+    );
+    const joined = lines.join();
+    for (const leak of [
+      "sk-ant-leak-1", "sk-openai-leak-2", "gsk-leak-3", "sk_live_leak-4",
+      "secret_leak-5", "xoxb-leak-6", "leak-7", "leak-8", "leak-9",
+      "leak-10", "leak-11",
+    ]) {
+      expect(joined).not.toContain(leak);
+    }
+  });
+
+  it("predicate: known secret-shaped names", () => {
+    // Whole-word / suffix matches across the patterns the regex covers.
+    for (const name of [
+      "ANTHROPIC_API_KEY", "anthropic_api_key", "anthropicApiKey",
+      "OPENAI_API_KEY", "GROQ_API_KEY", "AZURE_API_KEY", "PERPLEXITY_API_KEY",
+      "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "aws_session_token",
+      "GITHUB_TOKEN", "GH_TOKEN", "SLACK_BOT_TOKEN", "BEARER_TOKEN",
+      "REFRESH_TOKEN", "ACCESS_TOKEN", "ID_TOKEN", "SESSION_TOKEN",
+      "OPENCODE_SERVER_PASSWORD", "OPENCODE_AUTH_CONTENT",
+      "STRIPE_API_KEY", "NOTION_SECRET", "WEBHOOK_SECRET",
+      "Authorization", "cookie", "api_key", "apikey", "password",
+      "passphrase", "client_secret", "credentials",
+    ]) {
+      expect(isSecretName(name)).toBe(true);
+    }
+  });
+
+  it("predicate: leaves non-secret names alone (LLM-cost counters, ids, etc.)", () => {
+    for (const name of [
+      "tokenizer", "tokenize",
+      "password_strength_score", // not anchored at end → not matched
+      "user_id", "username", "email", "count", "timestamp",
+      "max_tokens", "tokens_used", "input_tokens", "output_tokens",
+      "model", "modelId", "providerId", "session_id", "chat_id",
+      "request_id", "trace_id", "workspace_id",
+    ]) {
+      expect(isSecretName(name)).toBe(false);
+    }
+    // Counter pluralization must NOT match (telemetry).
+    expect(isSecretName("tokens_used")).toBe(false);
+    // But the SINGULAR secret suffix MUST match.
+    expect(isSecretName("session_token")).toBe(true);
+    expect(isSecretName("access_token")).toBe(true);
+    // `tokenizer_chars_per_token` ends in `_token` → matches.
+    // That's an accepted false-positive: it's only a counter unit, no
+    // secret is exposed, and pinning it down would require a denylist
+    // of counter shapes that's fragile. The cost is one extra
+    // `[REDACTED]` in a debug log line; the benefit is "any future
+    // `*_TOKEN` env-shape leaks zero secrets on first appearance."
+    expect(isSecretName("tokenizer_chars_per_token")).toBe(true);
   });
 });

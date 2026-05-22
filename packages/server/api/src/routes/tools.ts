@@ -70,7 +70,7 @@ export async function listModels(
       providerKeys: listing.providerKeys,
       env: listing.env,
     });
-    return expandOpenAiBySource(raw, listing.providerKeys, listing.env)
+    return expandOpenAiBySource(raw)
       .filter((model) => opts.provider === undefined || model.provider === opts.provider);
   } catch (err) {
     if (err instanceof SandboxExecError) {
@@ -88,8 +88,7 @@ function resolveModelListingSource(
   localEnv: Record<string, string>,
 ): { provider?: string; providerKeys: Record<string, string>; env: Record<string, string> } {
   if (provider === "codex") {
-    const { OPENAI_API_KEY: _openAiApiKey, ...withoutOpenAiApiKey } = providerKeys;
-    return { provider: "openai", providerKeys: withoutOpenAiApiKey, env: localEnv };
+    return { provider: "openai-codex", providerKeys, env: localEnv };
   }
 
   if (provider === "openai") {
@@ -100,41 +99,23 @@ function resolveModelListingSource(
 }
 
 /**
- * OpenAI models reach OpenCode via either an OPENAI_API_KEY (cloud) or a
- * Codex auth blob (local). The model `id` ("openai/<name>") is the same in
- * both paths; only the auth source differs. Re-tag the `provider` field so
- * the model picker can show "Codex" vs "ChatGPT" and the user knows which
- * source is paying for the call. Codex entries get a Desk-only `codex/*` id;
- * the scheduler translates that back to OpenCode's `openai/*` id only after
- * removing OPENAI_API_KEY from the run environment.
+ * Pi exposes two distinct OpenAI provider channels in `--list-models`:
+ * `openai/<name>` (authed via OPENAI_API_KEY) and `openai-codex/<name>`
+ * (authed via the ChatGPT subscription OAuth blob). Pi emits whichever
+ * channels it has credentials for. We relabel `openai-codex/<name>` to
+ * the Desk-only `codex/<name>` (provider="codex") so the picker can brand
+ * it as "Codex"; the runtime translates the prefix back to `openai-codex`
+ * at run time. `openai/<name>` passes through unchanged.
  */
-export function expandOpenAiBySource(
-  models: ModelRef[],
-  providerKeys: Record<string, string>,
-  localEnv: Record<string, string>,
-): ModelRef[] {
-  const codexActive = typeof localEnv.OPENCODE_AUTH_CONTENT === "string" && localEnv.OPENCODE_AUTH_CONTENT.length > 0;
-  const apiKeyActive = typeof providerKeys.OPENAI_API_KEY === "string" && providerKeys.OPENAI_API_KEY.length > 0;
-  if (!codexActive) return models;
-
-  const out: ModelRef[] = [];
-  for (const model of models) {
-    if (model.provider !== "openai" || !model.id.startsWith("openai/")) {
-      out.push(model);
-      continue;
+export function expandOpenAiBySource(models: ModelRef[]): ModelRef[] {
+  return models.map((model) => {
+    if (model.provider !== "openai-codex" || !model.id.startsWith("openai-codex/")) {
+      return model;
     }
-
-    // If both OpenAI sources are available, expose both. The API-key-backed
-    // entry keeps the canonical OpenCode id (`openai/...`); the subscription-
-    // backed entry gets a Desk-only id (`codex/...`) that runtime translates
-    // back to `openai/...` after stripping OPENAI_API_KEY from the run env.
-    if (apiKeyActive) out.push(model);
-    const suffix = model.id.slice("openai/".length);
-    out.push({
+    return {
       ...model,
-      id: `codex/${suffix}`,
+      id: `codex/${model.id.slice("openai-codex/".length)}`,
       provider: "codex",
-    });
-  }
-  return out;
+    };
+  });
 }

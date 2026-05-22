@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Zap, MoreVertical, CheckCircle2, Play, Pause, Trash2 } from 'lucide-react'
 import {
@@ -19,7 +19,7 @@ import {
 } from '@/store/api'
 import { toUiTask } from '@/store/selectors/tasks'
 import { buildTaskStatusMove, buildTaskLifecycleMove } from '@/lib/task-status'
-import { buildPath } from '@/router/nav'
+import { buildPath, resolveRouteView } from '@/router/nav'
 import { StatusBadge, PRIORITY_LABELS } from '@/components/tasks/task-badges'
 import { describeCron } from '@/components/tasks/schedule-utils'
 import { ShowInHomeMenuItem } from '@/components/shared/ShowInHomeMenuItem'
@@ -57,10 +57,15 @@ export function TaskResultCard({
   const [patchMessage] = usePatchMessageMutation()
   const [runMessage] = useRunMessageMutation()
   const [deleteMessage] = useDeleteMessageMutation()
+  const { view: viewParam } = useParams<{ view: string }>()
+  const activeView = resolveRouteView(viewParam) ?? 'tasks'
 
   const task = toUiTask(message, [], chat ? [chat] : [], workspaces ?? [], [])
   const isDone = task.status === 'complete'
-  const canRunNow = task.status === 'scheduled'
+  const canRunNow =
+    task.status === 'scheduled' ||
+    task.status === 'active' ||
+    task.status === 'todo'
   const canPause =
     (task.status === 'active' || task.status === 'scheduled') &&
     task.messageState !== 'paused'
@@ -69,8 +74,13 @@ export function TaskResultCard({
   if (task.priority) meta.push(PRIORITY_LABELS[task.priority])
   if (task.schedule?.trim()) meta.push(describeCron(task.schedule.trim()))
 
-  const viewHref = workspaceId
-    ? buildPath(workspaceId, 'tasks', { task: message.id })
+  // Open the task's dedicated chat the same way the left sidebar opens
+  // chats — set `?chat=…` on the current view rather than switching to
+  // the tasks list. Falls back to the parent chat when the task has no
+  // thread of its own (stand-alone tasks created from the tasks page).
+  const taskChatId = task.threadChatId ?? task.chatId
+  const viewHref = workspaceId && taskChatId
+    ? buildPath(workspaceId, activeView, { chat: taskChatId })
     : undefined
 
   const markDone = async () => {

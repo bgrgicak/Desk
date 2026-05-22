@@ -133,11 +133,14 @@ function describeLocalSourceReason(kind: string, reason: string | undefined): st
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 import { WorkspaceForm, type WorkspaceFormValues } from '@/components/workspace/WorkspaceForm'
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
-import { PreferenceRow } from '@/components/settings/shared'
-import { describeApiError } from '@/components/settings/errors'
 import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'
 import { initialsOf } from '@/lib/initials'
+import { PreferenceRow } from '@/components/settings/shared'
+import { describeApiError } from '@/components/settings/errors'
 import { roomColor } from '@/components/rooms/roomColor'
+import { isVaultLockedError } from '@/lib/api-error'
+import { useAppDispatch } from '@/store/hooks'
+import { openVaultDialog } from '@/store/slices/uiSlice'
 
 // ── Brand marks ─────────────────────────────────────────────────────────────
 
@@ -170,7 +173,7 @@ type NavSection = 'workspace' | 'agents' | 'connections' | 'preferences'
 
 const NAV: { id: NavSection; label: string; icon: typeof Settings2 }[] = [
   { id: 'workspace',   label: 'Workspace',   icon: Settings2 },
-  { id: 'agents',      label: 'Agents',      icon: Bot       },
+  { id: 'agents',      label: 'Models',      icon: Bot       },
   { id: 'connections', label: 'Connections', icon: Plug      },
   { id: 'preferences', label: 'Preferences', icon: Sliders   },
 ]
@@ -602,18 +605,18 @@ function AgentsList({
   if (agents.length === 0) {
     return (
       <EmptyState
-        title="No agents yet"
-        body="Every workspace should start with a default opencode agent. If one is missing, refresh this panel; you can change its model here once it appears."
+        title="No models yet"
+        body="Every workspace should start with a default opencode model. If one is missing, refresh this panel; you can change its model here once it appears."
         action={
           <Button size="sm" className="gap-1.5" onClick={onAdd}>
-            <Plus className="h-3.5 w-3.5" />Add agent
+            <Plus className="h-3.5 w-3.5" />Add model
           </Button>
         }
       />
     )
   }
   if (filtered.length === 0) {
-    return <EmptyState title="No matches" body={q ? `No agents match “${q}”.` : 'No agents in this filter.'} />
+    return <EmptyState title="No matches" body={q ? `No models match “${q}”.` : 'No models in this filter.'} />
   }
 
   return (
@@ -797,13 +800,13 @@ function AgentDetail({
               <PopoverTrigger asChild>
                 <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive gap-1.5">
                   <Trash2 className="h-3.5 w-3.5" />
-                  Delete agent
+                  Delete model
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-64 p-4" align="start">
                 <p className="text-sm font-medium mb-1">Delete {existing.name}?</p>
                 <p className="text-xs text-muted-foreground mb-3">
-                  Any chats assigned to this agent will lose it. This can't be undone.
+                  Any chats assigned to this model will lose it. This can't be undone.
                 </p>
                 <div className="flex gap-2">
                   <Button
@@ -825,7 +828,7 @@ function AgentDetail({
         <div className="flex min-w-0 items-center gap-2 sm:justify-end">
           <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={onCancel} disabled={busy}>Cancel</Button>
           <Button size="sm" className="flex-1 sm:flex-none" onClick={handleSave} disabled={!canSave || busy}>
-            {focus.mode === 'new' ? (busy ? 'Adding…' : 'Add agent') : (busy ? 'Saving…' : 'Save')}
+            {focus.mode === 'new' ? (busy ? 'Adding…' : 'Add model') : (busy ? 'Saving…' : 'Save')}
           </Button>
         </div>
       </div>
@@ -1582,6 +1585,7 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<NavSection>(initialSection ?? 'workspace')
   const isCompactViewport = useCompactViewport()
+  const dispatch = useAppDispatch()
   const workspaceIconUrl = useWorkspaceIconUrl(workspace.id)
 
   useEffect(() => {
@@ -1842,6 +1846,14 @@ export function SettingsModal({
       await putProviderKeys({ [envKey]: value }).unwrap()
       return true
     } catch (err) {
+      if (isVaultLockedError(err)) {
+        // No toast here: the dialog is the actionable surface. The user
+        // re-submits this form after unlocking — we don't auto-retry
+        // because the value lives in component state, not in a Redux
+        // queue we could replay.
+        dispatch(openVaultDialog({}))
+        return false
+      }
       toast.error('Could not save provider key', { description: describeApiError(err) })
       return false
     }
@@ -1884,6 +1896,10 @@ export function SettingsModal({
       }
       setConnectionsFocus(null)
     } catch (err) {
+      if (isVaultLockedError(err)) {
+        dispatch(openVaultDialog({}))
+        return
+      }
       toast.error('Could not save connection', { description: describeApiError(err) })
     }
   }
@@ -1916,19 +1932,19 @@ export function SettingsModal({
       const leafLabel = agentsFocus === null
         ? null
         : agentsFocus.mode === 'new'
-          ? 'New agent'
-          : agents.find(a => a.id === agentsFocus.id)?.name ?? 'Agent'
+          ? 'New model'
+          : agents.find(a => a.id === agentsFocus.id)?.name ?? 'Model'
 
       return (
         <Breadcrumb className="min-w-0">
           <BreadcrumbList>
             <BreadcrumbItem>
               {leafLabel === null ? (
-                <BreadcrumbPage className={pageClass}>Agents</BreadcrumbPage>
+                <BreadcrumbPage className={pageClass}>Models</BreadcrumbPage>
               ) : (
                 <BreadcrumbLink asChild className={pageClass}>
                   <button type="button" onClick={() => { setAgentsFocus(null); setAgentsSearch('') }}>
-                    Agents
+                    Models
                   </button>
                 </BreadcrumbLink>
               )}
@@ -2150,7 +2166,7 @@ export function SettingsModal({
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <StatusFilterPills value={agentsStatusFilter} onChange={setAgentsStatusFilter} />
                         <div className="flex w-full min-w-0 max-w-full items-center gap-2 sm:w-auto">
-                          <SearchInput value={agentsSearch} onChange={setAgentsSearch} placeholder="Search agents…" />
+                          <SearchInput value={agentsSearch} onChange={setAgentsSearch} placeholder="Search models…" />
                           <Button size="sm" className="gap-1.5" onClick={() => setAgentsFocusAndReset({ mode: 'new' })}>
                             <Plus className="h-3.5 w-3.5" />Add
                           </Button>

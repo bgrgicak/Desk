@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { detectMonorepo, resolvePublishedApiEntry, resolveAppDist } from "../src/desk.mjs";
+import { detectMonorepo, ensureDeskHome, resolvePublishedApiEntry, resolveAppDist } from "../src/desk.mjs";
 
 describe("detectMonorepo", () => {
   let tmpRoot;
@@ -59,6 +59,28 @@ describe("detectMonorepo", () => {
       JSON.stringify({ name: "desk" }),
     );
     expect(detectMonorepo(path.join(root, "packages", "agent-desk-cli"))).toBeNull();
+  });
+});
+
+describe("ensureDeskHome", () => {
+  // Regression: an earlier version returned `$HOME` (the parent) while
+  // creating `$HOME/Desk` — the server then wrote db/backups/memory/skills
+  // directly under $HOME. The contract is: the returned path is the data
+  // root, and it exists on disk afterwards.
+  it("returns DESK_HOME verbatim when set, and creates the directory", async () => {
+    const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "deskhome-env-"));
+    const target = path.join(tmp, "custom-root");
+    const prev = process.env.DESK_HOME;
+    process.env.DESK_HOME = target;
+    try {
+      const home = await ensureDeskHome();
+      expect(home).toBe(target);
+      expect(fs.existsSync(home)).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.DESK_HOME;
+      else process.env.DESK_HOME = prev;
+      await fsp.rm(tmp, { recursive: true, force: true });
+    }
   });
 });
 

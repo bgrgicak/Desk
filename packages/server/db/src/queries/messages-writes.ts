@@ -140,6 +140,7 @@ export async function insert(
     contentType === "agent_turn" ||
     contentType === "summary_request" ||
     contentType === "summary" ||
+    contentType === "feedback" ||
     kind === "summary";
   if (!isInternal) {
     const setUnread = data.role === "agent" ? ", unread = 1" : "";
@@ -373,6 +374,69 @@ export async function updateMessage(
   params.push(id);
   const { rows } = await db.query(
     `UPDATE messages SET ${sets.join(", ")} WHERE id = ? RETURNING *`,
+    params,
+  );
+  return rows.length ? rowToMessage(rows[0]) : null;
+}
+
+/**
+ * State-guarded partial update. Same patch shape as {@link updateMessage}
+ * but only applies when the row's current `state` is in `allowedStates`.
+ * Returns the updated row on success, `null` if the guard rejected the
+ * write (or the row is missing). Used for "soft" lifecycle transitions
+ * that must not clobber an existing terminal state — e.g. promoting an
+ * unscheduled task from `pending` to `running` on auto-fire without
+ * stomping a concurrent cancel, or mirroring a run's terminal state onto
+ * its parent without stomping an explicit `task complete` that already
+ * landed.
+ */
+export async function updateMessageIfState(
+  db: Pool,
+  id: string,
+  patch: {
+    content?: unknown;
+    state?: string;
+    executeAt?: string | null;
+    cron?: string | null;
+    kind?: string;
+    title?: string | null;
+  },
+  allowedStates: readonly string[],
+): Promise<Message | null> {
+  if (allowedStates.length === 0) return null;
+  const sets: string[] = ["updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"];
+  const params: unknown[] = [];
+  if (patch.content !== undefined) {
+    sets.push(`content = ?`);
+    params.push(JSON.stringify(patch.content));
+  }
+  if (patch.state !== undefined) {
+    sets.push(`state = ?`);
+    params.push(patch.state);
+  }
+  if (patch.executeAt !== undefined) {
+    sets.push(`execute_at = ?`);
+    params.push(patch.executeAt === null ? null : new Date(patch.executeAt));
+  }
+  if (patch.cron !== undefined) {
+    sets.push(`cron = ?`);
+    params.push(patch.cron);
+  }
+  if (patch.kind !== undefined) {
+    sets.push(`kind = ?`);
+    params.push(patch.kind);
+  }
+  if (patch.title !== undefined) {
+    sets.push(`title = ?`);
+    params.push(patch.title);
+  }
+  params.push(id);
+  const placeholders = allowedStates.map(() => "?").join(", ");
+  for (const s of allowedStates) params.push(s);
+  const { rows } = await db.query(
+    `UPDATE messages SET ${sets.join(", ")}
+     WHERE id = ? AND state IN (${placeholders})
+     RETURNING *`,
     params,
   );
   return rows.length ? rowToMessage(rows[0]) : null;
