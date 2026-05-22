@@ -238,12 +238,34 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
     }, 100).unref();
   };
 
+  // The `done` promise resolves on whichever comes first:
+  //   1. pi's terminal event (canonical "the agent turn is finished" signal),
+  //      surfaced via stdout JSONL drain or the session-file watcher.
+  //   2. The wrapper child exiting (pi crashed or died before emitting a
+  //      terminal — fall back to the exit code).
+  // Wrapper-exit used to gate completion on its own, which left chats stuck
+  // forever when a stale MCP child or hung cleanup step kept the wrapper
+  // alive past the actual end of the turn. The terminal event is the work-
+  // product signal; the wrapper is just the transport.
+  let resolveDone!: (result: PiRunResult) => void;
+  let resolved = false;
+  const resolveOnce = (result: PiRunResult): void => {
+    if (resolved) return;
+    resolved = true;
+    resolveDone(result);
+  };
+
   const handleTerminal = (terminal: TerminalAssistantMessage) => {
     terminalExitCode ??= terminal.exitCode;
     if (terminal.model) {
       terminalModel = `${terminal.model.providerID}/${terminal.model.modelID}`;
     }
     scheduleTerminalCleanupKill();
+    resolveOnce({
+      exitCode: terminal.exitCode,
+      aborted,
+      ...(terminalModel ? { model: terminalModel } : {}),
+    });
   };
   const sessionWatcher = opts.hostSessionDir
     ? watchPiSessionTerminal(opts.hostSessionDir, (evt) => {
@@ -254,6 +276,7 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
   const stdoutPromise = drainStdoutEvents(child.stdout, opts, drainState, handleTerminal);
 
   const done = new Promise<PiRunResult>((resolve) => {
+    resolveDone = resolve;
     child.on("exit", async (code, signal) => {
       sessionWatcher?.stop();
       try {
@@ -270,7 +293,7 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
         log.warn({ err: (err as Error)?.message }, "piClient: cleanup failed");
       });
       const exitCode = terminalExitCode ?? (typeof code === "number" ? code : signal ? 130 : 1);
-      resolve({ exitCode, aborted, ...(terminalModel ? { model: terminalModel } : {}) });
+      resolveOnce({ exitCode, aborted, ...(terminalModel ? { model: terminalModel } : {}) });
     });
     child.on("error", async (err) => {
       sessionWatcher?.stop();
@@ -283,7 +306,7 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
         ]);
       } catch {/* noop */}
       await opts.onStderr(`pi spawn failed: ${err.message}`);
-      resolve({ exitCode: 1, aborted, ...(terminalModel ? { model: terminalModel } : {}) });
+      resolveOnce({ exitCode: 1, aborted, ...(terminalModel ? { model: terminalModel } : {}) });
     });
   });
 
