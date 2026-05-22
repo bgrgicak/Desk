@@ -15,7 +15,7 @@ test("editing workspace name + icon + color from Settings → Workspace persists
 }) => {
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
 
-  await loggedInPage.getByRole("button", { name: /Customize/ }).click();
+  await loggedInPage.getByRole("button", { name: /Settings/ }).click();
   // Workspace tab is the default. Confirm and edit.
   const dialog = loggedInPage.getByRole("dialog");
   await expect(dialog.getByPlaceholder("e.g. Marketing")).toBeVisible();

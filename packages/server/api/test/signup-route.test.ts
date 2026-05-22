@@ -93,19 +93,54 @@ afterAll(async () => {
   delete process.env.DESK_HOME;
 });
 
+// Bootstrap a user row through the public signup endpoint so the
+// downstream test starts in the post-first-run state. Caller is
+// responsible for any env-var dance — this just creates the user.
+async function bootstrapExistingUser(): Promise<void> {
+  const prev = process.env.DESK_ENABLE_SIGNUP;
+  process.env.DESK_ENABLE_SIGNUP = "1";
+  const res = await request("POST", "/auth/signup", {
+    username: "preexisting",
+    email: "preexisting@example.com",
+    password: "correct-horse-battery",
+  });
+  if (res.status !== 200) {
+    throw new Error(`bootstrap signup failed (${res.status})`);
+  }
+  if (prev === undefined) delete process.env.DESK_ENABLE_SIGNUP;
+  else process.env.DESK_ENABLE_SIGNUP = prev;
+  clearRateLimits();
+}
+
 describe("GET /auth/signup-status", () => {
-  it("returns enabled: false by default", async () => {
+  it("reports firstRun and enabled on an empty DB", async () => {
     delete process.env.DESK_ENABLE_SIGNUP;
     const res = await request("GET", "/auth/signup-status");
     expect(res.status).toBe(200);
-    expect((res.body as { enabled: boolean }).enabled).toBe(false);
+    const body = res.body as { enabled: boolean; firstRun: boolean };
+    // No users seeded — first-run unlocks signup automatically.
+    expect(body.firstRun).toBe(true);
+    expect(body.enabled).toBe(true);
+  });
+
+  it("returns enabled: false when users exist and DESK_ENABLE_SIGNUP is unset", async () => {
+    await bootstrapExistingUser();
+    delete process.env.DESK_ENABLE_SIGNUP;
+    const res = await request("GET", "/auth/signup-status");
+    expect(res.status).toBe(200);
+    const body = res.body as { enabled: boolean; firstRun: boolean };
+    expect(body.firstRun).toBe(false);
+    expect(body.enabled).toBe(false);
   });
 
   it("returns enabled: true when DESK_ENABLE_SIGNUP=1", async () => {
+    await bootstrapExistingUser();
     process.env.DESK_ENABLE_SIGNUP = "1";
     const res = await request("GET", "/auth/signup-status");
     expect(res.status).toBe(200);
-    expect((res.body as { enabled: boolean }).enabled).toBe(true);
+    const body = res.body as { enabled: boolean; firstRun: boolean };
+    expect(body.firstRun).toBe(false);
+    expect(body.enabled).toBe(true);
   });
 
   it("does not require authentication", async () => {
@@ -116,7 +151,19 @@ describe("GET /auth/signup-status", () => {
 });
 
 describe("POST /auth/signup", () => {
-  it("refuses when DESK_ENABLE_SIGNUP is unset", async () => {
+  it("allows signup on first-run even without DESK_ENABLE_SIGNUP", async () => {
+    delete process.env.DESK_ENABLE_SIGNUP;
+    const res = await request("POST", "/auth/signup", {
+      username: "firstuser",
+      email: "first@example.com",
+      password: "correct-horse-battery",
+    });
+    expect(res.status).toBe(200);
+    expect(typeof (res.body as { token: string }).token).toBe("string");
+  });
+
+  it("refuses when DESK_ENABLE_SIGNUP is unset and a user already exists", async () => {
+    await bootstrapExistingUser();
     delete process.env.DESK_ENABLE_SIGNUP;
     const res = await request("POST", "/auth/signup", {
       username: "alice",
@@ -144,6 +191,25 @@ describe("POST /auth/signup", () => {
     expect(user?.email).toBe("alice@example.com");
   });
 
+  it("does NOT seed a default agent — the new user must add a model explicitly", async () => {
+    // A fresh user has no vault and no connector credentials. Auto-creating
+    // an agent here would render in the onboarding "Add AI providers" step
+    // as if the user already configured a provider — misleading them about
+    // what state exists on their behalf, and blurring the line between
+    // "credentials I added" and "rows the server seeded for me".
+    process.env.DESK_ENABLE_SIGNUP = "1";
+    const res = await request("POST", "/auth/signup", {
+      username: "freshie",
+      email: "freshie@example.com",
+      password: "correct-horse-battery",
+    });
+    expect(res.status).toBe(200);
+    const user = await queries.users.findByUsername(pool, "freshie");
+    expect(user).toBeTruthy();
+    const agents = await queries.agents.listByUser(pool, user!.id);
+    expect(agents).toEqual([]);
+  });
+
   it("does NOT auto-create a vault at signup, even with DESK_VAULT_PASSWORD set", async () => {
     process.env.DESK_ENABLE_SIGNUP = "1";
     process.env.DESK_VAULT_PASSWORD = "would-have-been-auto-applied";
@@ -159,6 +225,71 @@ describe("POST /auth/signup", () => {
     // password through the VaultDialog on first credential save.
     const status = await vault.status(user!.id);
     expect(status).toEqual({ exists: false, locked: true });
+  });
+
+  it("creates the vault inline when vaultPassword is supplied", async () => {
+    process.env.DESK_ENABLE_SIGNUP = "1";
+    const res = await request("POST", "/auth/signup", {
+      username: "vaultuser",
+      email: "vaultuser@example.com",
+      password: "correct-horse-battery",
+      vaultPassword: "another-strong-passphrase",
+    });
+    expect(res.status).toBe(200);
+    const user = await queries.users.findByUsername(pool, "vaultuser");
+    expect(user).toBeTruthy();
+    const status = await vault.status(user!.id);
+    expect(status.exists).toBe(true);
+  });
+
+  it("rolls back the user when vaultPassword fails policy", async () => {
+    // A weak vault password is caught by enforcePasswordPolicy. The
+    // failure has to land before any DB writes so the username can be
+    // immediately re-used in the wizard's retry.
+    process.env.DESK_ENABLE_SIGNUP = "1";
+    const res = await request("POST", "/auth/signup", {
+      username: "rollback",
+      email: "rollback@example.com",
+      password: "correct-horse-battery",
+      vaultPassword: "short",
+    });
+    expect(res.status).toBe(400);
+    const user = await queries.users.findByUsername(pool, "rollback");
+    expect(user).toBeNull();
+  });
+
+  it("creates an optional first workspace alongside the hub", async () => {
+    process.env.DESK_ENABLE_SIGNUP = "1";
+    const res = await request("POST", "/auth/signup", {
+      username: "withroom",
+      email: "withroom@example.com",
+      password: "correct-horse-battery",
+      workspace: { name: "My first room", description: "scratchpad", color: "#fef3c7" },
+    });
+    expect(res.status).toBe(200);
+    const user = await queries.users.findByUsername(pool, "withroom");
+    expect(user).toBeTruthy();
+    const ws = await queries.workspaces.listByUser(pool, user!.id);
+    // Hub + the optional room.
+    expect(ws.length).toBe(2);
+    expect(ws.some((w) => w.name === "My first room")).toBe(true);
+  });
+
+  it("treats an empty workspace.name as 'skip' rather than 400", async () => {
+    process.env.DESK_ENABLE_SIGNUP = "1";
+    const res = await request("POST", "/auth/signup", {
+      username: "skiproom",
+      email: "skiproom@example.com",
+      password: "correct-horse-battery",
+      workspace: { name: "   " },
+    });
+    expect(res.status).toBe(200);
+    const user = await queries.users.findByUsername(pool, "skiproom");
+    expect(user).toBeTruthy();
+    const ws = await queries.workspaces.listByUser(pool, user!.id);
+    // Only the hub.
+    expect(ws.length).toBe(1);
+    expect(ws[0].kind).toBe("hub");
   });
 
   it("rejects usernames that fail the pattern", async () => {

@@ -1250,6 +1250,16 @@ export const api = createApi({
       },
       providesTags: ["Models"],
     }),
+    previewModels: build.mutation<
+      ModelRef[],
+      { provider?: string; providerKeys: Record<string, string> }
+    >({
+      query: (body) => ({
+        url: "/tools/models/preview",
+        method: "POST",
+        body,
+      }),
+    }),
   }),
 });
 
@@ -1322,4 +1332,5 @@ export const {
   useUnpinChatMutation,
   useSearchQuery,
   useGetModelsQuery,
+  usePreviewModelsMutation,
 } = api;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -19,6 +19,7 @@ import {
   RotateCcw,
   PanelRight,
   PanelRightClose,
+  Search,
   X,
 } from 'lucide-react'
 import {
@@ -52,6 +53,7 @@ import {
 } from '@agent-desk/ui'
 import { BackgroundBlobs } from '@/components/layout/BackgroundBlobs'
 import { SIDEBAR_ROW_STATE_CLASS, SidebarAccountMenu } from '@/components/layout/sidebarShared'
+import { useGlobalPalette } from '@/components/global-palette/GlobalPaletteProvider'
 import { SectionHeader, SectionBody } from '@/components/shared/SectionHeader'
 import { SectionEmptyState } from '@/components/shared/SectionEmptyState'
 import { RowKebab } from '@/components/shared/RowKebab'
@@ -80,14 +82,22 @@ import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'
 import { useHomePins, removeHomePin, type HomePinKind } from '@/hooks/use-home-pins'
 import { useHomeSections, HOME_SECTION_LABELS, type HomeSectionKey } from '@/hooks/use-home-sections'
 import { generateHomeDigest, type HomeDigest } from '@/lib/home-summary'
-import { buildPath, type RouteView } from '@/router/nav'
+import {
+  buildPath,
+  encodeAccountSettings,
+  mergeSearch,
+  parseAccountSettings,
+  type AccountSettingsSectionId,
+  type AccountSettingsState,
+  type ModelsFocus,
+  type RouteView,
+} from '@/router/nav'
 import { buildDefaultViewPath } from '@/App'
 import { logout } from '@/auth/session'
 import { DeskWordmark } from './DeskWordmark'
 import { CreateWorkspaceModal } from './CreateWorkspaceModal'
 import { HomeSettingsPopover } from './HomeSettingsPopover'
 import { AskAiView } from './AskAiView'
-import { AskAiSidePanel } from './AskAiSidePanel'
 import { HomeTaskList } from './HomeTaskList'
 import { HomeSectionTabs } from './HomeSectionTabs'
 import { TaskChatPanel } from '@/components/tasks/TaskChatPanel'
@@ -112,6 +122,11 @@ import {
 // Main column — matches the Tasks page (`max-w-4xl`) so Home and a
 // room view share one content rhythm.
 const COLUMN = 'w-full max-w-4xl min-w-0 mx-auto'
+
+// Set on the user's very first visit to Home. Until it's present, an
+// unparameterised Home URL redirects to `?view=askai` so a brand-new
+// account lands in the Ask AI chat instead of the (empty) day digest.
+const HOME_VISITED_KEY = 'desk.home.has-visited'
 
 function errMsg(err: unknown): string | undefined {
   if (typeof err === 'object' && err && 'data' in err) {
@@ -391,13 +406,43 @@ export function HomePage() {
   const { defaultView } = usePrefs()
   const userAvatarUrl = useAvatarUrl(me?.id)
   const [createOpen, setCreateOpen] = useState(false)
-  const [myAccountOpen, setMyAccountOpen] = useState(false)
+  // Account modal state lives in the URL (`?account=…`) so reloads
+  // preserve the open section + sub-focus. Mirrors the AppShell wiring
+  // so behavior is consistent from both Home and inside a workspace.
+  const accountState = parseAccountSettings(searchParams.get('account'))
+  const setAccountState = useCallback((state: AccountSettingsState | null) => {
+    const next = `${location.pathname}${mergeSearch(location.search, {
+      account: state ? encodeAccountSettings(state) : null,
+    })}${location.hash}`
+    navigate(next)
+  }, [navigate, location.pathname, location.search, location.hash])
   const [roomsCollapsed, setRoomsCollapsed] = useState(false)
   const [favCollapsed, setFavCollapsed] = useState(false)
   // View is persisted in the URL (`?view=askai`) so a reload — or a
   // bookmark / shared link — keeps the user on the Ask AI screen
   // instead of snapping back to Your day.
   const view: 'day' | 'askai' = searchParams.get('view') === 'askai' ? 'askai' : 'day'
+
+  // First-visit redirect: an unparameterised Home URL on a brand-new
+  // account opens Ask AI rather than the (empty) day digest. Marker is
+  // a single localStorage flag, written once and never cleared, so
+  // every subsequent visit falls back to the normal `?view=` default.
+  // useLayoutEffect runs before paint so the swap doesn't flash 'day'.
+  const firstVisitSyncedRef = useRef(false)
+  useLayoutEffect(() => {
+    if (firstVisitSyncedRef.current) return
+    firstVisitSyncedRef.current = true
+    if (searchParams.has('view')) return
+    try {
+      if (window.localStorage.getItem(HOME_VISITED_KEY)) return
+      window.localStorage.setItem(HOME_VISITED_KEY, '1')
+      const sp = new URLSearchParams(searchParams)
+      sp.set('view', 'askai')
+      setSearchParams(sp, { replace: true })
+    } catch {
+      // localStorage unavailable — fall through to the day digest.
+    }
+  }, [searchParams, setSearchParams])
   // Hrefs for the top-level nav (Your day / Ask AI). Built from the
   // current URL so other params (`?task=<id>`) survive a view switch
   // AND so middle-click / cmd-click opens the same URL in a new tab.
@@ -412,14 +457,9 @@ export function HomePage() {
     sp.set('view', 'askai')
     return `${location.pathname}?${sp.toString()}`
   }, [searchParams, location.pathname])
-  // Ask AI right-side panel (Files / Tasks stub) — persisted across
-  // reloads, mirrors the chat view's `panelOpen` pattern.
-  const [askAiPanelOpen, setAskAiPanelOpen] = usePersistedState<boolean>(
-    'home.askai.panelOpen',
-    false,
-  )
   const [pendingDeleteWs, setPendingDeleteWs] = useState<ServerWorkspace | null>(null)
 
+  const palette = useGlobalPalette()
   const homePins = useHomePins()
   // The Summary section is always shown (its popover checkbox is
   // disabled-checked); the other three are user-toggleable via the
@@ -836,24 +876,7 @@ export function HomePage() {
                 </DropdownMenuContent>
               </DropdownMenu>
             </>
-          ) : (
-            // Ask AI view: only a side-panel toggle (Files / Tasks),
-            // mirroring the chat view's `RoomTopBarActions` button.
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-foreground"
-              onClick={() => setAskAiPanelOpen(v => !v)}
-              aria-label={askAiPanelOpen ? 'Close side panel' : 'Open side panel'}
-              data-testid="home-askai-panel-toggle"
-            >
-              {askAiPanelOpen ? (
-                <PanelRightClose className="h-4 w-4" />
-              ) : (
-                <PanelRight className="h-4 w-4" />
-              )}
-            </Button>
-          )}
+          ) : null}
         </div>
       </div>{/* /home top bar */}
 
@@ -1046,11 +1069,22 @@ export function HomePage() {
           </SidebarContent>
 
           <SidebarFooter className="bg-transparent p-0">
+            <SidebarMenu className="pb-1">
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  onClick={() => palette.open()}
+                  className={cn(SIDEBAR_ROW_STATE_CLASS, 'text-foreground')}
+                >
+                  <Search className="h-4 w-4 text-muted-foreground" />
+                  <span>Search</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
             <SidebarAccountMenu
               username={me?.username}
               email={me?.email}
               userAvatarUrl={userAvatarUrl}
-              onOpenMyAccount={() => setMyAccountOpen(true)}
+              onOpenMyAccount={() => setAccountState({ section: 'account', modelsFocus: null })}
               onSignOut={() => void logout()}
             />
           </SidebarFooter>
@@ -1058,29 +1092,11 @@ export function HomePage() {
       </Sidebar>
 
       {view === 'askai' ? (
-        // Ask AI view: chat column + animated right-side panel
-        // (Files / Tasks stub). Mirrors the chat view's flex-row +
-        // AnimatePresence shape.
+        // Ask AI view: AskAiView renders the regular ChatView, which
+        // brings its own Files/Tasks right panel and top-bar actions —
+        // no Home-specific side panel needed.
         <main className="relative z-10 flex min-h-0 flex-1 flex-row overflow-hidden">
-          <div className="flex flex-1 min-w-0 min-h-0 flex-col">
-            <AskAiView />
-          </div>
-          <AnimatePresence initial={false}>
-            {askAiPanelOpen && (
-              <motion.div
-                key="home-askai-panel"
-                initial={{ width: 0 }}
-                animate={{ width: 290 }}
-                exit={{ width: 0 }}
-                transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
-                className="shrink-0 flex flex-col overflow-hidden"
-              >
-                <div className="h-full w-[290px] min-w-0">
-                  <AskAiSidePanel />
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+          <AskAiView />
         </main>
       ) : (
         // Day view — home scroll content. The docked task-chat panel
@@ -1245,7 +1261,18 @@ export function HomePage() {
         onOpenChange={setCreateOpen}
         onCreated={openRoom}
       />
-      <MyAccountModal open={myAccountOpen} onOpenChange={setMyAccountOpen} />
+      <MyAccountModal
+        open={accountState !== null}
+        onOpenChange={(open) => { if (!open) setAccountState(null) }}
+        activeSection={accountState?.section ?? 'account'}
+        onChangeSection={(section: AccountSettingsSectionId) =>
+          setAccountState({ section, modelsFocus: null })
+        }
+        modelsFocus={accountState?.modelsFocus ?? null}
+        onChangeModelsFocus={(focus: ModelsFocus) =>
+          setAccountState({ section: 'models', modelsFocus: focus })
+        }
+      />
     </SidebarProvider>
   )
 }

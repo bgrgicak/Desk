@@ -84,4 +84,24 @@ export async function resolveLocalSourceEnv(
   return out;
 }
 
+/**
+ * Env-var map for every local source detected on this host, regardless of
+ * user opt-in. Use only for read-only listing surfaces (e.g. the model
+ * picker): we want users to see Codex models in the dropdown the moment
+ * their host has a valid sign-in, without having to first commit to
+ * "enabled" — that opt-in is the runtime concern and is set when the
+ * agent is actually saved/run.
+ */
+export function resolveAvailableLocalSourceEnv(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const kind of LOCAL_SOURCE_KINDS) {
+    const status = LOCAL_SOURCES[kind].detect();
+    if (!status.available) continue;
+    const env = loadLocalSourceEnv(kind);
+    if (!env) continue;
+    Object.assign(out, env);
+  }
+  return out;
+}
+
 export type { LocalSource, LocalSourceKind, LocalSourceStatus } from "./types.js";

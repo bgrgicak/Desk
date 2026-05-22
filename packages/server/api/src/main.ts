@@ -123,7 +123,14 @@ async function main(): Promise<void> {
 
   // One-shot schema + seed. Idempotent — safe on every boot.
   await runMigrations(pool);
-  await seedIfEmpty(pool);
+  // Fresh installs no longer get a default `desk` user — the first
+  // visitor goes through the signup screen and chooses their own
+  // credentials. Operators who want a scripted/preseeded account opt
+  // in by setting DESK_SEED_PASSWORD (and optionally
+  // DESK_SEED_USERNAME).
+  if (process.env.DESK_SEED_PASSWORD) {
+    await seedIfEmpty(pool);
+  }
   await pruneExpiredSessions(pool);
 
   // Boot-time visibility for the on-disk root. A silent split between this

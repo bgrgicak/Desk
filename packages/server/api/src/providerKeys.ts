@@ -50,19 +50,18 @@ export async function resolveProviderKeys(
   userId?: string,
   workspaceId?: string,
 ): Promise<Record<string, string>> {
-  let resolvedUserId = userId;
-  if (!resolvedUserId) {
-    const { rows } = await pool.query<{ id: string }>("SELECT id FROM users ORDER BY created_at LIMIT 1");
-    if (rows.length === 0) return {};
-    resolvedUserId = rows[0].id;
-  }
+  // No userId → no keys. Refuse to fall back to "the first user in the
+  // table" — that would silently forward one user's credentials to a
+  // caller that hasn't proven they're that user. Better to return {} and
+  // let the sandbox surface a missing-key error than to leak a key.
+  if (!userId) return {};
 
   const ctx: ResolutionContext = {
     pool,
     vault,
-    userId: resolvedUserId,
+    userId,
     workspaceId,
-    providerMeta: await queries.userSettings.getProviderMeta(pool, resolvedUserId),
+    providerMeta: await queries.userSettings.getProviderMeta(pool, userId),
     workspaceGrants: workspaceId ? await queries.connectors.listWorkspaceGrants(pool, workspaceId) : [],
   };
 
@@ -70,9 +69,9 @@ export async function resolveProviderKeys(
   // is about to return empty, and one log line per call is enough signal
   // to debug "I added a key but the sandbox can't see it" without
   // multiplying noise by the number of registered providers.
-  if (vault && vault.isLocked(resolvedUserId)) {
+  if (vault && vault.isLocked(userId)) {
     log.warn(
-      `resolveProviderKeys: vault is locked for user ${resolvedUserId} — ` +
+      `resolveProviderKeys: vault is locked for user ${userId} — ` +
         `no connector credentials will be forwarded to the sandbox until /vault/unlock`,
     );
   }

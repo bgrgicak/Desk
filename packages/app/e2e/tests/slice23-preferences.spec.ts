@@ -11,8 +11,8 @@ import { test, expect } from "../fixtures";
 test("preferences toggle persists across reload", async ({ loggedInPage }) => {
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
 
-  // Open Customize → Preferences.
-  await loggedInPage.getByRole("button", { name: /Customize/ }).click();
+  // Open Settings → Preferences.
+  await loggedInPage.getByRole("button", { name: /Settings/ }).click();
   let dialog = loggedInPage.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Preferences$/ }).click();
 
@@ -22,10 +22,10 @@ test("preferences toggle persists across reload", async ({ loggedInPage }) => {
   // Pick a non-default view ("tasks") to verify persistence.
   await dialog.getByTestId("prefs-default-view-tasks").click();
 
-  // Reload, re-open Customize → Preferences. The value must stick.
+  // Reload, re-open Settings → Preferences. The value must stick.
   await loggedInPage.reload();
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
-  await loggedInPage.getByRole("button", { name: /Customize/ }).click();
+  await loggedInPage.getByRole("button", { name: /Settings/ }).click();
   dialog = loggedInPage.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Preferences$/ }).click();
 
