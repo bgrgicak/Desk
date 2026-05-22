@@ -5,7 +5,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, queries, runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { Pool, queries, runMigrations, insertSeedFixture } from "@roomy-ai/db";
 import { createRunManager } from "@roomy-ai/scheduler";
 import { generateId } from "@roomy-ai/shared";
 import { chatArtifactsDir, ensureLayout, ensureWorkspaceLayout } from "@roomy-ai/storage";
@@ -31,9 +31,7 @@ beforeAll(async () => {
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.ROOMY_SEED_USERNAME = "artifact-user";
-  process.env.ROOMY_SEED_PASSWORD = "pw";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "artifact-user", password: "pw" });
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-sandbox-artifacts-"));
   await ensureLayout(home);
@@ -68,7 +66,7 @@ beforeAll(async () => {
   port = (server.address() as net.AddressInfo).port;
 
   const login = await httpJson("POST", "/auth/login", undefined, {
-    username: "artifact-user",
+    email: "artifact-user@roomy.local",
     password: "pw",
   });
   authToken = (login.body as { token: string }).token;

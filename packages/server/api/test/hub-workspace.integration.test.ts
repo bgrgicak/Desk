@@ -101,7 +101,7 @@ beforeAll(async () => {
   await ensureHubsForAllUsers(pool, home);
 
   const login = await request("POST", "/auth/login", null, {
-    username: userSlug,
+    email: "hubuser@example.com",
     password: "pw",
   });
   token = (login.body as { token: string }).token;
@@ -499,7 +499,7 @@ describe("GET /me/ask-ai-chat", () => {
     );
 
     const login = await request("POST", "/auth/login", null, {
-      username: regUserSlug,
+      email: "askai-regression@example.com",
       password: "pw",
     });
     const regToken = (login.body as { token: string }).token;

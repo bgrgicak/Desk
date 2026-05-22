@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  SEED_EMAIL,
   SEED_PASSWORD,
-  SEED_USERNAME,
   fetchToken,
   seedSessionToken,
 } from "./auth";
@@ -53,7 +53,7 @@ export const test = base.extend<Fixtures>({
   },
 
   token: async ({ serverUrl }, use) => {
-    await use(await fetchToken(serverUrl, SEED_USERNAME, SEED_PASSWORD));
+    await use(await fetchToken(serverUrl, SEED_EMAIL, SEED_PASSWORD));
   },
 
   loggedInPage: async ({ page, baseURL, serverUrl, token }, use) => {

@@ -102,7 +102,7 @@ beforeAll(async () => {
   anchorChatId = generateId("chat");
   await queries.chats.insert(pool, { id: anchorChatId, workspaceId, agentId, title: "Anchor" });
 
-  const login = await request("POST", "/auth/login", { username: "ts_user", password: "ts-pw-XX" });
+  const login = await request("POST", "/auth/login", { email: "ts@example.com", password: "ts-pw-XX" });
   token = (login.body as { token: string }).token;
 });
 

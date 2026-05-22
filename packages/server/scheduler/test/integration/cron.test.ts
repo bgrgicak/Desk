@@ -8,7 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Cron } from "croner";
 import { Pool } from "@roomy-ai/db";
-import { runMigrations, seedIfEmpty, queries } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture, queries } from "@roomy-ai/db";
 import { generateId } from "@roomy-ai/shared";
 import { createRunManager } from "../../src/runs.js";
 
@@ -23,9 +23,7 @@ beforeAll(async () => {
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.ROOMY_SEED_USERNAME = "cron-user";
-  process.env.ROOMY_SEED_PASSWORD = "pw";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "cron-user", password: "pw" });
 
   const { rows: wsRows } = await pool.query("SELECT id FROM workspaces LIMIT 1");
   const workspaceId = wsRows[0].id as string;

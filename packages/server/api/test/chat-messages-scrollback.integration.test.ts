@@ -146,7 +146,7 @@ beforeAll(async () => {
   const loginRes = await new Promise<{ status: number; body: unknown }>(
     (resolve, reject) => {
       const payload = JSON.stringify({
-        username: "scrollback_user",
+        email: "scrollback@example.com",
         password: "pw-scrollback",
       });
       const req = http.request(

@@ -36,7 +36,7 @@ import { Pool, runMigrations } from "@roomy-ai/db";
 import { ensureLayout } from "@roomy-ai/storage";
 import { createRunManager } from "@roomy-ai/scheduler";
 import { createApp, type AppOptions } from "../src/app.js";
-import { seedIfEmpty } from "@roomy-ai/db";
+import { insertSeedFixture } from "@roomy-ai/db";
 
 let pool: Pool;
 let home: string;
@@ -115,9 +115,7 @@ beforeAll(async () => {
 
   // Seed with the documented public seed password — the only
   // configuration that flips must_change_password=1 on the user row.
-  process.env.ROOMY_SEED_USERNAME = SEED_USERNAME;
-  process.env.ROOMY_SEED_PASSWORD = SEED_PASSWORD;
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: SEED_USERNAME, password: SEED_PASSWORD });
 
   server = createApp(appOpts());
   await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -132,15 +130,13 @@ afterAll(async () => {
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
   delete process.env.ROOMY_HOME;
-  delete process.env.ROOMY_SEED_USERNAME;
-  delete process.env.ROOMY_SEED_PASSWORD;
 });
 
 describe("must-change-password — full SPA-shaped boot flow", () => {
   it("steps a user from the gated state through password change and into the normal API", async () => {
     // ── 1. Login with the documented public seed password ─────────
     const login = await jsonRequest("POST", "/auth/login", {
-      body: { username: SEED_USERNAME, password: SEED_PASSWORD },
+      body: { email: `${SEED_USERNAME}@roomy.local`, password: SEED_PASSWORD },
     });
     expect(login.status).toBe(200);
     const token = (login.body as { token: string }).token;
@@ -193,7 +189,7 @@ describe("must-change-password — full SPA-shaped boot flow", () => {
     // Fresh user with the gate set so re-running this spec doesn't
     // get tangled with the round-trip above (which clears the flag).
     const login = await jsonRequest("POST", "/auth/login", {
-      body: { username: SEED_USERNAME, password: "fresh-password-strong-1" },
+      body: { email: `${SEED_USERNAME}@roomy.local`, password: "fresh-password-strong-1" },
     });
     // After the round-trip test we changed the password; if THIS test
     // runs after that, the seed value no longer logs in.  Skip in

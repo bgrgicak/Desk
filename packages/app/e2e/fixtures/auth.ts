@@ -3,16 +3,20 @@ import type { BrowserContext, Page } from "@playwright/test";
 /** Default seeded creds, matching the Playwright server fixture. */
 export const SEED_USERNAME = "e2e";
 export const SEED_PASSWORD = "e2e";
+// Email is the login identifier on the server. The harness's
+// insertSeedFixture call builds it as `${SEED_USERNAME}@roomy.local`, so
+// keep this in lockstep with `SEED_USERNAME` above.
+export const SEED_EMAIL = `${SEED_USERNAME}@roomy.local`;
 
 export async function fetchToken(
   serverUrl: string,
-  username = SEED_USERNAME,
+  email = SEED_EMAIL,
   password = SEED_PASSWORD,
 ): Promise<string> {
   const res = await fetch(`${serverUrl}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ email, password }),
   });
   if (res.status !== 200) {
     throw new Error(`login failed: ${res.status} ${await res.text()}`);

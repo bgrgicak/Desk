@@ -13,7 +13,7 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { Pool, runMigrations, insertSeedFixture } from "@roomy-ai/db";
 import { createRunManager } from "@roomy-ai/scheduler";
 import { generateId } from "@roomy-ai/shared";
 import {
@@ -43,9 +43,7 @@ beforeAll(async () => {
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.ROOMY_SEED_USERNAME = "attach-int-user";
-  process.env.ROOMY_SEED_PASSWORD = "pw";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "attach-int-user", password: "pw" });
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-attach-int-"));
   await ensureLayout(home);
@@ -91,7 +89,7 @@ beforeAll(async () => {
   port = (server.address() as net.AddressInfo).port;
 
   const login = await httpRaw("POST", "/auth/login", {
-    body: { username: "attach-int-user", password: "pw" },
+    body: { email: "attach-int-user@roomy.local", password: "pw" },
   });
   authToken = (login.bodyJson as { token: string }).token;
 });

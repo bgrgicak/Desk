@@ -5,7 +5,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, queries, runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { Pool, queries, runMigrations, insertSeedFixture } from "@roomy-ai/db";
 import { createRunManager } from "@roomy-ai/scheduler";
 import { generateId } from "@roomy-ai/shared";
 import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@roomy-ai/storage";
@@ -34,9 +34,7 @@ beforeAll(async () => {
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.ROOMY_SEED_USERNAME = "search-user";
-  process.env.ROOMY_SEED_PASSWORD = "pw";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "search-user", password: "pw" });
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-sandbox-search-"));
   await ensureLayout(home);

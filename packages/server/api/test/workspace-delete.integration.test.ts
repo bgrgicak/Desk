@@ -83,7 +83,7 @@ beforeAll(async () => {
     email: "wsd@example.com",
   });
   const login = await request("POST", "/auth/login", null, {
-    username: "ws-delete-user",
+    email: "wsd@example.com",
     password: "pw",
   });
   token = (login.body as { token: string }).token;

@@ -93,7 +93,7 @@ async function seedUser(suffix: string): Promise<SeededUser> {
     [chatB, wsB, agentId, `chat-${suffix}-B`],
   );
 
-  const login = await request("POST", "/auth/login", null, { username, password });
+  const login = await request("POST", "/auth/login", null, { email: `${username}@example.com`, password });
   const token = (login.body as { token: string }).token;
 
   return { token, wsA, wsB, agentId, chatA, chatB };

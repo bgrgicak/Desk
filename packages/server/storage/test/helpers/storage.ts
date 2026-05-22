@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Pool } from "@roomy-ai/db";
-import { runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
 import { generateId } from "@roomy-ai/shared";
 import { ensureLayout, ensureWorkspaceLayout } from "../../src/layout.js";
 
@@ -24,9 +24,7 @@ export async function setupTestStorage(): Promise<TestStorageContext> {
   await runMigrations(pool);
 
   // Seed default data
-  process.env.ROOMY_SEED_USERNAME = "testuser";
-  process.env.ROOMY_SEED_PASSWORD = "testpass";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "testpass" });
 
   // Get workspace and create a chat for tests
   const { rows: wsRows } = await pool.query("SELECT id, path FROM workspaces LIMIT 1");

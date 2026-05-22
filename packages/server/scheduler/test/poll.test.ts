@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Pool } from "@roomy-ai/db";
-import { runMigrations, seedIfEmpty, queries } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture, queries } from "@roomy-ai/db";
 import { generateId } from "@roomy-ai/shared";
 import { Cron } from "croner";
 import { createRunManager } from "../src/runs.js";
@@ -21,9 +21,7 @@ beforeAll(async () => {
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.ROOMY_SEED_USERNAME = "testuser";
-  process.env.ROOMY_SEED_PASSWORD = "testpass";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "testpass" });
 
   const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");
   agentId = agentRows[0].id as string;

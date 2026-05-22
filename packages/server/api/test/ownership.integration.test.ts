@@ -86,7 +86,7 @@ async function seedUser(suffix: string): Promise<Seeded> {
   );
 
   const login = await request("POST", "/auth/login", null, {
-    username,
+    email: `${username}@example.com`,
     password,
   });
   const token = (login.body as { token: string }).token;

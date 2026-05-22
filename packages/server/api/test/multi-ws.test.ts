@@ -10,7 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { Pool } from "@roomy-ai/db";
-import { runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
 import { ensureLayout } from "@roomy-ai/storage";
 import { createRunManager } from "@roomy-ai/scheduler";
 import { createApp } from "../src/app.js";
@@ -29,9 +29,7 @@ beforeAll(async () => {
   pool = new Pool({ path: dbPath });
 
   await runMigrations(pool);
-  process.env.ROOMY_SEED_USERNAME = "testuser";
-  process.env.ROOMY_SEED_PASSWORD = "test-pass-1234";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "test-pass-1234" });
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-multi-ws-"));
   await ensureLayout(home);
@@ -134,7 +132,7 @@ describe("multi-client WS sync", () => {
   it("connection B receives event when connection A triggers a mutation via HTTP", async () => {
     // Login
     const loginRes = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     const token = (loginRes.body as { token: string }).token;

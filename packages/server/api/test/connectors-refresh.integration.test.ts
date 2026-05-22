@@ -16,7 +16,7 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, seedIfEmpty, queries } from "@roomy-ai/db";
+import { Pool, runMigrations, insertSeedFixture, queries } from "@roomy-ai/db";
 import { ensureLayout } from "@roomy-ai/storage";
 import { createRunManager } from "@roomy-ai/scheduler";
 import {
@@ -52,9 +52,7 @@ beforeAll(async () => {
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.ROOMY_SEED_USERNAME = "connref-api";
-  process.env.ROOMY_SEED_PASSWORD = "connref-pass";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "connref-api", password: "connref-pass" });
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-connref-api-home-"));
   await ensureLayout(home);
@@ -101,7 +99,7 @@ beforeAll(async () => {
 
   // Login + create a workspace + chat with a stamped pi session id.
   const login = await request("POST", "/auth/login", undefined, {
-    username: "connref-api", password: "connref-pass",
+    email: "connref-api@roomy.local", password: "connref-pass",
   });
   token = login.body.token;
   const ws = await request("POST", "/workspaces", token, { name: "Refresh WS" });

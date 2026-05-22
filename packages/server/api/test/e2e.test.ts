@@ -11,7 +11,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { Pool, queries } from "@roomy-ai/db";
-import { runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
 import { ensureLayout, materializeSummary } from "@roomy-ai/storage";
 import { createApp, type AppOptions } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
@@ -32,9 +32,7 @@ beforeAll(async () => {
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.ROOMY_SEED_USERNAME = "testuser";
-  process.env.ROOMY_SEED_PASSWORD = "test-pass-1234";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "test-pass-1234" });
 
   // Create temp home directory with storage layout
   home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-api-e2e-"));
@@ -184,7 +182,7 @@ describe("API e2e (real Postgres)", () => {
 
   it("POST /auth/login authenticates against real DB", async () => {
     const res = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     expect(res.status).toBe(200);
@@ -363,7 +361,7 @@ describe("API e2e (real Postgres)", () => {
   it("POST /auth/logout invalidates the session", async () => {
     // Login to get a new token to revoke
     const loginRes = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     const tempToken = (loginRes.body as { token: string }).token;
@@ -379,7 +377,7 @@ describe("API e2e (real Postgres)", () => {
   it("WebSocket upgrade with real session delivers broadcast events", async () => {
     // Login fresh
     const loginRes = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     const wsToken = (loginRes.body as { token: string }).token;
@@ -991,7 +989,7 @@ describe("API e2e (real Postgres)", () => {
 
   it("invalid login returns 401", async () => {
     const res = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "wrongpassword",
     });
     expect(res.status).toBe(401);
@@ -1084,9 +1082,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
     realPool = new Pool({ path: realDbPath });
 
     await runMigrations(realPool);
-    process.env.ROOMY_SEED_USERNAME = "testuser";
-    process.env.ROOMY_SEED_PASSWORD = "test-pass-1234";
-    await seedIfEmpty(realPool);
+  await insertSeedFixture(realPool);
     const { rows: workspaceRows } = await realPool.query("SELECT id FROM workspaces");
     realWorkspaceIds = workspaceRows.map((row) => row.id as string);
 
@@ -1148,7 +1144,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
   it("sends a message through the full real stack and gets an assistant response", async () => {
     // Login
     const loginRes = await realRequest("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     expect(loginRes.status).toBe(200);
@@ -1199,7 +1195,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
   it("user memory.md is rendered into the agent file at run time", async () => {
     if (!realToken) {
       const loginRes = await realRequest("POST", "/auth/login", undefined, {
-        username: "testuser",
+        email: "testuser@roomy.local",
         password: "test-pass-1234",
       });
       realToken = (loginRes.body as { token: string }).token;
@@ -1272,7 +1268,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
   it.skipIf(!!process.env.CI)("spawns a sub-task, auto-fires it, completes it, and delivers a report-back to the parent chat", async () => {
     if (!realToken) {
       const loginRes = await realRequest("POST", "/auth/login", undefined, {
-        username: "testuser",
+        email: "testuser@roomy.local",
         password: "test-pass-1234",
       });
       realToken = (loginRes.body as { token: string }).token;

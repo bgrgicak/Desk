@@ -83,7 +83,7 @@ async function seedUser(suffix: string): Promise<{
     description: "",
     icon: "",
   });
-  const login = await request("POST", "/auth/login", null, { username, password });
+  const login = await request("POST", "/auth/login", null, { email: `${username}@example.com`, password });
   const token = (login.body as { token: string }).token;
   return { userId, token, workspaceId };
 }

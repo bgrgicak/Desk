@@ -22,7 +22,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Pool } from "@roomy-ai/db";
-import { runMigrations, seedIfEmpty, queries } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture, queries } from "@roomy-ai/db";
 import { ensureLayout } from "@roomy-ai/storage";
 import { createRunManager } from "@roomy-ai/scheduler";
 import { generateId } from "@roomy-ai/shared";
@@ -49,9 +49,7 @@ beforeAll(async () => {
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.ROOMY_SEED_USERNAME = "attach-user";
-  process.env.ROOMY_SEED_PASSWORD = "pw";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "attach-user", password: "pw" });
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-msg-attach-"));
   await ensureLayout(home);
@@ -120,7 +118,7 @@ function request(method: string, urlPath: string, body?: unknown, bearer?: strin
 }
 
 async function login(): Promise<string> {
-  const res = await request("POST", "/auth/login", { username: "attach-user", password: "pw" });
+  const res = await request("POST", "/auth/login", { email: "attach-user@roomy.local", password: "pw" });
   return (res.body as { token: string }).token;
 }
 

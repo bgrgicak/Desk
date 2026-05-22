@@ -20,7 +20,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Pool } from "@roomy-ai/db";
-import { runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
 import { ensureLayout } from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
@@ -67,9 +67,7 @@ beforeAll(async () => {
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.ROOMY_SEED_USERNAME = "ls-test";
-  process.env.ROOMY_SEED_PASSWORD = "ls-pass";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "ls-test", password: "ls-pass" });
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-local-sources-home-"));
   await ensureLayout(home);
@@ -142,7 +140,7 @@ describe("/me/providers/local", () => {
 
   beforeAll(async () => {
     const login = await request("POST", "/auth/login", undefined, {
-      username: "ls-test",
+      email: "ls-test@roomy.local",
       password: "ls-pass",
     });
     token = (login.body as { token: string }).token;
@@ -207,7 +205,7 @@ describe("resolveLocalSourceEnv", () => {
     const { rows } = await pool.query("SELECT id FROM users LIMIT 1");
     userId = rows[0].id as string;
     const login = await request("POST", "/auth/login", undefined, {
-      username: "ls-test",
+      email: "ls-test@roomy.local",
       password: "ls-pass",
     });
     token = (login.body as { token: string }).token;

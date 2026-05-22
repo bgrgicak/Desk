@@ -23,7 +23,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Pool } from "@roomy-ai/db";
-import { runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
 import { ensureLayout } from "@roomy-ai/storage";
 import { createRunManager } from "@roomy-ai/scheduler";
 import { detectEngine, sandboxImage, type Engine } from "@roomy-ai/runtime";
@@ -57,9 +57,7 @@ beforeAll(async () => {
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.ROOMY_SEED_USERNAME = "testuser";
-  process.env.ROOMY_SEED_PASSWORD = "test-pass-1234";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "test-pass-1234" });
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-tools-models-it-"));
   await ensureLayout(home);
@@ -78,7 +76,7 @@ beforeAll(async () => {
   port = (server.address() as net.AddressInfo).port;
 
   const loginRes = await httpJson("POST", "/auth/login", undefined, {
-    username: "testuser",
+    email: "testuser@roomy.local",
     password: "test-pass-1234",
   });
   token = (loginRes.body as { token: string }).token;

@@ -21,7 +21,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { Pool } from "@roomy-ai/db";
-import { runMigrations, seedIfEmpty, queries } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture, queries } from "@roomy-ai/db";
 import { ensureLayout } from "@roomy-ai/storage";
 import { generateId } from "@roomy-ai/shared";
 import { createApp } from "../src/app.js";
@@ -45,9 +45,7 @@ beforeAll(async () => {
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.ROOMY_SEED_USERNAME = "vault-test";
-  process.env.ROOMY_SEED_PASSWORD = "vault-pass";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "vault-test", password: "vault-pass" });
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-vault-home-"));
   await ensureLayout(home);
@@ -76,7 +74,7 @@ beforeAll(async () => {
 
   // Login.
   const login = await request("POST", "/auth/login", undefined, {
-    username: "vault-test",
+    email: "vault-test@roomy.local",
     password: "vault-pass",
   });
   token = (login.body as { token: string }).token;
@@ -330,7 +328,7 @@ describe("logout locks the vault when no other sessions remain", () => {
     // Open a second session for the same user — logout of one shouldn't
     // lock the vault while the other is still alive.
     const login2 = await request("POST", "/auth/login", undefined, {
-      username: "vault-test",
+      email: "vault-test@roomy.local",
       password: "vault-pass",
     });
     extraToken = (login2.body as { token: string }).token;
@@ -349,7 +347,7 @@ describe("logout locks the vault when no other sessions remain", () => {
     // The token we just logged out is dead now, so we can't query
     // status with it. Re-login and check.
     const login = await request("POST", "/auth/login", undefined, {
-      username: "vault-test",
+      email: "vault-test@roomy.local",
       password: "vault-pass",
     });
     const fresh = (login.body as { token: string }).token;

@@ -12,7 +12,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Pool } from "@roomy-ai/db";
-import { runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
 import { ensureLayout } from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
@@ -31,9 +31,7 @@ beforeAll(async () => {
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.ROOMY_SEED_USERNAME = "prov-test";
-  process.env.ROOMY_SEED_PASSWORD = "prov-pass";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "prov-test", password: "prov-pass" });
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-providers-del-home-"));
   await ensureLayout(home);
@@ -98,7 +96,7 @@ describe("PUT /me/providers — remove connection", () => {
 
   beforeAll(async () => {
     const res = await request("POST", "/auth/login", undefined, {
-      username: "prov-test",
+      email: "prov-test@roomy.local",
       password: "prov-pass",
     });
     token = (res.body as { token: string }).token;

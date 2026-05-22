@@ -9,7 +9,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { createPool, queries, runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { createPool, queries, runMigrations } from "@roomy-ai/db";
 import {
   ensureLayout,
   ensureWorkspaceLayout,
@@ -121,16 +121,14 @@ async function main(): Promise<void> {
   // ROOMY_PRE_MIGRATION_BACKUP_KEEP (default 10).
   await snapshotBeforeMigrations(pool, ROOMY_HOME, ROOMY_DB_PATH);
 
-  // One-shot schema + seed. Idempotent — safe on every boot.
+  // One-shot schema. Idempotent — safe on every boot.
   await runMigrations(pool);
-  // Fresh installs no longer get a default `desk` user — the first
-  // visitor goes through the signup screen and chooses their own
-  // credentials. Operators who want a scripted/preseeded account opt
-  // in by setting ROOMY_SEED_PASSWORD (and optionally
-  // ROOMY_SEED_USERNAME).
-  if (process.env.ROOMY_SEED_PASSWORD) {
-    await seedIfEmpty(pool);
-  }
+  // No user is ever auto-created at boot. The first visitor goes
+  // through the signup wizard (`/auth/signup`), which is unlocked
+  // automatically on a fresh install (empty users table) by the
+  // `firstRun` branch of `/auth/signup-status`. The wizard creates
+  // the user, the optional first room, and the vault atomically, so
+  // a fresh boot never lands on the legacy VaultGate setup screen.
   await pruneExpiredSessions(pool);
 
   // Boot-time visibility for the on-disk root. A silent split between this

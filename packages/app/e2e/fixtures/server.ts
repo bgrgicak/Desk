@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as net from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { createPool, runMigrations, insertSeedFixture } from "@roomy-ai/db";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..", "..");
@@ -78,18 +79,36 @@ export async function startRoomyServer(
   const home = await fs.mkdtemp(path.join(os.tmpdir(), `roomy-app-e2e-${runId}-`));
   const port = await pickFreePort();
 
+  // Seed the test user + first workspace + first agent BEFORE the server
+  // starts. Production boot no longer auto-creates a "roomy" account
+  // (the signup wizard owns that flow), so the e2e harness writes the
+  // fixture directly into the per-run SQLite file. Migrations are
+  // idempotent; running them here and again in main.ts is fine.
+  const username = opts.username ?? "e2e";
+  const password = opts.password ?? "e2e";
+  {
+    const pool = createPool({ path: dbPath });
+    try {
+      await runMigrations(pool);
+      await insertSeedFixture(pool, { username, password });
+    } finally {
+      await pool.end();
+    }
+  }
+
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     NODE_ENV: "test",
     PORT: String(port),
     // The api server reads ROOMY_DB_PATH and creates the file on first
-    // open via better-sqlite3. No admin DB or migration ceremony needed
-    // — main.ts runs migrations against an empty file the same way it
-    // does in production.
+    // open via better-sqlite3. We pre-seeded the file above, so main.ts
+    // boots straight into "one existing user" state.
     ROOMY_DB_PATH: dbPath,
     ROOMY_HOME: home,
-    ROOMY_SEED_USERNAME: opts.username ?? "e2e",
-    ROOMY_SEED_PASSWORD: opts.password ?? "e2e",
+    // ROOMY_SEED_USERNAME is still read by handleAutoLogin to pick which
+    // user the auto-login should prefer — keep it in lockstep with the
+    // seed call above for fixtures that flip ROOMY_AUTO_LOGIN back on.
+    ROOMY_SEED_USERNAME: username,
     ROOMY_AUTO_LOGIN: "off",
     // Use the fake sandbox driver so task runs complete instantly without
     // needing Docker or API keys.

@@ -129,7 +129,7 @@ describe("uniform error response shape", () => {
   });
 
   it("400 on invalid /auth/login payload", async () => {
-    const res = await request("POST", "/auth/login", { body: { username: 42, password: 7 } });
+    const res = await request("POST", "/auth/login", { body: { email: 42, password: 7 } });
     // Could be 400 (validation) or 401 (rejected creds). Either way the
     // shape must conform.
     expect([400, 401]).toContain(res.status);

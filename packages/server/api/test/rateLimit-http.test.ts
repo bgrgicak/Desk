@@ -98,7 +98,7 @@ describe("rate limiting — HTTP layer", () => {
     let last;
     for (let i = 0; i < 11; i++) {
       last = await request("POST", "/auth/login", {
-        body: { username: "ratelimit-test", password: "wrong" },
+        body: { email: "ratelimit@example.com", password: "wrong" },
       });
     }
     expect(last?.status).toBe(429);
@@ -109,11 +109,11 @@ describe("rate limiting — HTTP layer", () => {
 
   it("still allows a successful login from a fresh IP after limit was reset", async () => {
     for (let i = 0; i < 11; i++) {
-      await request("POST", "/auth/login", { body: { username: "ratelimit-test", password: "wrong" } });
+      await request("POST", "/auth/login", { body: { email: "ratelimit@example.com", password: "wrong" } });
     }
     clearRateLimits("auth.login");
     const ok = await request("POST", "/auth/login", {
-      body: { username: "ratelimit-test", password: "correct-horse-battery" },
+      body: { email: "ratelimit@example.com", password: "correct-horse-battery" },
     });
     expect(ok.status).toBe(200);
     expect(typeof (ok.body as { token?: string }).token).toBe("string");

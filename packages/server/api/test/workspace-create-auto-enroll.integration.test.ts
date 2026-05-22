@@ -86,7 +86,7 @@ beforeAll(async () => {
     email: "autoenroll@example.com",
   });
   const login = await request("POST", "/auth/login", null, {
-    username: "autoenroll",
+    email: "autoenroll@example.com",
     password: "pw",
   });
   token = (login.body as { token: string }).token;
@@ -149,7 +149,7 @@ describe("POST /workspaces — ensure a default workspace agent", () => {
       email: "noagents@example.com",
     });
     const login = await request("POST", "/auth/login", null, {
-      username: "noagents",
+      email: "noagents@example.com",
       password: "pw",
     });
     const otherToken = (login.body as { token: string }).token;
@@ -205,7 +205,7 @@ describe("POST /workspaces — ensure a default workspace agent", () => {
       email: "repair-noagents@example.com",
     });
     const login = await request("POST", "/auth/login", null, {
-      username: "repair-noagents",
+      email: "repair-noagents@example.com",
       password: "pw",
     });
     const repairToken = (login.body as { token: string }).token;

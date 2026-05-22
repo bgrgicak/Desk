@@ -14,7 +14,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Pool } from "@roomy-ai/db";
-import { runMigrations, seedIfEmpty, queries } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture, queries } from "@roomy-ai/db";
 import { ensureLayout } from "@roomy-ai/storage";
 import { createRunManager } from "@roomy-ai/scheduler";
 import { generateId } from "@roomy-ai/shared";
@@ -43,9 +43,7 @@ beforeAll(async () => {
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.ROOMY_SEED_USERNAME = "msgfire-user";
-  process.env.ROOMY_SEED_PASSWORD = "pw";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "msgfire-user", password: "pw" });
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-msg-fire-"));
   await ensureLayout(home);
@@ -172,7 +170,7 @@ describe("PATCH / DELETE / logs on /chats/{id}/messages/{id}", () => {
     urlPath: string,
     body?: unknown,
   ): Promise<{ status: number; body: unknown }> {
-    const loginRes = await postJson("/auth/login", { username: "msgfire-user", password: "pw" }, null);
+    const loginRes = await postJson("/auth/login", { email: "msgfire-user@roomy.local", password: "pw" }, null);
     const userTok = (loginRes.body as { token: string }).token;
     return new Promise((resolve, reject) => {
       const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${userTok}` };
@@ -554,7 +552,7 @@ describe("Summary versioning via summary-history", () => {
     urlPath: string,
     body?: unknown,
   ): Promise<{ status: number; body: unknown }> {
-    const loginRes = await postJson("/auth/login", { username: "msgfire-user", password: "pw" }, null);
+    const loginRes = await postJson("/auth/login", { email: "msgfire-user@roomy.local", password: "pw" }, null);
     const userTok = (loginRes.body as { token: string }).token;
     return new Promise((resolve, reject) => {
       const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${userTok}` };
@@ -667,7 +665,7 @@ describe("POST /chats/{id}/messages dedupes trigger content (G2)", () => {
     urlPath: string,
     body?: unknown,
   ): Promise<{ status: number; body: unknown }> {
-    const loginRes = await postJson("/auth/login", { username: "msgfire-user", password: "pw" }, null);
+    const loginRes = await postJson("/auth/login", { email: "msgfire-user@roomy.local", password: "pw" }, null);
     const userTok = (loginRes.body as { token: string }).token;
     return new Promise((resolve, reject) => {
       const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${userTok}` };

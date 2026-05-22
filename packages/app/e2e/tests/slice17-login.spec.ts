@@ -7,7 +7,7 @@
  */
 import { test, expect } from "@playwright/test";
 
-const SEED_USERNAME = "e2e";
+const SEED_EMAIL = "e2e@roomy.local";
 const SEED_PASSWORD = "e2e";
 const APP_URL = "http://127.0.0.1:5179";
 
@@ -29,13 +29,13 @@ test("login form rejects bad credentials and accepts good ones", async ({ page }
   await expect(page.getByTestId('login-submit')).toBeVisible();
 
   // Bad credentials surface inline error.
-  await page.getByLabel('Username').fill('not-a-real-user');
+  await page.getByLabel('Email').fill('nobody@example.invalid');
   await page.getByLabel('Password').fill('wrong');
   await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('login-error')).toBeVisible({ timeout: 5_000 });
 
   // Correct credentials reload into the app.
-  await page.getByLabel('Username').fill(SEED_USERNAME);
+  await page.getByLabel('Email').fill(SEED_EMAIL);
   await page.getByLabel('Password').fill(SEED_PASSWORD);
   await page.getByTestId('login-submit').click();
 

@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Pool } from "@roomy-ai/db";
-import { runMigrations, seedIfEmpty, queries } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture, queries } from "@roomy-ai/db";
 import { generateId, type WsEvent } from "@roomy-ai/shared";
 import { createRunManager } from "../src/runs.js";
 import type { LogEvent } from "@roomy-ai/runtime";
@@ -20,9 +20,7 @@ beforeAll(async () => {
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.ROOMY_SEED_USERNAME = "testuser";
-  process.env.ROOMY_SEED_PASSWORD = "testpass";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "testpass" });
 
   const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");
   agentId = agentRows[0].id as string;
@@ -803,8 +801,6 @@ execRunFn: async (_id, _agentId, prompt, onLog) => {
 
     expect(capturedGoal).toBeNull();
   });
-
-
 
   it("populates agentFileInput.goal and chatId from chats.goal so the system prompt sees the goal", async () => {
     let captured: { goal?: unknown; chatId?: unknown } = {};

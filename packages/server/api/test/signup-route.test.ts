@@ -292,20 +292,36 @@ describe("POST /auth/signup", () => {
     expect(ws[0].kind).toBe("hub");
   });
 
-  it("rejects usernames that fail the pattern", async () => {
+  it("rejects empty / too-long / control-char display names", async () => {
     process.env.ROOMY_ENABLE_SIGNUP = "1";
-    const bad = await request("POST", "/auth/signup", {
-      username: "x",
+    // Empty after trimming.
+    const empty = await request("POST", "/auth/signup", {
+      username: "   ",
       email: "alice@example.com",
       password: "correct-horse-battery",
     });
-    expect(bad.status).toBe(400);
-    const spaces = await request("POST", "/auth/signup", {
-      username: "with space",
+    expect(empty.status).toBe(400);
+    // Longer than 80 chars.
+    const tooLong = await request("POST", "/auth/signup", {
+      username: "x".repeat(81),
       email: "alice@example.com",
       password: "correct-horse-battery",
     });
-    expect(spaces.status).toBe(400);
+    expect(tooLong.status).toBe(400);
+    // Display name with embedded control character.
+    const ctrl = await request("POST", "/auth/signup", {
+      username: "badname",
+      email: "alice@example.com",
+      password: "correct-horse-battery",
+    });
+    expect(ctrl.status).toBe(400);
+    // Spaces and short names are now allowed (display name, not handle).
+    const okWithSpace = await request("POST", "/auth/signup", {
+      username: "Al",
+      email: "al@example.com",
+      password: "correct-horse-battery",
+    });
+    expect(okWithSpace.status).toBe(200);
   });
 
   it("rejects malformed emails", async () => {
@@ -338,20 +354,20 @@ describe("POST /auth/signup", () => {
     expect(res.status).toBe(400);
   });
 
-  it("rejects duplicate usernames", async () => {
+  it("allows two users to share the same display name (username is no longer unique)", async () => {
     process.env.ROOMY_ENABLE_SIGNUP = "1";
-    const ok = await request("POST", "/auth/signup", {
+    const first = await request("POST", "/auth/signup", {
       username: "alice",
       email: "alice@example.com",
       password: "correct-horse-battery",
     });
-    expect(ok.status).toBe(200);
-    const dup = await request("POST", "/auth/signup", {
+    expect(first.status).toBe(200);
+    const second = await request("POST", "/auth/signup", {
       username: "alice",
       email: "alice2@example.com",
       password: "another-strong-passphrase",
     });
-    expect(dup.status).toBe(409);
+    expect(second.status).toBe(200);
   });
 
   it("rejects duplicate emails", async () => {
@@ -393,7 +409,7 @@ describe("POST /auth/signup", () => {
     expect(signupRes.status).toBe(200);
     clearRateLimits();
     const loginRes = await request("POST", "/auth/login", {
-      username: "alice",
+      email: "alice@example.com",
       password: "correct-horse-battery",
     });
     expect(loginRes.status).toBe(200);

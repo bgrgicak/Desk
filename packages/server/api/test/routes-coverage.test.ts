@@ -14,7 +14,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Pool } from "@roomy-ai/db";
-import { runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
 import { ensureLayout } from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
@@ -39,9 +39,7 @@ beforeAll(async () => {
 
   await runMigrations(pool);
 
-  process.env.ROOMY_SEED_USERNAME = "testuser";
-  process.env.ROOMY_SEED_PASSWORD = "test-pass-1234";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "test-pass-1234" });
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-routes-cov-"));
   await ensureLayout(home);
@@ -201,7 +199,7 @@ describe("Routes coverage (real Postgres)", () => {
   beforeAll(async () => {
     // Login
     const res = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     token = (res.body as { token: string }).token;
@@ -230,7 +228,7 @@ describe("Routes coverage (real Postgres)", () => {
 
     // Login with new password succeeds
     const okLogin = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "new-pass-strong-1",
     });
     expect(okLogin.status).toBe(200);
@@ -238,7 +236,7 @@ describe("Routes coverage (real Postgres)", () => {
 
     // Login with old password fails
     const failLogin = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     expect(failLogin.status).toBe(401);
@@ -259,7 +257,7 @@ describe("Routes coverage (real Postgres)", () => {
 
     // Login with original password still works
     const okLogin = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     expect(okLogin.status).toBe(200);

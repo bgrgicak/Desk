@@ -15,7 +15,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Pool, queries } from "@roomy-ai/db";
-import { runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
 import { ensureLayout } from "@roomy-ai/storage";
 import { createRunManager } from "@roomy-ai/scheduler";
 import { LOCAL_FILESYSTEM_PROVIDER_ID } from "@roomy-ai/shared";
@@ -36,9 +36,7 @@ beforeAll(async () => {
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.ROOMY_SEED_USERNAME = "testuser";
-  process.env.ROOMY_SEED_PASSWORD = "test-pass-1234";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "test-pass-1234" });
 
   home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-vmount-"));
   await ensureLayout(home);
@@ -143,7 +141,7 @@ function getRaw(
 
 async function login(): Promise<string> {
   const loginRes = await request("POST", "/auth/login", undefined, {
-    username: "testuser",
+    email: "testuser@roomy.local",
     password: "test-pass-1234",
   });
   return (loginRes.body as { token: string }).token;

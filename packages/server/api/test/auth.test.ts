@@ -11,7 +11,8 @@ import {
   verifySession,
   clearSessions,
 } from "../src/auth/sessions.js";
-import { handleAutoLogin } from "../src/routes/auth.js";
+import { handleAutoLogin, handleLogin } from "../src/routes/auth.js";
+import { UnauthorizedError } from "@roomy-ai/shared";
 
 let pool: Pool;
 let userId: string;
@@ -44,6 +45,80 @@ afterEach(async () => {
 afterAll(async () => {
   await pool?.end();
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
+});
+
+describe("password login (handleLogin)", () => {
+  it("authenticates by email + password and returns a session token", async () => {
+    const id = generateId("user");
+    await queries.users.insert(pool, {
+      id,
+      username: "Login Tester",
+      passwordHash: await hashPassword("correct-horse-battery-staple"),
+      email: "login-tester@example.com",
+    });
+
+    const { token } = await handleLogin(pool, {
+      email: "login-tester@example.com",
+      password: "correct-horse-battery-staple",
+    });
+
+    expect(token).toMatch(/^ses_/);
+    expect(await verifySession(pool, token)).toBe(id);
+
+    await pool.query("DELETE FROM users WHERE id = ?", [id]);
+  });
+
+  it("rejects an unknown email with 401", async () => {
+    await expect(
+      handleLogin(pool, { email: "nobody@example.com", password: "whatever" }),
+    ).rejects.toBeInstanceOf(UnauthorizedError);
+  });
+
+  it("rejects a wrong password with 401", async () => {
+    const id = generateId("user");
+    await queries.users.insert(pool, {
+      id,
+      username: "wrong-pw",
+      passwordHash: await hashPassword("right-pass"),
+      email: "wrong-pw@example.com",
+    });
+
+    await expect(
+      handleLogin(pool, { email: "wrong-pw@example.com", password: "not-it" }),
+    ).rejects.toBeInstanceOf(UnauthorizedError);
+
+    await pool.query("DELETE FROM users WHERE id = ?", [id]);
+  });
+
+  it("two users with the same display name can each log in by their own email", async () => {
+    const aliceId = generateId("user");
+    const bobId = generateId("user");
+    await queries.users.insert(pool, {
+      id: aliceId,
+      username: "Alex",
+      passwordHash: await hashPassword("alice-pw-1234"),
+      email: "alice@example.com",
+    });
+    await queries.users.insert(pool, {
+      id: bobId,
+      username: "Alex",
+      passwordHash: await hashPassword("bob-pw-1234"),
+      email: "bob@example.com",
+    });
+
+    const a = await handleLogin(pool, {
+      email: "alice@example.com",
+      password: "alice-pw-1234",
+    });
+    const b = await handleLogin(pool, {
+      email: "bob@example.com",
+      password: "bob-pw-1234",
+    });
+    expect(await verifySession(pool, a.token)).toBe(aliceId);
+    expect(await verifySession(pool, b.token)).toBe(bobId);
+
+    await pool.query("DELETE FROM users WHERE id IN (?, ?)", [aliceId, bobId]);
+  });
 });
 
 describe("auto-login", () => {
