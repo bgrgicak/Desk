@@ -9,6 +9,7 @@ import { enforceMustChangePassword, recordClientTimezone, requireAuth } from "./
 import { requireInternal } from "./auth/internal.js";
 import { errorToStatus } from "./errors.js";
 import { broadcast } from "./ws/registry.js";
+import { resolveRecipientUserId } from "./ws/recipient.js";
 import { installWsUpgradeHandler } from "./ws/upgrade.js";
 import { generateOpenApiSpec } from "./openapi.js";
 import { isStaticPath, resolveAppDist, serveStaticOrIndex } from "./static-app.js";
@@ -42,7 +43,13 @@ export interface AppOptions {
    * (tests, embedded usage) a fresh store is created from storage.home.
    */
   vault?: VaultStore;
-  /** The userId to broadcast events to (v1: single user). */
+  /**
+   * Deprecated. The legacy "broadcast to the single v1 user" hook — kept
+   * in the type so existing tests (and the published d.ts) still compile
+   * while we migrate them off. The implementation ignores it: every
+   * event now resolves its recipient from the payload via
+   * `resolveRecipientUserId`. A future cleanup can drop the field.
+   */
   broadcastUserId?: string;
   /**
    * Hot-refreshes the user's sandbox daemons after a connector / local
@@ -103,10 +110,29 @@ export function createApp(opts: AppOptions): Server {
    *      running child flips the parent to Active. We re-broadcast
    *      the affected parent task.
    */
-  function emitEvent(event: WsEvent): void {
-    const userId = opts.broadcastUserId;
-    if (!userId) return;
+  function emitEvent(event: WsEvent, recipientUserId?: string): void {
+    // Resolve the recipient asynchronously (workspace/chat lookups are
+    // cached in `ws/recipient.ts` after the first hit, so streaming-heavy
+    // events don't pay a DB round-trip per frame). When a caller already
+    // knows the recipient — typically global connector changes whose
+    // payload carries no workspaceId — they pass `recipientUserId`
+    // directly and we skip the resolver entirely.
+    const resolved = recipientUserId
+      ? Promise.resolve(recipientUserId)
+      : resolveRecipientUserId(pool, event);
 
+    void resolved
+      .catch((err: Error) => {
+        log.warn({ err: err.message, type: event.type }, "recipient resolution failed");
+        return null;
+      })
+      .then((userId) => {
+        if (!userId) return;
+        emitToUser(userId, event);
+      });
+  }
+
+  function emitToUser(userId: string, event: WsEvent): void {
     if (event.type === "message.appended" || event.type === "message.updated") {
       const payload = event.payload;
       if (payload.kind === "task") {
@@ -212,7 +238,9 @@ export function createApp(opts: AppOptions): Server {
         );
       });
     }
-    emitEvent(payload);
+    // Pass userId explicitly: global connector changes carry no
+    // workspaceId, so the resolver would have nothing to bind against.
+    emitEvent(payload, userId);
   }
 
   // Closure bundle handed to extracted dispatch sub-modules (dispatch/*).

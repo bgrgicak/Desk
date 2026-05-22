@@ -33,6 +33,7 @@ import {
 import { createApp } from "./app.js";
 import { pruneExpiredSessions } from "./auth/sessions.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
+import { resolveRecipientUserId } from "./ws/recipient.js";
 import { ensureHubsForAllUsers } from "./routes/workspaces.js";
 import { VaultStore } from "./vault/store.js";
 import { resolveProviderKeys } from "./providerKeys.js";
@@ -254,12 +255,6 @@ async function main(): Promise<void> {
   );
   keyAccessLogReaperTimer.unref();
 
-  // Broadcast targets the single v1 user.
-  const { rows } = await pool.query<{ id: string }>(
-    "SELECT id FROM users LIMIT 1",
-  );
-  const broadcastUserId: string | undefined = rows[0]?.id;
-
   const vault = new VaultStore(path.join(DESK_HOME, ".vaults"));
 
   // DESK_VAULT_PASSWORD is now opt-in (no longer auto-generated). When
@@ -322,7 +317,17 @@ async function main(): Promise<void> {
     reflectWorkspace: productionReflectWorkspace,
     resolveProviderKeys: (userId, workspaceId) => resolveProviderKeys(pool, vault, userId, workspaceId),
     emit: (event: WsEvent) => {
-      if (broadcastUserId) broadcast(broadcastUserId, event);
+      // Scheduler events all carry enough payload (workspaceId, chatId,
+      // or messageId) for the recipient resolver to find the owning
+      // user. The resolver memoises hot mappings so streaming log events
+      // don't pay a DB round-trip per frame.
+      void resolveRecipientUserId(pool, event)
+        .then((userId) => {
+          if (userId) broadcast(userId, event);
+        })
+        .catch((err: Error) => {
+          log.warn({ err: err.message, type: event.type }, "scheduler emit: recipient resolution failed");
+        });
     },
   });
 
@@ -387,7 +392,6 @@ async function main(): Promise<void> {
     storage: { pool, home: DESK_HOME },
     runManager,
     vault,
-    broadcastUserId,
     refreshSandboxConnections: async (userId, workspaceId) => {
       const result = await refreshSandboxConnections({
         pool,
