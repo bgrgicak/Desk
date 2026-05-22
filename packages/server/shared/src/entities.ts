@@ -26,6 +26,8 @@ export const AgentSchema = z.object({
   userId: z.string(),
   name: z.string(),
   model: z.string(),
+  enabled: z.boolean().default(true),
+  sortOrder: z.number().int().nonnegative().default(0),
 });
 export type Agent = z.infer<typeof AgentSchema>;
 

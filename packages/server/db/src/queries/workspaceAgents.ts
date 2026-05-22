@@ -10,18 +10,21 @@ function rowToWorkspaceAgent(row: Record<string, unknown>): WorkspaceAgent {
 }
 
 /**
- * Lists the agents enabled in a workspace, ordered by enrollment time.
- * Callers that need a fallback "default" agent pick the first row.
+ * Lists the globally-active agents enabled in a workspace, ordered by the
+ * user's global model order. Callers that need a fallback "default" agent pick
+ * the first row.
  */
 export async function listForWorkspace(
   db: Pool,
   workspaceId: string,
 ): Promise<WorkspaceAgent[]> {
-  // Tie-break by ROWID so rows added in the same millisecond keep their
-  // insertion order. SQLite's added_at default has ms precision but two
-  // calls in the same tick still collide; ROWID is monotonic per insert.
   const { rows } = await db.query(
-    "SELECT * FROM workspace_agents WHERE workspace_id = ? ORDER BY added_at, ROWID",
+    `SELECT wa.*
+       FROM workspace_agents wa
+       JOIN agents a ON a.id = wa.agent_id
+      WHERE wa.workspace_id = ?
+        AND a.enabled = 1
+      ORDER BY a.sort_order ASC, a.name COLLATE NOCASE ASC, a.id ASC, wa.added_at ASC, wa.ROWID ASC`,
     [workspaceId],
   );
   return rows.map(rowToWorkspaceAgent);

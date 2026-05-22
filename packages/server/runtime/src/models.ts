@@ -14,6 +14,8 @@
 import { randomUUID } from "node:crypto";
 import { execInSandbox } from "./sandboxExec.js";
 
+const PI_CLI_PATH = "/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js";
+
 export interface ModelRef {
   /** Canonical model id, e.g. "anthropic/claude-haiku-4-5". */
   id: string;
@@ -110,7 +112,7 @@ export async function listModels(
  * `piClient.ts` so the listing path can never drift from the run path.
  */
 function piListModelsArgv(opts: ListModelsOptions): string[] {
-  const piArgs = ["pi", "--list-models"];
+  const piArgs = ["node", PI_CLI_PATH, "--list-models"];
   if (opts.provider) piArgs.push("--provider", opts.provider);
 
   if (!opts.env?.PI_AUTH_JSON_BASE64) return piArgs;

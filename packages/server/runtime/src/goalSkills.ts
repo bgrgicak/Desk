@@ -14,6 +14,7 @@ const GOAL_SKILL_DESCRIPTIONS: Record<GoalKey, string> = {
   data: "Use when the user wants to work with data, spreadsheets, tables, CSV, metrics, numbers, charts, or graphs.",
   run: "Use when the user wants to run, check, monitor, scan, sync, automate, or watch something.",
   document: "Use when the user wants to write, draft, create, plan, brief, report, email, notes, or summarize.",
+  search: "Use when the user wants to find, look up, browse, compare, research, or recommend products, places, articles, papers, tools, or sources.",
 };
 
 export const DESK_GOAL_SKILL_PREFIX = "desk-goal-";

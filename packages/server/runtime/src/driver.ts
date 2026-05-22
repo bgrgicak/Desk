@@ -24,6 +24,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import * as path from "node:path";
 import { SANDBOX_HOME, type MountPlan } from "./mounts.js";
 import { managedConnectionDefinitions } from "@agent-desk/shared";
 import { connectionEnvNames } from "./docker.js";
@@ -71,6 +72,12 @@ export interface RunOptions {
    */
   model?: string;
   /**
+   * Ordered fallback model ids. The driver tries the primary and these
+   * fallbacks in order. Pi also receives the remaining scope for model
+   * cycling/selection, but non-interactive error fallback is owned here.
+   */
+  modelFallbacks?: string[];
+  /**
    * Provider API keys forwarded into the pi process env. Per-turn, so a
    * provider change in Settings reaches the next turn without any
    * supervisor restart.
@@ -102,6 +109,8 @@ export interface ExecResult {
    * Always populated unless the run failed before pi was invoked.
    */
   opencodeSessionId?: string;
+  /** Runtime model id that handled the successful attempt, or the last failed attempt. */
+  model?: string;
 }
 
 export interface SandboxDriver {
@@ -146,6 +155,7 @@ function createFakeDriver(): SandboxDriver {
       return {
         exitCode: 0,
         opencodeSessionId: opts.opencodeSessionId ?? `fake_session_${runId}`,
+        model: opts.model,
       };
     },
 
@@ -178,6 +188,26 @@ export function parseModelSpec(model: string): { providerID?: string; modelID: s
     providerID: provider === "codex" ? "openai-codex" : provider,
     modelID: model.slice(slash + 1),
   };
+}
+
+export function modelAttemptSpecs(
+  model?: string,
+  modelFallbacks?: string[],
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of [model, ...(modelFallbacks ?? [])]) {
+    const trimmed = candidate?.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+export function piModelReference(model: string): string {
+  const parsed = parseModelSpec(model);
+  return parsed.providerID ? `${parsed.providerID}/${parsed.modelID}` : parsed.modelID;
 }
 
 /**
@@ -237,34 +267,52 @@ function createRealDriver(): SandboxDriver {
           opts.extraEnv,
         );
 
-      // createOrReuse can throw with a container-gone error if the
-      // container is removed during its waitForEntrypointReady poll
-      // (reaper / drift recreate / parallel fire / rm -f). A single
-      // retry covers the race; persistent failures still bubble up.
-      let handle: Awaited<ReturnType<typeof acquireHandle>>;
-      try {
-        handle = await acquireHandle();
-      } catch (err) {
-        const msg = (err as Error).message ?? String(err);
-        if (!isContainerGoneError(msg)) throw err;
-        handle = await acquireHandle();
-      }
-
       const user = await sandboxUser(engine);
       const piEnv = buildPiEnv({
         providerKeys: opts.providerKeys,
         extraEnv: opts.extraEnv,
         apiUrl: opts.apiUrl,
+        runId: opts.runId,
       });
 
-      // Write the per-run sandbox token to the fixed in-container path
-      // before invoking pi. The in-sandbox `desk-agent` CLI reads from
-      // this path when DESK_SANDBOX_TOKEN isn't set in its env.
-      if (opts.sandboxToken) {
-        await writeSandboxTokenFile(engine, handle.containerId, user, opts.sandboxToken).catch(
-          (err) => log.warn({ runId: opts.runId, err: (err as Error)?.message }, "sandbox token write failed"),
-        );
-      }
+      const tokenPath = sandboxTokenPath(opts.runId);
+
+      const acquireReadyHandle = async (): Promise<Awaited<ReturnType<typeof acquireHandle>>> => {
+        // createOrReuse can throw with a container-gone error if the
+        // container is removed during its waitForEntrypointReady poll
+        // (reaper / drift recreate / parallel fire / rm -f). A single
+        // retry covers the race; persistent failures still bubble up.
+        let nextHandle: Awaited<ReturnType<typeof acquireHandle>>;
+        try {
+          nextHandle = await acquireHandle();
+        } catch (err) {
+          const msg = (err as Error).message ?? String(err);
+          if (!isContainerGoneError(msg)) throw err;
+          nextHandle = await acquireHandle();
+        }
+
+        // Write the per-run sandbox token to a per-run in-container path
+        // before invoking pi. The in-sandbox `desk-agent` CLI reads from
+        // this path when DESK_SANDBOX_TOKEN isn't set in its env.
+        //
+        // A per-run path is required because the container is shared
+        // across all runs in the same workspace. With a single fixed
+        // path, concurrent runs would overwrite each other's token; when
+        // the run that won the write finished and revoked its token,
+        // the still-running run's CLI calls would inherit the revoked
+        // token and fail with UNAUTHORIZED.
+        //
+        // The write must succeed — a stale or missing token file means
+        // every in-sandbox API call will fail. We let the error bubble
+        // out so the scheduler marks the run failed up front rather
+        // than producing a half-functional turn.
+        if (opts.sandboxToken) {
+          await writeSandboxTokenFile(engine, nextHandle.containerId, user, tokenPath, opts.sandboxToken);
+        }
+        return nextHandle;
+      };
+
+      const handle = await acquireReadyHandle();
 
       const sessionId = opts.opencodeSessionId ?? opts.chatId ?? randomUUID();
 
@@ -277,44 +325,83 @@ function createRealDriver(): SandboxDriver {
         }
       };
 
-      // Single-attempt: pi runs once with the configured model. Provider-
-      // shaped failures (rate limit, no-auth, etc.) surface directly so
-      // the user can act on them, rather than being papered over by a
-      // Desk-side fallback cascade.
-      const parsed = opts.model ? parseModelSpec(opts.model) : { providerID: undefined, modelID: undefined };
-      const { providerID, modelID } = parsed;
-
       try {
-        const piHandle = runPi(engine, {
-          containerId: handle.containerId,
-          user,
-          cwd: SANDBOX_HOME,
-          sessionId,
-          provider: providerID,
-          model: modelID,
-          env: piEnv,
-          prompt: buildPiPrompt({ prompt: opts.prompt, attachments: opts.attachments }),
-          onEvent: (line) => emitLog("event", line),
-          onStderr: (line) => emitLog("stderr", line),
-          translate: {
-            sessionID: sessionId,
-            assistantMessageId: `msg_${opts.runId}`,
-            ...(providerID && modelID
-              ? { model: { providerID, modelID, ...(opts.agentFileId ? { agent: opts.agentFileId } : {}) } }
-              : {}),
-          },
-        });
-        activeRuns.set(opts.runId, { containerId: handle.containerId, sessionId, handle: piHandle });
-        const lastResult = await piHandle.done;
-        activeRuns.delete(opts.runId);
+        const modelScope = modelAttemptSpecs(opts.model, opts.modelFallbacks)
+          .map(piModelReference);
+        const modelAttempts: Array<string | undefined> = modelScope.length > 0 ? modelScope : [undefined];
+        const prompt = buildPiPrompt({ prompt: opts.prompt, attachments: opts.attachments });
+        const hostSessionDir = opts.home
+          ? path.join(opts.home, opts.workspaceSlug, ".pi", "agent", "sessions", sessionId)
+          : undefined;
+
+        let lastResult: ExecResult | undefined;
+        for (let attemptIndex = 0; attemptIndex < modelAttempts.length; attemptIndex++) {
+          const attemptModel = modelAttempts[attemptIndex];
+          const parsed = attemptModel ? parseModelSpec(attemptModel) : undefined;
+          const providerID = parsed?.providerID;
+          const modelID = parsed?.modelID;
+          const remainingScope = modelScope.slice(attemptIndex);
+
+          const piHandle = runPi(engine, {
+            containerId: handle.containerId,
+            user,
+            cwd: SANDBOX_HOME,
+            sessionId,
+            hostSessionDir,
+            provider: providerID,
+            model: modelID,
+            models: remainingScope.length > 0 ? remainingScope : undefined,
+            env: piEnv,
+            prompt,
+            onEvent: (line) => emitLog("event", line),
+            onStderr: (line) => emitLog("stderr", line),
+            translate: {
+              sessionID: sessionId,
+              assistantMessageId: `msg_${opts.runId}`,
+              ...(providerID && modelID
+                ? { model: { providerID, modelID, ...(opts.agentFileId ? { agent: opts.agentFileId } : {}) } }
+                : {}),
+            },
+          });
+          activeRuns.set(opts.runId, { containerId: handle.containerId, sessionId, handle: piHandle });
+          const result = await piHandle.done;
+          activeRuns.delete(opts.runId);
+          const exitCode = result.aborted ? 130 : result.exitCode;
+          const handledModel = result.model ?? attemptModel;
+          lastResult = {
+            exitCode,
+            opencodeSessionId: sessionId,
+            model: handledModel,
+          };
+
+          await Promise.all(pendingLogs);
+
+          if (exitCode === 0 || exitCode === 130 || attemptIndex === modelAttempts.length - 1) {
+            return lastResult;
+          }
+
+          const nextModel = modelAttempts[attemptIndex + 1];
+          if (!nextModel) return lastResult;
+          emitLog(
+            "stderr",
+            `Model ${handledModel ?? attemptModel ?? "default"} failed with exit ${exitCode}; trying fallback ${nextModel}.`,
+          );
+        }
 
         await Promise.all(pendingLogs);
-        return {
-          exitCode: lastResult.aborted ? 130 : lastResult.exitCode,
-          opencodeSessionId: sessionId,
-        };
+        return lastResult ?? { exitCode: 1, opencodeSessionId: sessionId };
       } finally {
         activeRuns.delete(opts.runId);
+        if (opts.sandboxToken) {
+          // Per-run path: drop the file so /tmp doesn't accumulate one
+          // entry per run for the life of the workspace container. The
+          // token is revoked in the DB regardless; this is purely
+          // hygiene. Best-effort — if the container is already gone,
+          // the file is gone with it.
+          await cleanupSandboxTokenFile(engine, handle.containerId, user, tokenPath).catch(
+            (err) => log.warn({ runId: opts.runId, err: (err as Error)?.message }, "sandbox token cleanup failed"),
+          );
+        }
       }
     },
 
@@ -331,7 +418,20 @@ function createRealDriver(): SandboxDriver {
   };
 }
 
-const SANDBOX_TOKEN_PATH = "/tmp/desk-sandbox-token";
+/**
+ * Per-run path for the sandbox session token inside the container.
+ *
+ * The container is shared across all runs in the same workspace, so
+ * using a single fixed path (e.g. `/tmp/desk-sandbox-token`) lets
+ * concurrent runs stomp each other's token. When the run that won the
+ * write finished and revoked its token, the still-running run's
+ * desk-agent CLI calls would read the now-revoked token and the API
+ * would return UNAUTHORIZED. Keying the path on runId eliminates that
+ * cross-run sharing.
+ */
+export function sandboxTokenPath(runId: string): string {
+  return `/tmp/desk-sandbox-token-${runId}`;
+}
 
 /**
  * Match the failures that mean "this attempt needs a fresh container,
@@ -351,6 +451,7 @@ async function writeSandboxTokenFile(
   engine: import("./engine.js").Engine,
   containerId: string,
   user: string,
+  tokenPath: string,
   token: string,
 ): Promise<void> {
   // POSIX-quote the token so any odd characters can't break the shell
@@ -363,7 +464,7 @@ async function writeSandboxTokenFile(
       "sh", "-c",
       [
         `umask 077`,
-        `printf '%s' ${quoted} > ${SANDBOX_TOKEN_PATH}`,
+        `printf '%s' ${quoted} > ${tokenPath}`,
       ].join(" && "),
     ],
   });
@@ -371,6 +472,20 @@ async function writeSandboxTokenFile(
   if (code !== 0) {
     throw new Error(`sandbox token write exited ${code}`);
   }
+}
+
+async function cleanupSandboxTokenFile(
+  engine: import("./engine.js").Engine,
+  containerId: string,
+  user: string,
+  tokenPath: string,
+): Promise<void> {
+  const h = await engine.exec({
+    containerId,
+    user,
+    cmd: ["rm", "-f", tokenPath],
+  });
+  await h.wait();
 }
 
 /**
@@ -409,6 +524,12 @@ export function buildPiEnv(opts: {
   providerKeys?: Record<string, string>;
   extraEnv?: Record<string, string>;
   apiUrl?: string;
+  /**
+   * Run id used to derive the per-run sandbox token path. Omitted by
+   * non-run callers (e.g. connection-refresh env-digest computation),
+   * which don't use the token at all.
+   */
+  runId?: string;
 }): Record<string, string> {
   const blanks: Record<string, string> = {};
   for (const name of connectionEnvNames()) blanks[name] = "";
@@ -419,7 +540,7 @@ export function buildPiEnv(opts: {
     ...(opts.providerKeys ?? {}),
     ...(opts.extraEnv ?? {}),
     ...buildManagedConnectionAliases(opts.providerKeys),
-    DESK_SANDBOX_TOKEN_PATH: SANDBOX_TOKEN_PATH,
+    ...(opts.runId ? { DESK_SANDBOX_TOKEN_PATH: sandboxTokenPath(opts.runId) } : {}),
     ...(opts.apiUrl ? { DESK_API_URL: opts.apiUrl } : {}),
   };
 }

@@ -6,6 +6,7 @@ import {
   ListTodo,
   MessageSquare,
   Play,
+  Search,
   Table,
   Zap,
   type LucideIcon,
@@ -24,6 +25,7 @@ const GOAL_ICONS: Record<NonNullable<Chat['goal']>, LucideIcon> = {
   data: Table,
   site: Globe,
   run: Play,
+  search: Search,
   task: ListTodo,
   scheduled: CalendarClock,
 }

@@ -32,12 +32,11 @@ export type SearchTarget = NavTarget | SettingsTarget
 /**
  * Workspace-scoped destinations: pages within the current workspace plus
  * settings sections that are configured per-workspace (workspace meta,
- * workspace agents, connections).
+ * workspace connections).
  */
 export const WORKSPACE_TARGETS: SearchTarget[] = [
   { kind: 'page',     id: 'page:tasks',        label: 'Tasks',               icon: Zap,        view: 'tasks' },
   { kind: 'page',     id: 'page:library',      label: 'Library',             icon: FolderOpen, view: 'context', keywords: ['files', 'context'] },
-  { kind: 'settings', id: 'set:agents',        label: 'Agents',              icon: Bot,        section: 'agents',      keywords: ['ai', 'bot', 'assistant'] },
   { kind: 'settings', id: 'set:connections',   label: 'Connections',         icon: Plug,       section: 'connections', keywords: ['api keys', 'integrations'] },
   { kind: 'settings', id: 'set:workspace',     label: 'Workspace settings',  icon: Briefcase,  section: 'workspace' },
 ]
@@ -45,7 +44,8 @@ export const WORKSPACE_TARGETS: SearchTarget[] = [
 /** Global / user-level destinations. */
 export const SETTINGS_TARGETS: SearchTarget[] = [
   { kind: 'page',     id: 'page:today',        label: 'Today',               icon: Sun,      opensToday: true, keywords: ['inbox'] },
-  { kind: 'settings', id: 'set:account',       label: 'My account',          icon: User,     section: 'preferences', keywords: ['profile', 'me'] },
+  { kind: 'settings', id: 'set:account',       label: 'My account',          icon: User,     section: 'account', keywords: ['profile', 'me'] },
+  { kind: 'settings', id: 'set:models',        label: 'Models',              icon: Bot,      section: 'models', keywords: ['ai', 'bot', 'assistant', 'fallbacks', 'api keys', 'providers'] },
   { kind: 'settings', id: 'set:preferences',   label: 'Preferences',         icon: Sliders,  section: 'preferences', keywords: ['theme', 'timezone'] },
 ]
 

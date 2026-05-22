@@ -97,6 +97,8 @@ export interface ExecRunOptions {
   providerKeys?: Record<string, string>;
   /** Non-key env entries (e.g. the Codex/ChatGPT bridge content). */
   extraEnv?: Record<string, string>;
+  /** Ordered runtime model ids to try after `agent.model` fails. */
+  modelFallbacks?: string[];
   mountPlan?: MountPlan;
   /**
    * Existing pi session id for this chat. Null/undefined on the chat's
@@ -109,7 +111,7 @@ export interface ExecRunOptions {
 }
 
 function firstNonInternalIpv4(): string | null {
-  for (const entries of Object.values(networkInterfaces())) {
+  for (const entries of Object.values(safeNetworkInterfaces())) {
     for (const entry of entries ?? []) {
       if (entry.family === "IPv4" && !entry.internal) return entry.address;
     }
@@ -117,12 +119,21 @@ function firstNonInternalIpv4(): string | null {
   return null;
 }
 
+function safeNetworkInterfaces(): ReturnType<typeof networkInterfaces> {
+  try {
+    return networkInterfaces();
+  } catch {
+    return {};
+  }
+}
+
 function defaultSandboxApiUrl(): string {
   const configured = process.env.DESK_SANDBOX_API_URL;
   if (configured) return configured;
 
   const port = process.env.PORT ?? "35138";
-  const hasLocalDockerBridge = Boolean(networkInterfaces().docker0?.some(
+  const interfaces = safeNetworkInterfaces();
+  const hasLocalDockerBridge = Boolean(interfaces.docker0?.some(
     (entry) => entry.family === "IPv4" && !entry.internal,
   ));
   const host = hasLocalDockerBridge ? "host.docker.internal" : firstNonInternalIpv4() ?? "host.docker.internal";
@@ -206,6 +217,7 @@ export async function execRun(
         ? undefined
         : (opts.apiUrl ?? defaultSandboxApiUrl()),
       model: opts.agent.model,
+      modelFallbacks: opts.modelFallbacks,
       providerKeys: opts.providerKeys,
       extraEnv: opts.extraEnv,
       mountPlan: opts.mountPlan,

@@ -465,11 +465,6 @@ function AppInner() {
     goTo({ chat: NEW_CHAT_ID })
   }, [goTo])
 
-  const handleChatWithAgent = useCallback((agentId: string) => {
-    dispatch(setPendingNewChatAgentId(agentId))
-    goTo({ chat: NEW_CHAT_ID })
-  }, [dispatch, goTo])
-
   const handleGlobalToday = useCallback(() => {
     dispatch(setTodaySheetOpen(!todaySheetOpen))
   }, [dispatch, todaySheetOpen])
@@ -844,7 +839,6 @@ function AppInner() {
         todaySheetOpen={todaySheetOpen}
         onTodaySheetClose={() => dispatch(setTodaySheetOpen(false))}
         onSignOut={() => void logout()}
-        onChatWithAgent={handleChatWithAgent}
         pinnedEntries={pinnedEntries}
         isPinnedLoading={!!activeWorkspaceId && !pinnedResp && (pinnedLoading || pinnedFetching || pinnedUninitialized)}
         selectedItemId={effectiveItemPath}

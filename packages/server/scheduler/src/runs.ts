@@ -43,6 +43,7 @@ import {
   outputContentTypeFor,
   readLogEntries,
   reflectionOutcomeText,
+  resolveModelChainForRun,
   resolveModelForRun,
   type SummaryModelTokenLimits,
 } from "./runs-helpers.js";
@@ -68,8 +69,8 @@ export interface RunManagerOptions {
     agentId: string,
     prompt: string,
     onLog: (evt: LogEvent) => void | Promise<void>,
-    opts?: { agentFileInput: AgentFileInput; attachments?: string[] },
-  ) => Promise<{ exitCode: number }>;
+    opts?: { agentFileInput: AgentFileInput; attachments?: string[]; modelFallbacks?: string[] },
+  ) => Promise<{ exitCode: number; model?: string }>;
   /** Test-injectable replacement for the production workspace reflection call. */
   reflectWorkspace?: ReflectFn<WorkspaceReflectionInput>;
   /** DESK_HOME root. Defaults to resolveDeskHome(). */
@@ -82,6 +83,7 @@ export interface RunManagerOptions {
 // keep working. The implementation lives in helpers so reflection.ts
 // can use it without creating a runs ↔ reflection import cycle.
 export {
+  resolveModelChainForRun,
   resolveModelForRun,
   type ModelResolutionReason,
 } from "./runs-helpers.js";
@@ -485,11 +487,21 @@ export function createRunManager(opts: RunManagerOptions) {
         userId,
         siblingWorkspaceSlugs: workspaceKind === "hub" ? siblingSlugs : [],
       });
+      const activeAgents = userId ? await queries.agents.listActiveByUser(pool, userId) : [];
       const agent = await queries.agents.findById(pool, agentId);
+      // Manual chat retries are the user's "try the conversation again now"
+      // action, so pick up the current Models screen ordering instead of
+      // pinning the failed turn to the agent id captured on the old trigger.
+      // Task runs still preserve their task/chat agent binding.
+      const useLatestModelForRetry = fireOptions.manual === true && msg.content.type === "agent_turn";
+      const runAgent = useLatestModelForRetry
+        ? activeAgents[0] ?? agent
+        : agent?.enabled ? agent : activeAgents[0] ?? agent;
+      const runAgentId = runAgent?.id ?? agentId;
       const agentFileInput: AgentFileInput = {
-        agentId,
-        agentName: agent?.name ?? "Desk Agent",
-        model: agent?.model ?? "anthropic/claude-haiku-4-5",
+        agentId: runAgentId,
+        agentName: runAgent?.name ?? "Desk Agent",
+        model: runAgent?.model ?? "anthropic/claude-haiku-4-5",
         userName,
         userTimezone,
         chatId: executionChatId,
@@ -499,7 +511,8 @@ export function createRunManager(opts: RunManagerOptions) {
         localFilesystemDirectories: localFsResolution.agentDirectories,
       };
 
-      let result: { exitCode: number };
+      let result: { exitCode: number; model?: string };
+      let runtimeToRequestedModel = new Map<string, string>();
       if (msg.content.type === "reflection_request") {
         // Reflections run in their own short-lived sandbox and never
         // surface a non-zero exit through this path, so they bypass
@@ -558,12 +571,19 @@ export function createRunManager(opts: RunManagerOptions) {
         // actually handled the run, which may be a freshly-created one if
         // the chat had none or the stored id was stale on the daemon.
         let opencodeSessionId = await queries.chats.getOpencodeSessionId(pool, executionChatId);
-        // Translate the Desk model id into pi's view: `codex/<n>` →
+        const activeModelIds = activeAgents.map((a) => a.model);
+        // Translate the primary Desk model id and every active fallback
+        // model into pi's provider namespace. `codex/<n>` becomes
         // `openai-codex/<n>` when OAuth is live, `openai/<n>` when only
-        // an API key is. Other models pass through. Missing-auth is
-        // handled by pi itself, which raises a clear "No API key found
-        // for <provider>" message — no Desk-side substitution.
-        const billing = resolveModelForRun(agentFileInput.model, providerKeys, extraEnv);
+        // an API key is. Missing-auth stays on the requested runtime
+        // channel so pi can raise the clear provider-specific error.
+        const modelChain = resolveModelChainForRun(
+          [agentFileInput.model, ...activeModelIds],
+          providerKeys,
+          extraEnv,
+        );
+        runtimeToRequestedModel = modelChain.runtimeToRequestedModel;
+        const billing = modelChain.primary;
         const runtimeAgentInput: AgentFileInput =
           billing.runtimeModel === agentFileInput.model
             ? agentFileInput
@@ -581,7 +601,11 @@ export function createRunManager(opts: RunManagerOptions) {
         let containerGoneAttempts = 0;
         while (true) {
           if (opts.execRunFn) {
-            result = await opts.execRunFn(runId, agentId, prompt, onLogWithStderrCapture, { agentFileInput: runtimeAgentInput, attachments });
+            result = await opts.execRunFn(runId, runAgentId, prompt, onLogWithStderrCapture, {
+              agentFileInput: runtimeAgentInput,
+              attachments,
+              modelFallbacks: modelChain.fallbackRuntimeModels,
+            });
           } else {
             try {
               const handle: SandboxHandle = process.env.DESK_SANDBOX_DRIVER === "fake"
@@ -605,6 +629,7 @@ export function createRunManager(opts: RunManagerOptions) {
                 chatId: executionChatId,
                 agent: runtimeAgentInput,
                 attachments,
+                modelFallbacks: modelChain.fallbackRuntimeModels,
                 providerKeys: billing.providerKeys,
                 extraEnv,
                 mountPlan,
@@ -721,14 +746,17 @@ export function createRunManager(opts: RunManagerOptions) {
         // Summary runs carry kind="summary" on the output child so the
         // insert path treats them as internal (no unread flip).
         const childKind = outputKind === "summary" ? "summary" : undefined;
+        const outputModel = result.model
+          ? (runtimeToRequestedModel.get(result.model) ?? result.model)
+          : agentFileInput.model;
         const child = await queries.messages.insert(pool, {
           id: generateId("message"),
           chatId: executionChatId,
           role: "agent",
           content,
           parentId: runId,
-          agentId,
-          model: agentFileInput.model,
+          agentId: runAgentId,
+          model: outputModel,
           ...(childKind ? { kind: childKind } : {}),
         });
         // Summary output: also write the body to the notes/ dir so the

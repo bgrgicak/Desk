@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { toast } from 'sonner'
-import { Bell, Info, Sliders, User, X } from 'lucide-react'
+import { Bell, Bot, Info, Sliders, User, X } from 'lucide-react'
 import {
   useGetMeQuery,
   usePatchMeMutation,
@@ -25,6 +25,7 @@ import {
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { useCompactViewport } from '@/hooks/use-compact-viewport'
 import { PreferenceRow } from '@/components/settings/shared'
+import { ModelsSection } from '@/components/settings/ModelsSection'
 import { describeApiError } from '@/components/settings/errors'
 import { initialsOf } from '@/lib/initials'
 import { useAvatarUrl, saveAvatarUrl, deleteAvatarUrl, resizeToDataUrl } from '@/hooks/use-avatar'
@@ -38,12 +39,13 @@ import {
 
 // ── Nav ──────────────────────────────────────────────────────────────────────
 
-export type AccountSection = 'account' | 'notifications' | 'preferences'
+export type AccountSection = 'account' | 'models' | 'notifications' | 'preferences'
 
 const NAV: { id: AccountSection; label: string; icon: typeof User }[] = [
-  { id: 'account',       label: 'My account',    icon: User     },
-  { id: 'notifications', label: 'Notifications', icon: Bell     },
-  { id: 'preferences',   label: 'Preferences',   icon: Sliders  },
+  { id: 'account',           label: 'My account',        icon: User    },
+  { id: 'models',            label: 'Models',            icon: Bot     },
+  { id: 'notifications',     label: 'Notifications',     icon: Bell    },
+  { id: 'preferences',       label: 'Preferences',       icon: Sliders },
 ]
 
 // ── User prefs (localStorage) ────────────────────────────────────────────────
@@ -639,9 +641,10 @@ export function MyAccountModal({
               transition={{ duration: 0.15, ease: 'easeOut' }}
               className="flex-1 flex w-full min-w-0 max-w-full flex-col min-h-0 overflow-hidden"
             >
-              {activeSection === 'account'       && <AccountSection_ />}
-              {activeSection === 'notifications' && <NotificationsSection />}
-              {activeSection === 'preferences'   && <PreferencesSection />}
+              {activeSection === 'account'           && <AccountSection_ />}
+              {activeSection === 'models'            && <ModelsSection />}
+              {activeSection === 'notifications'     && <NotificationsSection />}
+              {activeSection === 'preferences'       && <PreferencesSection />}
             </motion.div>
           </div>
         </div>

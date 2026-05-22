@@ -9,6 +9,7 @@ import {
   writeWorkspaceMcpConfig,
 } from "../src/agentFile.js";
 import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-desk/storage";
+import type { GoalKey } from "@agent-desk/shared";
 
 describe("renderAgentFile", () => {
   it("generates a plain markdown body (pi reads AGENTS.md as text, no frontmatter)", () => {
@@ -140,7 +141,7 @@ describe("renderAgentFile", () => {
   });
 
   it("includes the matching goal fragment for each GoalKey", () => {
-    const cases: Array<{ goal: "app" | "document" | "image" | "data" | "site" | "run" | "task" | "scheduled"; anchor: string }> = [
+    const cases: Array<{ goal: GoalKey; anchor: string }> = [
       { goal: "app", anchor: "User's goal: build an app" },
       { goal: "document", anchor: "User's goal: write a document" },
       { goal: "image", anchor: "User's goal: produce an image" },
@@ -149,6 +150,7 @@ describe("renderAgentFile", () => {
       { goal: "run", anchor: "User's goal: run a check or automation" },
       { goal: "task", anchor: "User's goal: track a task" },
       { goal: "scheduled", anchor: "User's goal: schedule recurring or future work" },
+      { goal: "search", anchor: "User's goal: search" },
     ];
     for (const { goal, anchor } of cases) {
       const result = renderAgentFile({
@@ -199,9 +201,13 @@ describe("renderAgentFile", () => {
 });
 
 describe("chatNeedsBrowser", () => {
-  it("enables the browser only for site/app goals", () => {
+  it("enables the browser for site/app/search goals", () => {
     expect(chatNeedsBrowser("site")).toBe(true);
     expect(chatNeedsBrowser("app")).toBe(true);
+    // Search uses real web fetches via the playwright MCP to ground its
+    // chat-cards replies; without the browser it would fall back to
+    // model-only suggestions, which the search goal explicitly forbids.
+    expect(chatNeedsBrowser("search")).toBe(true);
     // Conservative on purpose: a `document` chat that occasionally needs
     // the browser still doesn't pre-warm firefox; the user can flip it
     // on explicitly. Anything else is false.

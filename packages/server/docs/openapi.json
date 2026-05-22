@@ -1030,6 +1030,7 @@
     "/agents": {
       "get": {
         "summary": "List the current user's agents",
+        "description": "Returned in global model order. Agent objects include `enabled` and `sortOrder`.",
         "responses": {
           "200": {
             "description": "Agent array"
@@ -1066,6 +1067,40 @@
         }
       }
     },
+    "/agents/order": {
+      "put": {
+        "summary": "Replace the current user's global agent order",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "ids"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated ordered agent array"
+          },
+          "400": {
+            "description": "Order must include each owned agent exactly once"
+          }
+        }
+      }
+    },
     "/agents/{id}": {
       "get": {
         "summary": "Get agent",
@@ -1086,7 +1121,7 @@
         }
       },
       "patch": {
-        "summary": "Update agent (name, model)",
+        "summary": "Update agent (name, model, enabled)",
         "parameters": [
           {
             "name": "id",
@@ -1108,6 +1143,9 @@
                   },
                   "model": {
                     "type": "string"
+                  },
+                  "enabled": {
+                    "type": "boolean"
                   }
                 }
               }
@@ -1265,6 +1303,7 @@
                       "run",
                       "task",
                       "scheduled",
+                      "search",
                       null
                     ],
                     "description": "Persisted chat goal. Pass null to clear it."
@@ -1375,6 +1414,7 @@
                       "run",
                       "task",
                       "scheduled",
+                      "search",
                       null
                     ],
                     "description": "Persisted chat goal for this send. Omit to keep/infer; pass null to clear the chat goal."

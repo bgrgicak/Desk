@@ -160,6 +160,41 @@ async function firstUserId(): Promise<string> {
 }
 
 describe("library virtual-mount reads", () => {
+  it("keeps active local filesystem connections hidden until granted to the workspace", async () => {
+    const token = await login();
+    const workspaceId = await firstWorkspaceId(token);
+    const userId = await firstUserId();
+
+    await queries.connectors.createConnection(pool, {
+      ownerUserId: userId,
+      providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+      displayName: "Ungrafted host folder",
+      capabilities: ["local_filesystem.read"],
+      status: "active",
+      metadata: {
+        localFilesystem: {
+          directories: [
+            {
+              id: "dir-hidden",
+              hostPath: mountSourceDir,
+              homeName: "HiddenHost",
+              access: "read_only",
+            },
+          ],
+        },
+      },
+    });
+
+    const rootRes = await request(
+      "GET",
+      `/library?workspaceId=${encodeURIComponent(workspaceId)}`,
+      token,
+    );
+    expect(rootRes.status).toBe(200);
+    const rootFolders = (rootRes.body as { folders: Array<{ path: string }> }).folders;
+    expect(rootFolders.some((f) => f.path === "HiddenHost")).toBe(false);
+  });
+
   it("GET /library/content streams a file from a connected host directory", async () => {
     const token = await login();
     const workspaceId = await firstWorkspaceId(token);

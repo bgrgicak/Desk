@@ -1,8 +1,9 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 
 export type SettingsSection =
+  | "account"
+  | "models"
   | "workspace"
-  | "agents"
   | "connections"
   | "preferences";
 
@@ -16,8 +17,9 @@ export interface UiState {
   /** Agent id carried over from the artifact-creation sheet's "Skip to chat"
    * path, consumed once by ChatView when the new-chat composer mounts. */
   pendingNewChatAgentId: string | null;
-  /** Deep-link request from the global palette: open the SettingsModal at
-   * the named section. AppShell consumes and clears. */
+  /** Deep-link request from the global palette: open the matching account
+   * or workspace settings modal at the named section. AppShell consumes and
+   * clears. */
   pendingSettingsSection: SettingsSection | null;
   /** Per-user vault password dialog. Driven by VaultGate on app load and
    * by mutation error handlers that catch HTTP 423 (VAULT_LOCKED). When

@@ -1,5 +1,5 @@
 import { type Pool, queries } from "@agent-desk/db";
-import { CONNECTION_ENV_VARS } from "@agent-desk/shared";
+import { CONNECTION_ENV_VARS, SANDBOX_CONNECTION_ENV_VARS } from "@agent-desk/shared";
 import type { VaultStore } from "./vault/store.js";
 import { readCredentials } from "./connectors/credentialStore.js";
 import { withModule } from "@agent-desk/shared/logger";
@@ -21,6 +21,7 @@ const log = withModule("api/providerKeys");
 
 type ConnectorConnection = Awaited<ReturnType<typeof queries.connectors.listConnections>>[number];
 type WorkspaceConnectorGrant = Awaited<ReturnType<typeof queries.connectors.listWorkspaceGrants>>[number];
+const WORKSPACE_SCOPED_PROVIDER_IDS = new Set<string>(SANDBOX_CONNECTION_ENV_VARS);
 
 interface ResolutionContext {
   pool: Pool;
@@ -180,10 +181,13 @@ async function pickConnection(
     return granted;
   }
 
+  if (ctx.workspaceId && WORKSPACE_SCOPED_PROVIDER_IDS.has(providerId)) return undefined;
+
   return active.find((c) => c.isDefault) ?? active[0];
 }
 
 function isDisabled(ctx: ResolutionContext, handler: ProviderHandler): boolean {
+  if (WORKSPACE_SCOPED_PROVIDER_IDS.has(handler.providerId)) return false;
   // The Settings UI surfaces a per-env-var enabled/disabled toggle. A
   // provider is disabled if any of its env vars is explicitly disabled
   // — typically there is exactly one.

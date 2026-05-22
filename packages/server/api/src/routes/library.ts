@@ -64,9 +64,7 @@ async function connectedLocalFilesystemMounts(
     .filter((grant) => grant.providerId === LOCAL_FILESYSTEM_PROVIDER_ID)
     .map((grant) => grant.connectionId);
   const active = connections.filter((connection) => connection.status === "active");
-  const selected = localGrantIds.length > 0
-    ? active.filter((connection) => localGrantIds.includes(connection.id))
-    : active;
+  const selected = active.filter((connection) => localGrantIds.includes(connection.id));
   return selected
     .flatMap((connection) => localFilesystemVirtualMounts(connection.metadata));
 }

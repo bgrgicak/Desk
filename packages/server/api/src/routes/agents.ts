@@ -13,11 +13,16 @@ export async function createAgent(
   userId: string,
   data: { name: string; model?: string },
 ) {
-  return queries.agents.insert(pool, {
+  const agent = await queries.agents.insert(pool, {
     id: generateId("agent"),
     userId,
     ...data,
   });
+  const workspaces = await queries.workspaces.listByUser(pool, userId);
+  for (const workspace of workspaces) {
+    await queries.workspaceAgents.addToWorkspace(pool, workspace.id, agent.id);
+  }
+  return agent;
 }
 
 export async function getAgent(pool: Pool, id: string) {
@@ -43,12 +48,30 @@ export interface PatchAgentResult {
 
 export async function patchAgent(
   pool: Pool,
+  userId: string,
   id: string,
-  data: { name?: string; model?: string },
+  data: { name?: string; model?: string; enabled?: boolean },
 ): Promise<PatchAgentResult> {
-  const before = data.model !== undefined ? await queries.agents.findById(pool, id) : null;
+  const before = await queries.agents.findById(pool, id);
+  if (!before) throw new NotFoundError(`Agent not found: ${id}`);
+  if (before.userId !== userId) throw new NotFoundError(`Agent not found: ${id}`);
+
+  if (data.enabled === false && before.enabled) {
+    const activeAgents = await queries.agents.listActiveByUser(pool, userId);
+    if (activeAgents.filter((a) => a.id !== id).length === 0) {
+      throw new ValidationError("Cannot disable the last active model; enable another model first.");
+    }
+  }
+
   const agent = await queries.agents.updateMeta(pool, id, data);
   if (!agent) throw new NotFoundError(`Agent not found: ${id}`);
+
+  if (data.enabled === true) {
+    const workspaces = await queries.workspaces.listByUser(pool, userId);
+    for (const workspace of workspaces) {
+      await queries.workspaceAgents.addToWorkspace(pool, workspace.id, id);
+    }
+  }
 
   const modelChanged = data.model !== undefined && !!before && before.model !== data.model;
 
@@ -69,6 +92,10 @@ export async function patchAgent(
   }
 
   return { agent, modelChanged };
+}
+
+export async function reorderAgents(pool: Pool, userId: string, ids: string[]) {
+  return queries.agents.setOrder(pool, userId, ids);
 }
 
 /**
@@ -92,9 +119,17 @@ export async function deleteAgent(pool: Pool, userId: string, id: string) {
     `SELECT w.id
      FROM workspaces w
      JOIN workspace_agents wa ON wa.workspace_id = w.id
+     JOIN agents a ON a.id = wa.agent_id
      WHERE w.user_id = ?
        AND wa.agent_id = ?
-       AND (SELECT count(*) FROM workspace_agents other WHERE other.workspace_id = w.id) = 1
+       AND a.enabled = 1
+       AND (
+         SELECT count(*)
+           FROM workspace_agents other
+           JOIN agents other_agent ON other_agent.id = other.agent_id
+          WHERE other.workspace_id = w.id
+            AND other_agent.enabled = 1
+       ) = 1
      LIMIT 1`,
     [userId, id],
   );
