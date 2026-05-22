@@ -345,6 +345,7 @@ function serviceControl(action) {
     cmds = {
       start: ["systemctl", ["--user", "start", SYSTEMD_UNIT_NAME]],
       stop: ["systemctl", ["--user", "stop", SYSTEMD_UNIT_NAME]],
+      restart: ["systemctl", ["--user", "restart", SYSTEMD_UNIT_NAME]],
       status: ["systemctl", ["--user", "status", SYSTEMD_UNIT_NAME]],
     };
   } else if (process.platform === "win32") {
@@ -357,16 +358,31 @@ function serviceControl(action) {
     process.stderr.write(`roomy service: unsupported platform ${process.platform}\n`);
     process.exit(1);
   }
+  // macOS launchd has no first-class "restart" — unload then reload picks
+  // up the new on-disk binaries. Windows schtasks: end then run.
+  if (action === "restart" && !cmds.restart) {
+    if (!cmds.stop || !cmds.start) {
+      process.stderr.write(`roomy service restart: unsupported platform ${process.platform}\n`);
+      process.exit(1);
+    }
+    // Stop is best-effort — if it wasn't running, start will still bring it up.
+    spawnSync(cmds.stop[0], cmds.stop[1], { stdio: "inherit" });
+    const { status } = spawnSync(cmds.start[0], cmds.start[1], { stdio: "inherit" });
+    if (status !== 0) process.exit(status ?? 1);
+    log("Service restarted.");
+    return;
+  }
   const c = cmds[action];
   if (!c) { process.stderr.write(`Unknown action: ${action}\n`); process.exit(2); }
   const { status } = spawnSync(c[0], c[1], { stdio: "inherit" });
   if (status !== 0) process.exit(status ?? 1);
-  // start/stop succeed silently on every platform's underlying tool; print
-  // a friendly confirmation so the user doesn't have to re-check with
+  // start/stop/restart succeed silently on every platform's underlying tool;
+  // print a friendly confirmation so the user doesn't have to re-check with
   // `service status` to know it worked. The status command's own output
   // is the answer, so we skip the extra line there.
   if (action === "start") log("Service started.");
   else if (action === "stop") log("Service stopped.");
+  else if (action === "restart") log("Service restarted.");
 }
 
 /**
@@ -455,15 +471,92 @@ async function cmdUninstall(args) {
   log("  • If used via npx:        npx clear-npx-cache  (or just stop calling it)");
 }
 
+/**
+ * Pull the latest published CLI + sandbox image and restart the service.
+ *
+ * Three steps, in order:
+ *   1. `npm install -g @roomy-ai/cli@<tag>` — replaces the CLI and every
+ *      bundled @roomy-ai/* dep (api, app, runtime, …) on disk. The running
+ *      process keeps its loaded modules; new code only takes effect after
+ *      restart. Tag defaults to `alpha` to match publishConfig.tag, override
+ *      with --tag=<dist-tag-or-version>.
+ *   2. `docker pull <sandbox image>` — the runtime pulls per-sandbox on
+ *      first start, but the `:alpha` tag is mutable; pulling now avoids a
+ *      cold-start delay the next time a sandbox boots.
+ *   3. Restart the OS service if one is installed (launchd/systemd/Task
+ *      Scheduler). If not, tell the user to restart whatever is running
+ *      the server.
+ *
+ * Refuses to run from a monorepo checkout — there, the equivalent is
+ * `git pull && npm install` and the npm-global path doesn't apply.
+ */
+async function cmdUpdate(args) {
+  if (detectMonorepo()) {
+    process.stderr.write(
+      "roomy update: this command updates a published install. " +
+      "You're inside the monorepo — use `git pull && npm install` instead.\n",
+    );
+    process.exit(2);
+  }
+
+  const skipDocker = args.includes("--skip-docker");
+  const skipRestart = args.includes("--skip-restart");
+  const tagArg = args.find((a) => a.startsWith("--tag="));
+  const tag = tagArg ? tagArg.slice("--tag=".length) : "alpha";
+
+  log(`Updating @roomy-ai/cli to ${tag}…`);
+  const npmResult = spawnSync(
+    "npm", ["install", "-g", `@roomy-ai/cli@${tag}`],
+    { stdio: "inherit" },
+  );
+  if (npmResult.status !== 0) {
+    process.stderr.write(
+      "roomy update: npm install failed. " +
+      "If you installed roomy with sudo or under a different node, re-run from that environment.\n",
+    );
+    process.exit(npmResult.status ?? 1);
+  }
+
+  if (skipDocker) {
+    log("Skipping docker pull (--skip-docker).");
+  } else {
+    const image = process.env.ROOMY_SANDBOX_IMAGE ?? "bgrgicak/roomy-ai:alpha";
+    log(`Pulling sandbox image ${image}…`);
+    const dockerResult = spawnSync("docker", ["pull", image], { stdio: "inherit" });
+    if (dockerResult.status !== 0) {
+      // Don't fail the whole update — the runtime will retry the pull on
+      // the next sandbox boot. Common cases: docker daemon not running,
+      // docker not installed on this host yet, transient registry hiccup.
+      process.stderr.write(
+        "roomy update: docker pull failed (continuing). " +
+        "The runtime will retry on the next sandbox start.\n",
+      );
+    }
+  }
+
+  if (skipRestart) {
+    log("Skipping service restart (--skip-restart).");
+    log("Restart whatever is running `roomy start` to pick up the new build.");
+    return;
+  }
+  if (!isServiceInstalled()) {
+    log("No `roomy service` installation found.");
+    log("Restart whatever is running `roomy start` to pick up the new build.");
+    return;
+  }
+  log("Restarting roomy service…");
+  serviceControl("restart");
+}
+
 async function cmdService(action) {
   if (!action) {
-    process.stderr.write("Usage: roomy service install|uninstall|start|stop|status\n");
+    process.stderr.write("Usage: roomy service install|uninstall|start|stop|restart|status\n");
     process.exit(2);
   }
   if (action === "install") return installService();
   if (action === "uninstall") return uninstallService();
-  if (action === "start" || action === "stop" || action === "status") return serviceControl(action);
-  process.stderr.write(`Unknown service action: ${action}\nUsage: roomy service install|uninstall|start|stop|status\n`);
+  if (action === "start" || action === "stop" || action === "restart" || action === "status") return serviceControl(action);
+  process.stderr.write(`Unknown service action: ${action}\nUsage: roomy service install|uninstall|start|stop|restart|status\n`);
   process.exit(2);
 }
 
@@ -489,6 +582,7 @@ async function main() {
     case "start": return cmdStart();
     case "init": return cmdInit();
     case "service": return cmdService(process.argv[3]);
+    case "update": return cmdUpdate(process.argv.slice(3));
     case "uninstall": return cmdUninstall(process.argv.slice(3));
     case "version":
     case "--version":
@@ -498,11 +592,14 @@ async function main() {
     case "--help":
     case "-h":
       process.stdout.write(
-        "Usage: roomy [start|init|service|uninstall|version]\n" +
+        "Usage: roomy [start|init|service|update|uninstall|version]\n" +
         "  start                              boot roomy-server (default)\n" +
         "  init                               create ~/Roomy without starting\n" +
         "  service install|uninstall          register/unregister Roomy as a system service\n" +
-        "  service start|stop|status          control the installed system service\n" +
+        "  service start|stop|restart|status  control the installed system service\n" +
+        "  update [--tag=<tag>]                pull the latest @roomy-ai/cli + sandbox image\n" +
+        "         [--skip-docker]              and restart the service.\n" +
+        "         [--skip-restart]             --tag defaults to `alpha`.\n" +
         "  uninstall [--remove-roomy-files]    remove the service + roomy/* docker images;\n" +
         "                                     pass --remove-roomy-files to also delete ~/Roomy\n" +
         "  version                            print version\n",

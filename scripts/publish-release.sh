@@ -106,6 +106,34 @@ pkg_set_version() {
   "
 }
 
+# Pin every `@roomy-ai/*` entry in this package.json's dependency blocks to
+# the exact released version. Without this, deps like
+# `"@roomy-ai/app": ">=0.1.0-0"` resolve via npm's normal range algorithm,
+# which prefers the version pointed at by the `latest` dist-tag over the
+# higher prerelease — meaning a freshly installed @roomy-ai/cli@<new>
+# would pull `@roomy-ai/app@latest` (an OLD alpha) for every transitive
+# dep. Pinning to the exact version sidesteps the whole dist-tag dance.
+pkg_pin_roomy_deps() {
+  local file="$1" version="$2"
+  node -e "
+    const fs=require('fs');
+    const p=JSON.parse(fs.readFileSync('$file','utf8'));
+    const blocks=['dependencies','devDependencies','peerDependencies','optionalDependencies'];
+    let changed=false;
+    for (const b of blocks) {
+      const deps = p[b];
+      if (!deps) continue;
+      for (const k of Object.keys(deps)) {
+        if (k.startsWith('@roomy-ai/') && deps[k] !== '$version') {
+          deps[k] = '$version';
+          changed = true;
+        }
+      }
+    }
+    if (changed) fs.writeFileSync('$file', JSON.stringify(p, null, 2)+'\n');
+  "
+}
+
 # ---------- step 0: pre-flight ----------
 
 say "Roomy release script"
@@ -255,20 +283,25 @@ hr
 
 # ---------- step 2: bump versions ----------
 
-say "Bumping versions in ${#PUBLIC_WORKSPACES[@]} public workspaces + desktop..."
+say "Bumping versions + pinning inter-package deps in ${#PUBLIC_WORKSPACES[@]} public workspaces + desktop..."
 for ws in "${PUBLIC_WORKSPACES[@]}" "$DESKTOP_PKG_DIR"; do
   pkg="$ws/package.json"
   [ -f "$pkg" ] || die "Missing $pkg"
   pkg_set_version "$pkg" "$NEW_VERSION"
+  pkg_pin_roomy_deps "$pkg" "$NEW_VERSION"
   printf "  %s → %s\n" "$(pkg_get "$pkg" name)" "$NEW_VERSION"
 done
-ok "Versions bumped."
+ok "Versions bumped + @roomy-ai/* deps pinned to $NEW_VERSION."
 hr
 
 # ---------- step 3: build + smoke test ----------
 
-say "Installing dependencies (npm ci)..."
-npm ci
+# `npm install` instead of `npm ci` here — we just rewrote dep ranges in
+# every workspace's package.json, so the existing lockfile is out of sync.
+# `npm install` reconciles the lockfile to the new ranges; `npm ci` would
+# refuse to start.
+say "Installing dependencies + refreshing lockfile..."
+npm install
 
 say "Building all packages..."
 npm run build:packages
