@@ -22,7 +22,8 @@ async function openModelsTab(page: import("@playwright/test").Page) {
   await page.getByTestId("account-avatar").click();
   await page.getByTestId("open-my-account").click();
   const dialog = page.getByRole("dialog");
-  await dialog.getByRole("button", { name: /^Models$/i }).click();
+  // The nav item now reads "AI providers" — same section, label clarified.
+  await dialog.getByRole("button", { name: /^AI providers$/i }).click();
   return dialog;
 }
 
