@@ -202,7 +202,7 @@ async function cmdStartPublished({ home }) {
     // useless for `npx @roomy-ai/cli` users — they have no local image
     // to fall back on. Pulls from Docker Hub on first sandbox start.
     // Set ROOMY_SANDBOX_IMAGE to override (e.g. point at your own fork).
-    ROOMY_SANDBOX_IMAGE: process.env.ROOMY_SANDBOX_IMAGE ?? "roomy-ai/sandbox:alpha",
+    ROOMY_SANDBOX_IMAGE: process.env.ROOMY_SANDBOX_IMAGE ?? "bgrgicak/roomy-ai:alpha",
   };
 
   log(`roomy-server → http://127.0.0.1:${PORT}/  (serves API + SPA)`);

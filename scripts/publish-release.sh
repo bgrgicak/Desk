@@ -12,7 +12,7 @@
 #   6. git commit "chore(release): vX".
 #   7. npm publish --workspaces --access public  (uses local npm login; publishConfig.tag=alpha).
 #   8. Build + push the sandbox Docker image to Docker Hub at
-#      <namespace>/sandbox:<version> + <namespace>/sandbox:alpha (uses `docker login`).
+#      <repo>:<version> + <repo>:alpha (uses `docker login`).
 #   9. git tag vX, push branch + tag. The tag push triggers
 #      .github/workflows/desktop-release.yml, which builds the macOS DMG
 #      on a macos-latest runner and uploads it to the GH Release.
@@ -179,20 +179,20 @@ if [ -z "$docker_user" ]; then
 fi
 ok "Docker logged in as: $docker_user"
 
-# Namespace to push under. Default is `roomy-ai` so the pushed image
-# matches the hardcoded ROOMY_SANDBOX_IMAGE in @roomy-ai/cli's
-# cmdStartPublished. Override via ROOMY_DOCKER_NAMESPACE if you publish
-# under a different Docker Hub org/user — but then you also need to
-# update the CLI's hardcoded default or users will pull the wrong image.
-DOCKER_NAMESPACE="${ROOMY_DOCKER_NAMESPACE:-$(ask "Docker Hub namespace to push to" "roomy-ai")}"
-[ -n "$DOCKER_NAMESPACE" ] || die "No Docker namespace given."
-if [ "$DOCKER_NAMESPACE" != "roomy-ai" ]; then
-  warn "Namespace $DOCKER_NAMESPACE doesn't match the hardcoded default in"
-  warn "packages/cli/src/roomy.mjs (ROOMY_SANDBOX_IMAGE=roomy-ai/sandbox:alpha)."
+# Full Docker Hub repository (namespace/repo, without tag). Default is
+# `bgrgicak/roomy-ai` to match the hardcoded ROOMY_SANDBOX_IMAGE in
+# @roomy-ai/cli's cmdStartPublished. Override via ROOMY_DOCKER_REPO if
+# you publish elsewhere — but then update that CLI hardcode too or
+# `npx @roomy-ai/cli` users will pull the wrong image.
+DOCKER_REPO="${ROOMY_DOCKER_REPO:-$(ask "Docker Hub repository (namespace/repo)" "bgrgicak/roomy-ai")}"
+[ -n "$DOCKER_REPO" ] || die "No Docker repo given."
+if [ "$DOCKER_REPO" != "bgrgicak/roomy-ai" ]; then
+  warn "Repo $DOCKER_REPO doesn't match the hardcoded default in"
+  warn "packages/cli/src/roomy.mjs (ROOMY_SANDBOX_IMAGE=bgrgicak/roomy-ai:alpha)."
   warn "Update that hardcode too, or `npx @roomy-ai/cli` users will pull the wrong image."
   confirm "Continue?" || die "Aborted."
 fi
-ok "Will push image as: ${c_bold}${DOCKER_NAMESPACE}/sandbox${c_reset}"
+ok "Will push image as: ${c_bold}${DOCKER_REPO}${c_reset}"
 
 hr
 
@@ -294,8 +294,8 @@ for ws in "${PUBLIC_WORKSPACES[@]}"; do
   echo "       - $(pkg_get "$ws/package.json" name)"
 done
 echo "  3. docker build + push:"
-echo "       ${DOCKER_NAMESPACE}/sandbox:${NEW_VERSION}"
-echo "       ${DOCKER_NAMESPACE}/sandbox:alpha"
+echo "       ${DOCKER_REPO}:${NEW_VERSION}"
+echo "       ${DOCKER_REPO}:alpha"
 echo "  4. git tag $TAG and push trunk + $TAG to origin"
 echo "     → triggers .github/workflows/desktop-release.yml on a macos-latest"
 echo "       runner, which builds + uploads the macOS DMG to the GH Release."
@@ -326,8 +326,8 @@ ok "npm publish complete."
 
 # ---------- step 7: docker build + push ----------
 
-IMAGE_VERSION_TAG="${DOCKER_NAMESPACE}/sandbox:${NEW_VERSION}"
-IMAGE_ALPHA_TAG="${DOCKER_NAMESPACE}/sandbox:alpha"
+IMAGE_VERSION_TAG="${DOCKER_REPO}:${NEW_VERSION}"
+IMAGE_ALPHA_TAG="${DOCKER_REPO}:alpha"
 
 say "Building sandbox Docker image (this can take a few minutes)..."
 # Build once with both tags so the alpha pointer and the pinned version
@@ -370,7 +370,7 @@ for ws in "${PUBLIC_WORKSPACES[@]}"; do
   echo "    https://www.npmjs.com/package/$name/v/$NEW_VERSION"
 done
 echo "  • Pushed Docker image:"
-echo "      https://hub.docker.com/r/${DOCKER_NAMESPACE}/sandbox/tags"
+echo "      https://hub.docker.com/r/${DOCKER_REPO}/tags"
 echo "      ${IMAGE_VERSION_TAG}"
 echo "      ${IMAGE_ALPHA_TAG}"
 echo "  • Pushed git tag $TAG (https://github.com/bgrgicak/Desk/releases/tag/$TAG)"
