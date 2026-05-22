@@ -225,10 +225,11 @@ describe("resolveLocalSourceEnv", () => {
     await request("PUT", "/me/providers/local/codex", token, { enabled: true });
     const env = await resolveLocalSourceEnv(pool, userId);
     expect(typeof env.PI_AUTH_JSON_BASE64).toBe("string");
-    const blob = JSON.parse(env.PI_AUTH_JSON_BASE64);
-    expect(blob.openai.type).toBe("oauth");
-    expect(blob.openai.refresh).toBe("rt-bridge");
-    expect(blob.openai.accountId).toBe("acct-test");
+    const decoded = Buffer.from(env.PI_AUTH_JSON_BASE64, "base64").toString("utf8");
+    const blob = JSON.parse(decoded);
+    expect(blob["openai-codex"].type).toBe("oauth");
+    expect(blob["openai-codex"].refresh).toBe("rt-bridge");
+    expect(blob["openai-codex"].accountId).toBe("acct-test");
   });
 
   it("returns an empty map when opted in but the host file is missing", async () => {

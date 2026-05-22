@@ -47,6 +47,10 @@ const ALWAYS_REDACT_KEYS = new Set([
   // (to avoid redacting workspace_id, request_id, etc.). List the
   // exact name here so AWS auth pairs don't half-leak.
   "aws_access_key_id",
+  // Pi's per-invocation OAuth blob (base64-encoded JSON containing OpenAI
+  // OAuth tokens for Codex). Ends in `_base64`, which isn't a generic
+  // secret suffix, so list it explicitly.
+  "pi_auth_json_base64",
 ]);
 
 // Universal secret-name pattern: matches keys whose name ENDS in a

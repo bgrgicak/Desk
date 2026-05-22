@@ -411,7 +411,7 @@ describe("PATCH /agents/:id — daemon refresh on model change", () => {
     const before = await request("GET", `/agents/${agentId}`, token);
     const previousModel = before.body.model;
     const newModel = previousModel === "anthropic/claude-haiku-4-5"
-      ? "anthropic/claude-haiku-4-5"
+      ? "anthropic/claude-sonnet-4-6"
       : "anthropic/claude-haiku-4-5";
 
     const patched = await request("PATCH", `/agents/${agentId}`, token, { model: newModel });
@@ -433,7 +433,7 @@ describe("PATCH /agents/:id — daemon refresh on model change", () => {
     // at the "new" value already.
     const before = await request("GET", `/agents/${agentId}`, token);
     const flipped = before.body.model === "anthropic/claude-haiku-4-5"
-      ? "anthropic/claude-haiku-4-5"
+      ? "anthropic/claude-sonnet-4-6"
       : "anthropic/claude-haiku-4-5";
 
     const patched = await request("PATCH", `/agents/${agentId}`, token, { model: flipped });
