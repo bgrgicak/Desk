@@ -12,7 +12,6 @@ describe('model settings helpers', () => {
     expect(modelProviderConnectionEnvKey('anthropic')).toBe('ANTHROPIC_API_KEY')
     expect(modelProviderConnectionEnvKey('openai')).toBe('OPENAI_API_KEY')
     expect(modelProviderConnectionEnvKey('codex')).toBeUndefined()
-    expect(modelProviderConnectionEnvKey('opencode')).toBeUndefined()
   })
 
   it('explains that API keys are shared per model provider', () => {
@@ -38,7 +37,7 @@ describe('model settings helpers', () => {
   it('normalizes bare model names with the selected provider', () => {
     expect(normalizeModelIdForProvider('anthropic', 'claude-sonnet-4-6')).toBe('anthropic/claude-sonnet-4-6')
     expect(normalizeModelIdForProvider('openai', 'openai/gpt-5.4')).toBe('openai/gpt-5.4')
-    expect(normalizeModelIdForProvider('opencode', '  big-pickle  ')).toBe('opencode/big-pickle')
+    expect(normalizeModelIdForProvider('codex', '  gpt-5.5  ')).toBe('codex/gpt-5.5')
   })
 
   it('reorders dragged models before and after a target id', () => {

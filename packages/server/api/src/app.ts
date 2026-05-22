@@ -77,7 +77,7 @@ interface RouteParams {
 
 export function createApp(opts: AppOptions): Server {
   const { pool, storage, runManager } = opts;
-  const vault = opts.vault ?? new VaultStore(pathJoin(storage.home, "vaults"));
+  const vault = opts.vault ?? new VaultStore(pathJoin(storage.home, ".vaults"));
 
   /**
    * Central WS emitter. Two responsibilities beyond just forwarding to
@@ -166,7 +166,7 @@ export function createApp(opts: AppOptions): Server {
    * fast synchronous phase (awaited) and a slow background phase
    * (fire-and-forget):
    *
-   *   - **Synchronous**: clear persisted opencode-serve session ids for
+   *   - **Synchronous**: clear persisted pi session ids for
    *     the affected chats. This is a single DB UPDATE — completes in
    *     well under a millisecond — and is the only piece that *has* to
    *     finish before the route returns. Without it, a chat message
@@ -181,7 +181,7 @@ export function createApp(opts: AppOptions): Server {
    *     provider-key change automatically reaches the next turn.
    *
    *     Skipping the await is safe: the only durable state we touch is
-   *     the chats.opencode_session_id column, and clearing that takes
+   *     the chats.pi_session_id column, and clearing that takes
    *     milliseconds.
    *
    *   Failures in either phase are swallowed and logged — a flaky engine
@@ -193,15 +193,15 @@ export function createApp(opts: AppOptions): Server {
     workspaceId?: string,
   ): Promise<void> {
     try {
-      await queries.chats.clearOpencodeSessionsForUser(pool, userId, workspaceId);
+      await queries.chats.clearPiSessionsForUser(pool, userId, workspaceId);
     } catch (err) {
       log.warn(
         { userId, workspaceId: workspaceId ?? "*", err: (err as Error).message ?? String(err) },
-        "clearOpencodeSessionsForUser failed",
+        "clearPiSessionsForUser failed",
       );
     }
     // Fire-and-forget. refreshSandboxConnections also calls
-    // clearOpencodeSessionsForUser internally; on the second pass it
+    // clearPiSessionsForUser internally; on the second pass it
     // finds nothing to clear and short-circuits. Cheap to do twice;
     // unsafe to skip on either path.
     if (opts.refreshSandboxConnections) {

@@ -88,7 +88,7 @@ describe('isMessageVisible', () => {
   it('keeps structured skill/read payloads with error words developer-only', () => {
     const skillPayload = message({
       type: 'events',
-      log: [{ kind: 'stderr', line: '<path>/home/agent/.config/opencode/skills/desk-goal-app/SKILL.md</path> <type>file</type> <content>error handling notes</content>' }],
+      log: [{ kind: 'stderr', line: '<path>/home/agent/.config/pi/skills/desk-goal-app/SKILL.md</path> <type>file</type> <content>error handling notes</content>' }],
     })
 
     expect(isMessageVisible(skillPayload, false)).toBe(false)
@@ -427,7 +427,7 @@ describe('findFailedOrDiagnosticAgentTurn', () => {
       message({
         type: 'events',
         log: [
-          { kind: 'stderr', line: '<path>/home/agent/.config/opencode/skills/desk-goal-app/SKILL.md</path> <type>file</type> <content>failure modes and error handling</content>' },
+          { kind: 'stderr', line: '<path>/home/agent/.config/pi/skills/desk-goal-app/SKILL.md</path> <type>file</type> <content>failure modes and error handling</content>' },
         ],
       }, { role: 'agent', id: '3' }),
     ]
@@ -486,7 +486,7 @@ describe('progressTextFromLog', () => {
     ])).toBe('Running')
   })
 
-  it('surfaces generic OpenCode tool events by tool name', () => {
+  it('surfaces generic pi tool events by tool name', () => {
     expect(progressTextFromLog([
       { kind: 'event', event: { type: 'tool', part: { name: 'read' } } },
     ])).toBe('Reading')

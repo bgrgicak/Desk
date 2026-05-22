@@ -1,8 +1,8 @@
 /**
  * Integration test: prompt-routing behavior for structured UI fragments.
  *
- * Each test sends a user prompt to a real `opencode serve`-backed sandbox
- * (free `opencode/big-pickle` model) and asserts that the agent reached
+ * Each test sends a user prompt to a real pi-backed sandbox
+ * (free `anthropic/claude-haiku-4-5` model) and asserts that the agent reached
  * for the right surface:
  *   - the built-in `chat-forms.app` for structured questions, or
  *   - the built-in `chat-cards.app` for browseable result lists
@@ -49,11 +49,11 @@ try {
 }
 const describeIf = SKIP ? describe.skip : describe;
 
-const FREE_MODEL = "opencode/big-pickle";
-// opencode-serve only knows the `openai` provider; `codex/<name>` is a
+const FREE_MODEL = "anthropic/claude-haiku-4-5";
+// pi only knows the `openai` provider; `codex/<name>` is a
 // Desk UI relabel. Use the canonical `openai/...` form so the daemon
 // doesn't have to translate (and so we don't trip the `codex/X` →
-// `opencode/big-pickle` fallback when something looks off about auth).
+// `anthropic/claude-haiku-4-5` fallback when something looks off about auth).
 const CODEX_MODEL = "openai/gpt-5.5";
 
 // Pick a stronger model when the host has a Codex (ChatGPT) login on disk.
@@ -121,7 +121,7 @@ interface AttachCommand {
  * match in arrival order.
  *
  * The driver synthesizes tool/step events from the post-turn message API
- * (see opencode.test.ts:222 for the contract). We don't depend on a
+ * (see execRun.test.ts for the contract). We don't depend on a
  * specific JSON shape — we just scan event payloads as strings and pull
  * the attach paths out with a regex. If the event-shape changes, the test
  * still works as long as the bash command text is preserved somewhere in

@@ -20,7 +20,7 @@ import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
 import { createRunManager } from "@agent-desk/scheduler";
-// Route coverage keeps /tools/models on the fake driver; real Docker/opencode
+// Route coverage keeps /tools/models on the fake driver; real Docker/pi
 // coverage lives in tools-models.integration.test.ts.
 const PRIOR_DESK_SANDBOX_DRIVER = process.env.DESK_SANDBOX_DRIVER;
 process.env.DESK_SANDBOX_DRIVER = "fake";
@@ -379,7 +379,7 @@ describe("Routes coverage (real Postgres)", () => {
   it("POST /agents + POST /workspaces/:id/agents — enrolls a new agent", async () => {
     const createRes = await request("POST", "/agents", token, {
       name: "Sidekick",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
     });
     expect(createRes.status).toBe(201);
     const created = createRes.body as { id: string };
@@ -627,7 +627,7 @@ describe("Routes coverage (real Postgres)", () => {
     // Create a second agent and enroll it in the workspace.
     const createAgent = await request("POST", "/agents", token, {
       name: "Switcher",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
     });
     const otherAgentId = (createAgent.body as { id: string }).id;
     const enroll = await request("POST", `/workspaces/${workspaceId}/agents`, token, {
@@ -806,7 +806,7 @@ describe("Routes coverage (real Postgres)", () => {
     // the invariant independently from the global active-model list.
     const createAgent = await request("POST", "/agents", token, {
       name: "Stranger",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
     });
     const strangerId = (createAgent.body as { id: string }).id;
     await request("DELETE", `/workspaces/${workspaceId}/agents/${strangerId}`, token);

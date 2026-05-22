@@ -153,7 +153,7 @@ Messages carry one of:
 
 - `{ type: "text", text }` — plain conversation
 - `{ type: "toolCall", toolName, args }` / `{ type: "toolResult", ... }` — sandbox tool use
-- `{ type: "events", events: [...] }` — captured opencode event stream
+- `{ type: "events", events: [...] }` — captured pi event stream
 - `{ type: "artifactRef", path, name?, mime? }` — workspace-relative file reference
 - `{ type: "summary", body }` — a running AI-generated summary of the chat; hidden unless developer mode is enabled, editable via PATCH
 - `{ type: "summary_request" }` — a scheduled system message that triggers a summary refresh when fired
@@ -172,7 +172,7 @@ Messages grow optional execution fields (added M6a):
 | `agentId` | agent outputs | which agent produced it |
 | `schedulerRef` | scheduled messages | `{ kind: 'at'|'cron', id }` — the at/cron entry this message owns |
 | `startedAt` / `endedAt` | running/completed | execution timing |
-| `attachments` | user messages with uploads | array of `{ path, name, mime?, size? }` — files or directories the user attached to *this* message; paths are workspace-root-relative (chat-owned uploads land under `.chats/{chatId}/attachments/`, library mentions point straight at the library item or folder) and are forwarded to opencode as `--file` flags when the trigger fires |
+| `attachments` | user messages with uploads | array of `{ path, name, mime?, size? }` — files or directories the user attached to *this* message; paths are workspace-root-relative (chat-owned uploads land under `.chats/{chatId}/attachments/`, library mentions point straight at the library item or folder) and are forwarded to pi as `--file` flags when the trigger fires |
 | `model` | agent outputs | model id that produced the row, stamped at insert time; historical rows keep their original model even if the agent is later reconfigured |
 
 ### POST /chats/{id}/messages
@@ -182,7 +182,7 @@ Body: `{ content: string, attachments?: AttachmentRef[], goal?: string | null }`
 file or a directory — chat uploads (`POST /chats/{id}/attachments`),
 library files, and library folders all share the same wire shape. The
 server persists them on the user message envelope and `fireMessage`
-forwards each path to opencode via a `--file` flag (opencode accepts
+forwards each path to pi via a `--file` flag (pi accepts
 both files and directories), so the agent sees the contents of every
 attached path when the trigger fires.
 
@@ -290,7 +290,7 @@ provider keys are global user settings. Non-model sandbox credentials such as
 `GITHUB_TOKEN` are only forwarded to a workspace when that workspace has a
 `workspace_connector_grants` row for the saved connection. A granted
 `GITHUB_TOKEN` is forwarded into sandboxes as `GITHUB_TOKEN`/`GH_TOKEN`, and
-OpenCode runs prepare non-interactive HTTPS git auth via `GIT_ASKPASS`.
+pi runs prepare non-interactive HTTPS git auth via `GIT_ASKPASS`.
 For GitHub, Workspace Settings → Connections currently guides users to create a
 classic personal access token with the `repo` scope, plus `workflow` when agents
 should edit GitHub Actions workflow files.
@@ -317,7 +317,7 @@ Response: `{ sources: Array<{ kind, available, enabled, reason?, detail? }> }`.
 Body `{ enabled: boolean }`. Toggles the user's opt-in for the given
 local source. When opted in, the runtime calls each source's `loadEnv()`
 on every sandbox spawn / exec and forwards the resulting env vars (e.g.
-`OPENCODE_AUTH_CONTENT` for Codex). Returns the updated source state.
+`PI_AUTH_JSON_BASE64` for Codex). Returns the updated source state.
 
 `404` for unknown kinds; `400` for missing/non-boolean `enabled`.
 
@@ -437,28 +437,28 @@ Removed in M6. Execution state and scheduling both live on the
 
 ### GET /tools/models
 
-Returns AI models that are ready to use — every entry is a provider opencode
+Returns AI models that are ready to use — every entry is a provider pi
 has authenticated inside the sandbox via a host-forwarded API key. Models are
 server-wide (governed by the keys in `/etc/desk-server/env`), not agent-scoped.
 
 Foundation of host-initiated sandboxed tool calling described in
-[ARCHITECTURE.md §7](./ARCHITECTURE.md). Internally this execs `opencode models`
-in a warm sandbox because opencode is the source of truth for what's
+[ARCHITECTURE.md §7](./ARCHITECTURE.md). Internally this execs `pi --list-models`
+in a warm sandbox because pi is the source of truth for what's
 authenticated.
 
 **Query parameters:**
 
-- `provider` (optional) — restrict to a single provider, e.g. `opencode`
+- `provider` (optional) — restrict to a single provider, e.g. `anthropic`
 
 **Response:** bare array, matching `/workspaces`, `/agents`, `/runs`.
 
 ```json
 [
-  { "id": "opencode/big-pickle", "provider": "opencode" }
+  { "id": "anthropic/claude-haiku-4-5", "provider": "anthropic" }
 ]
 ```
 
-`id` is opencode's canonical model id — pass it straight to `opencode run --model`.
+`id` is pi's canonical model id — pass it straight to `pi --model`.
 `provider` is denormalised so UIs can group or filter without splitting the id.
 
 If no container runtime is reachable, the endpoint returns `503` with

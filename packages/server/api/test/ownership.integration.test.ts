@@ -63,7 +63,7 @@ async function seedUser(suffix: string): Promise<Seeded> {
     id: agentId,
     userId,
     name: `agent-${suffix}`,
-    model: "opencode/big-pickle",
+    model: "anthropic/claude-haiku-4-5",
   });
 
   await pool.query(

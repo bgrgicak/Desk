@@ -1082,7 +1082,7 @@ function pickToolFilePath(input: unknown): string | undefined {
 function labelForEvent(ev: AgentEvent, workspacePath?: string): string {
   const t = ev.type
 
-  // opencode tool_use format: {type:'tool_use', part:{tool:'read', state:{input:{filePath:'...'}}}}
+  // pi tool_use format: {type:'tool_use', part:{tool:'read', state:{input:{filePath:'...'}}}}
   if (t === 'tool_use') {
     const tool = pickString(ev.part, 'tool') ?? 'tool'
     const state = (ev.part as Record<string, unknown> | undefined)?.state

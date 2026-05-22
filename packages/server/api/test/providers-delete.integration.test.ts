@@ -156,7 +156,7 @@ describe("PUT /me/providers — remove connection", () => {
     //   3. User re-enters / rotates the key.
     // Before the fix, step 3 left the disable flag intact, so the new key
     // was filtered out of every agent run's env even though the connection
-    // showed as active. Result: opencode reported "no openai models" and
+    // showed as active. Result: pi reported "no openai models" and
     // the agent returned silence.
     await request("PUT", "/me/providers", token, {
       providers: { ANTHROPIC_API_KEY: "sk-ant-original" },

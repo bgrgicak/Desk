@@ -1,14 +1,14 @@
 /**
  * Codex (ChatGPT subscription) local source.
  *
- * The Codex CLI on the host stores OAuth tokens in `~/.codex/auth.json`. The
- * OpenCode CLI we ship in the sandbox uses the same OAuth client and accepts
- * an out-of-band auth blob via `OPENCODE_AUTH_CONTENT`. So when the user
- * opts in to the Codex source, we read the host's tokens, translate them
- * into OpenCode's schema, and inject them into every sandbox exec — no
- * Codex binary, no bind-mount, no API key required.
+ * The Codex CLI on the host stores OAuth tokens in `~/.codex/auth.json`.
+ * Pi inside the sandbox accepts an out-of-band auth blob via
+ * `PI_AUTH_JSON_BASE64`. So when the user opts in to the Codex source, we
+ * read the host's tokens, translate them into pi's schema, and inject them
+ * into every sandbox exec — no Codex binary, no bind-mount, no API key
+ * required.
  *
- * Token refresh: OpenCode refreshes inline when needed by hitting OpenAI's
+ * Token refresh: pi refreshes inline when needed by hitting OpenAI's
  * oauth/token endpoint. The host's Codex CLI does the same independently —
  * each side keeps its own copy. The only hazard is parallel refresh racing
  * the same refresh_token; in practice the user's interactive `codex` use is
@@ -115,7 +115,7 @@ export function detectCodex(filePath = defaultCodexAuthPath()): LocalSourceStatu
   return { kind: "codex", available: true, detail };
 }
 
-/** Translates the host's Codex tokens into OpenCode's auth-blob env var. */
+/** Translates the host's Codex tokens into pi's auth-blob env var. */
 export function loadCodexEnv(filePath = defaultCodexAuthPath()): Record<string, string> | null {
   const file = readAuthFile(filePath);
   if (!file || file.auth_mode !== "chatgpt") return null;
@@ -130,25 +130,12 @@ export function loadCodexEnv(filePath = defaultCodexAuthPath()): Record<string, 
   const expSec = accessClaims?.exp ?? 0;
   const expiresAt = expSec ? expSec * 1000 : Date.now() + 60 * 60 * 1000;
 
-  // OpenCode-shape blob (used by the old opencode-serve daemon path).
-  const opencodeBlob = {
-    openai: {
-      type: "oauth",
-      refresh: tokens.refresh_token,
-      access: tokens.access_token,
-      expires: expiresAt,
-      accountId,
-    },
-  };
-
-  // Pi-shape blob (used by piClient.ts to seed the per-pi-invocation
-  // auth.json under PI_CODING_AGENT_DIR). Pi looks up the OAuth
-  // provider by id `openai-codex` and expects `{type: "oauth", access,
-  // refresh, accountId, expires}`. The two blobs differ in:
-  //   - provider id key: `openai` vs `openai-codex`
-  //   - pi has no `id_token` field; the access_token alone is enough
-  // Base64-encoded so the env-var transport doesn't trip on embedded
-  // newlines/quotes — piClient.ts decodes before writing auth.json.
+  // Pi-shape blob: piClient.ts seeds the per-pi-invocation auth.json
+  // under PI_CODING_AGENT_DIR from this. Pi looks up the OAuth provider
+  // by id `openai-codex` and expects
+  // `{type: "oauth", access, refresh, accountId, expires}`. Base64-encoded
+  // so the env-var transport doesn't trip on embedded newlines/quotes —
+  // piClient.ts decodes before writing auth.json.
   const piBlob = {
     "openai-codex": {
       type: "oauth",
@@ -161,7 +148,6 @@ export function loadCodexEnv(filePath = defaultCodexAuthPath()): Record<string, 
   const piBlobB64 = Buffer.from(JSON.stringify(piBlob), "utf8").toString("base64");
 
   return {
-    OPENCODE_AUTH_CONTENT: JSON.stringify(opencodeBlob),
     PI_AUTH_JSON_BASE64: piBlobB64,
   };
 }

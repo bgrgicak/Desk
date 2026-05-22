@@ -39,7 +39,7 @@ connection.
 git clone <this repo>
 cd <repo root>
 npm install
-# Build the sandbox image (one-time, ~3 min — pulls node + opencode).
+# Build the sandbox image (one-time, ~3 min — pulls node + pi).
 # Use whichever runtime is available:
 docker build -f packages/server/runtime/Dockerfile.sandbox \
   -t desk/sandbox:v1 .

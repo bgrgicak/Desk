@@ -159,7 +159,7 @@ describe("POST /chats/{id}/messages with attachments", () => {
     ]);
   });
 
-  it("forwards attachment paths to the runtime so opencode receives them as --file flags", async () => {
+  it("forwards attachment paths to the runtime so pi receives them as --file flags", async () => {
     promptsSeen.length = 0;
     const res = await request(
       "POST",
@@ -184,12 +184,12 @@ describe("POST /chats/{id}/messages with attachments", () => {
     // The prompt is just the user's text — paths are no longer inlined.
     expect(seen!.prompt).not.toContain("attachments/notes.txt");
     // The workspace-relative path is forwarded as-is; the runtime translates
-    // it to a sandbox-absolute path when building the opencode command.
+    // it to a sandbox-absolute path when building the pi command.
     expect(seen!.attachments).toEqual([`.chats/${chatId}/attachments/notes.txt`]);
   });
 
-  it("forwards a directory attachment as a workspace-relative path so opencode receives it via --file", async () => {
-    // Folders ride the same AttachmentRef wire as files; opencode's `--file`
+  it("forwards a directory attachment as a workspace-relative path so pi receives it via --file", async () => {
+    // Folders ride the same AttachmentRef wire as files; pi's `--file`
     // flag accepts directory paths and lists contents to the model. The path
     // has no extension and points at a folder under the workspace root.
     promptsSeen.length = 0;

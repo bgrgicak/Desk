@@ -510,7 +510,7 @@ export function ContextList({ onItemClick, onCompose, onPinItem, onUnpinItem, on
 
   // Apply filters. Hidden mode shows the server's showHidden=true superset —
   // all normal entries plus dot-prefixed/gitignored entries — regardless of
-  // mime kind, so users can also navigate into hidden subtrees like `.opencode/`.
+  // mime kind, so users can also navigate into hidden subtrees like `.pi/`.
   const showFolders =
     typeFilter === 'all' || typeFilter === 'folder' || typeFilter === 'hidden'
   const filteredFolders = showFolders

@@ -37,7 +37,7 @@ const PUBLIC_PREFIXES = ["/auth/login", "/auth/auto-login", "/auth/signup", "/op
 const INTERNAL_PREFIX = "/internal/";
 
 // Routes under /sandbox/* are called by the agent's `desk` CLI from inside
-// an OpenCode run. They authenticate via X-Desk-Sandbox-Token instead of
+// an pi run. They authenticate via X-Desk-Sandbox-Token instead of
 // a user session — see auth/sandboxToken.ts.
 const SANDBOX_PREFIX = "/sandbox/";
 

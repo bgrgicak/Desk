@@ -101,7 +101,7 @@ describe('eventDisplayChunks', () => {
 
   it('renders structured tool stderr payloads as neutral diagnostics in developer mode', () => {
     const log = [
-      { kind: 'stderr' as const, line: '<path>/home/agent/.config/opencode/skills/desk-goal-app/SKILL.md</path> <type>file</type> <content>error handling notes</content>' },
+      { kind: 'stderr' as const, line: '<path>/home/agent/.config/pi/skills/desk-goal-app/SKILL.md</path> <type>file</type> <content>error handling notes</content>' },
     ]
 
     expect(eventDisplayChunks(log, true)).toEqual([

@@ -10,7 +10,7 @@
  *     provider_meta) and the GET roundtrips it.
  *   - Unknown kinds return 404.
  *   - resolveLocalSourceEnv() — the helper used by the runtime — returns
- *     OPENCODE_AUTH_CONTENT iff the user is opted in *and* the host file
+ *     PI_AUTH_JSON_BASE64 iff the user is opted in *and* the host file
  *     is good.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
@@ -220,12 +220,12 @@ describe("resolveLocalSourceEnv", () => {
     expect(env).toEqual({});
   });
 
-  it("returns OPENCODE_AUTH_CONTENT when Codex is opted in and the host file is good", async () => {
+  it("returns PI_AUTH_JSON_BASE64 when Codex is opted in and the host file is good", async () => {
     await fs.writeFile(codexAuthPath, JSON.stringify(buildAuthFile({ refresh: "rt-bridge" })));
     await request("PUT", "/me/providers/local/codex", token, { enabled: true });
     const env = await resolveLocalSourceEnv(pool, userId);
-    expect(typeof env.OPENCODE_AUTH_CONTENT).toBe("string");
-    const blob = JSON.parse(env.OPENCODE_AUTH_CONTENT);
+    expect(typeof env.PI_AUTH_JSON_BASE64).toBe("string");
+    const blob = JSON.parse(env.PI_AUTH_JSON_BASE64);
     expect(blob.openai.type).toBe("oauth");
     expect(blob.openai.refresh).toBe("rt-bridge");
     expect(blob.openai.accountId).toBe("acct-test");

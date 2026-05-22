@@ -46,7 +46,7 @@ beforeAll(async () => {
 
   const { rows: userRows } = await pool.query<{ id: string }>("SELECT id FROM users LIMIT 1");
   userId = userRows[0].id;
-  vault = new VaultStore(path.join(home, "vaults"));
+  vault = new VaultStore(path.join(home, ".vaults"));
   await vault.setup(userId, "connector-test-vault");
   server = createApp({ pool, storage, runManager, broadcastUserId: userId, vault });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

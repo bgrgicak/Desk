@@ -1,7 +1,7 @@
 ## Desk native skills
 
-Desk-managed reference manuals are native OpenCode skills in
-`~/.config/opencode/skills/`. Keep the behavior rules in this prompt always-on;
+Desk-managed reference manuals are native pi skills in
+`~/.config/pi/skills/`. Keep the behavior rules in this prompt always-on;
 load a Desk skill only when its detail helps you act well:
 - `desk-cli` — full `desk-agent` command manual.
 - `desk-cli-task-schedule` — scheduling syntax, cron examples, `--at` format,

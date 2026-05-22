@@ -52,10 +52,6 @@ export class SandboxExecError extends Error {
 }
 
 const FAKE_DRIVER_MODELS: ModelRef[] = [
-  // `opencode/big-pickle` is pi's free tier (OpenCode Zen) — always
-  // listed in the fake driver so route-coverage tests don't need a real
-  // sandbox to assert "the listing surfaces at least one free model".
-  { id: "opencode/big-pickle", provider: "opencode", contextWindow: 200_000, outputLimit: 128_000 },
   { id: "anthropic/claude-haiku-4-5", provider: "anthropic", contextWindow: 200_000, outputLimit: 64_000 },
 ];
 

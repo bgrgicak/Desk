@@ -62,7 +62,7 @@ export interface RefreshSandboxConnectionsResult {
 export async function refreshSandboxConnections(
   opts: RefreshSandboxConnectionsOpts,
 ): Promise<RefreshSandboxConnectionsResult> {
-  const clearedSessions = await queries.chats.clearOpencodeSessionsForUser(
+  const clearedSessions = await queries.chats.clearPiSessionsForUser(
     opts.pool,
     opts.userId,
     opts.workspaceId,

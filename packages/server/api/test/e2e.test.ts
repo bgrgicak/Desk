@@ -1006,7 +1006,7 @@ describe("API e2e (real Postgres)", () => {
 /**
  * Gap 15: Real-stack e2e — HTTP → scheduler → real container sandbox → real
  * pi CLI → model → assistant message persisted → WS event. Originally
- * pinned to `opencode/big-pickle` (pi's free tier) so it ran in CI with
+ * pinned to `anthropic/claude-haiku-4-5` (pi's free tier) so it ran in CI with
  * no API keys; that tier is gone, so the spec is paused.
  *
  * To revive: point pi inside the sandbox at an aimock server on the
@@ -1029,7 +1029,7 @@ const REAL_E2E_SANDBOX_AVAILABLE = await (async () => {
   }
 })();
 
-const FREE_MODEL = "opencode/big-pickle";
+const FREE_MODEL = "anthropic/claude-haiku-4-5";
 
 // Skipped pending the aimock wiring described above. Keep the
 // describe-with-skip rather than deleting so the contract stays in the
@@ -1037,7 +1037,7 @@ const FREE_MODEL = "opencode/big-pickle";
 const REAL_STACK_E2E_ENABLED = false;
 
 describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
-  "real-stack e2e (real Docker + free opencode model)",
+  "real-stack e2e (real Docker + free model)",
   () => {
   let realPool: Pool;
   let realServer: http.Server;
@@ -1100,9 +1100,9 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
 
     const storage = { pool: realPool, home: realHome };
 
-    // No execRunFn — let the scheduler invoke the real opencode driver in a
+    // No execRunFn — let the scheduler invoke the real pi driver in a
     // real Docker sandbox. The seeded agent's model is patched to the free
-    // opencode/big-pickle below so this runs without paid provider keys.
+    // anthropic/claude-haiku-4-5 below so this runs without paid provider keys.
     const runManager = createRunManager({ pool: realPool });
 
     const { rows: userRows } = await realPool.query("SELECT id FROM users LIMIT 1");
@@ -1187,16 +1187,15 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
       if (assistantMsgs.length > 0) break;
     }
     expect(assistantMsgs.length).toBeGreaterThanOrEqual(1);
-  }, 360_000); // Free opencode runs are slower than paid APIs
+  }, 360_000); // Free model runs are slower than paid APIs
 
   // G10: User memory (~/Desk/.memory/memory.md) is injected into the
-  // system prompt the runtime ships to OpenCode. The free
-  // The free opencode model doesn't reliably honor a user-memory
-  // instruction over the always-on artifact-attach guidance, so the
-  // assertion targets the *prompt rendering pipeline* (the
-  // server-side agent file written before each run), not model
-  // compliance. The integration test in this same file covers the
-  // happy-path of an actual agent reply elsewhere.
+  // system prompt the runtime ships to pi. The cheap test-time model
+  // doesn't reliably honor a user-memory instruction over the always-on
+  // artifact-attach guidance, so the assertion targets the *prompt
+  // rendering pipeline* (the server-side agent file written before each
+  // run), not model compliance. The integration test in this same file
+  // covers the happy-path of an actual agent reply elsewhere.
   it("user memory.md is rendered into the agent file at run time", async () => {
     if (!realToken) {
       const loginRes = await realRequest("POST", "/auth/login", undefined, {
@@ -1240,9 +1239,9 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
 
     // Wait until the runtime writes the agent file. Pi reads
     // <cwd>/AGENTS.md from cwd up through parent directories, so the
-    // driver now writes a single AGENTS.md at the workspace root instead
-    // of one file per agent under `.opencode/agents/`. The rendered body
-    // still contains the user-memory fragment we're asserting on.
+    // driver now writes a single AGENTS.md at the workspace root. The
+    // rendered body contains the user-memory fragment we're asserting
+    // on.
     const agentFile = path.join(realHome, workspaceSlug, "AGENTS.md");
     let body = "";
     for (let i = 0; i < 60; i++) {
@@ -1256,7 +1255,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
 
   // Full sub-task loop against the real stack: agent spawns an
   // unscheduled task via /sandbox/messages → server auto-fires it →
-  // real opencode runs in the dedicated thread chat → we call
+  // real pi runs in the dedicated thread chat → we call
   // /sandbox/messages/complete with a result message → the report
   // lands as a child of the anchor in the parent chat.
   //
@@ -1264,7 +1263,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
   // is short and the assertion is robust. The complete call posts the
   // report-back; the parent chat then carries exactly one new agent
   // message whose parentId points at the task anchor.
-  // CI tail: the sub-task loop hits a real opencode container plus the
+  // CI tail: the sub-task loop hits a real pi container plus the
   // free big-pickle model; cold-start + a model turn + the report-back
   // are routinely past the 10-min poll budget on shared GHA runners
   // (the test passes locally with warm caches). Skip on CI so the
@@ -1361,7 +1360,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
     // The task_run row itself is `role='agent'` (inherited from the
     // anchor) so we have to require a *second* agent-role row,
     // otherwise the assertion would pass the moment the task_run is
-    // inserted — before opencode has actually replied.
+    // inserted — before pi has actually replied.
     let threadItems: Array<{ id: string; role: string; kind?: string; state?: string; parentId?: string; content?: { type?: string; text?: string } }> = [];
     let agentReplyText: string | undefined;
     for (let i = 0; i < 180; i++) {

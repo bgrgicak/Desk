@@ -175,9 +175,9 @@ export async function patchChat(
   // When only unread is being cleared, delegate to markRead which uses a
   // targeted UPDATE for the same atomicity guarantee.
   // Note: when agentId is in the patch, `updateMeta` also atomically
-  // nulls opencode_session_id — opencode-serve binds providerID/modelID
-  // to the session at creation, so reusing the old session after a
-  // model swap would silently keep the prior model.
+  // nulls pi_session_id — the pi session is bound to the prior agent's
+  // model at creation, so reusing it after a model swap would silently
+  // keep that model.
   if (hasMetaFields) {
     const updateData = unread !== undefined ? { ...metaFields, unread } : metaFields;
     const chat = await queries.chats.updateMeta(pool, id, updateData);

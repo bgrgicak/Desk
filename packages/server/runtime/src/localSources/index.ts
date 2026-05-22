@@ -23,21 +23,19 @@ export const LOCAL_SOURCE_KINDS: readonly LocalSourceKind[] = Object.keys(LOCAL_
 /**
  * Names of env vars that local sources inject into the sandbox.
  *
- * Daemon env builders prepend these as empty strings (alongside the
- * cloud `CONNECTION_ENV_VARS`) so a `docker exec -e KEY=` launching
- * `opencode serve` overrides anything the container inherited at
- * create time. Without this, a local source the user disabled in
- * Settings stays visible to the warm daemon through the container's
- * birth env — e.g. Codex's `OPENCODE_AUTH_CONTENT` blob keeps flowing
- * into the daemon even after the user toggles Codex off, and the
- * daemon keeps using the stale OAuth path.
+ * Per-run env builders prepend these as empty strings (alongside the
+ * cloud `CONNECTION_ENV_VARS`) so a `docker exec -e KEY=` launching pi
+ * overrides anything the container inherited at create time. Without
+ * this, a local source the user disabled in Settings stays visible to
+ * pi through the container's birth env — e.g. Codex's pi auth blob
+ * keeps flowing into pi even after the user toggles Codex off, and pi
+ * keeps using the stale OAuth path.
  *
  * Hand-maintained for the prototype: each entry must match the keys a
  * `LocalSource.loadEnv()` implementation can emit. When you add a new
  * local source, append its env vars here too.
  */
 export const LOCAL_SOURCE_ENV_NAMES: readonly string[] = [
-  "OPENCODE_AUTH_CONTENT",
   // Pi reads this in piClient.ts to seed each per-invocation auth.json
   // from the host's OAuth credentials (e.g. ~/.codex/auth.json). Empty
   // means "no codex/oauth-based provider — pi falls back to env-vars

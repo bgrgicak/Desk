@@ -31,7 +31,7 @@ const fakeEngineState = {
   expectedBinds: [] as string[],
   expectedUser: "0:0",
   agentUserLabel: "0:0",
-  resourceProfile: "runtime=opencode-serve-v1,user=root+sudo",
+  resourceProfile: "runtime=pi-v1,user=root+sudo",
 };
 
 function buildFakeEngine(): Engine {
@@ -78,7 +78,7 @@ function buildFakeEngine(): Engine {
         running: true,
         // Carry a published-ports map so the createOrReuse drift check
         // doesn't classify the reused container as
-        // "opencode-serve-port-unbound" and recreate it. Mirrors the
+        // "pi-port-unbound" and recreate it. Mirrors the
         // shape `engine.inspect` returns for a healthy live container.
         publishedPorts: {
           "9105/tcp": [{ hostIp: "127.0.0.1", hostPort: 34123 }],

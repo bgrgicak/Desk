@@ -60,7 +60,7 @@ export interface RunManagerOptions {
    */
   resolveProviderKeys?: (userId: string, workspaceId?: string) => Promise<Record<string, string>>;
   /**
-   * Test-injectable replacement for the runtime's opencode spawn. Called
+   * Test-injectable replacement for the runtime's pi spawn. Called
    * by fireMessage with the run id. Return the exit code; the scheduler
    * handles state transitions and child-message insertion.
    */
@@ -316,7 +316,7 @@ export function createRunManager(opts: RunManagerOptions) {
     if (!msg) return { fired: false, childIds: [] };
     // Task model: a task anchor lives in the source chat (kind='task',
     // carries the schedule). Its run output — task_runs, agent child
-    // replies, opencode session, logs — lands in the anchor's thread
+    // replies, pi session, logs — lands in the anchor's thread
     // chat so the source chat stays clean and the task list opens an
     // isolated transcript. Legacy task anchors without a thread fall
     // back to the source chat (no behaviour change). All other kinds
@@ -470,8 +470,8 @@ export function createRunManager(opts: RunManagerOptions) {
         );
       }
       // Codex/ChatGPT bridge: when the user has opted in and the host has a
-      // valid `~/.codex/auth.json`, translate it to OpenCode's auth blob and
-      // forward it as OPENCODE_AUTH_CONTENT. Re-read per run so a refresh on
+      // valid `~/.codex/auth.json`, translate it to pi's auth blob and
+      // forward it as PI_AUTH_JSON_BASE64. Re-read per run so a refresh on
       // the host (interactive `codex` use) propagates without recreating the
       // sandbox.
       const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
@@ -565,12 +565,12 @@ export function createRunManager(opts: RunManagerOptions) {
           await onLog(evt);
         };
         let attempt = 0;
-        // One opencode-serve session per Desk chat. Read the chat's
+        // One pi session per Desk chat. Read the chat's
         // currently-bound session id (null on the chat's first turn) and
         // pass it into the runtime; the runtime returns the session that
         // actually handled the run, which may be a freshly-created one if
         // the chat had none or the stored id was stale on the daemon.
-        let opencodeSessionId = await queries.chats.getOpencodeSessionId(pool, executionChatId);
+        let piSessionId = await queries.chats.getPiSessionId(pool, executionChatId);
         const activeModelIds = activeAgents.map((a) => a.model);
         // Translate the primary Desk model id and every active fallback
         // model into pi's provider namespace. `codex/<n>` becomes
@@ -633,7 +633,7 @@ export function createRunManager(opts: RunManagerOptions) {
                 providerKeys: billing.providerKeys,
                 extraEnv,
                 mountPlan,
-                opencodeSessionId,
+                piSessionId,
                 onLog: onLogWithStderrCapture,
               });
             } catch (err) {
@@ -660,10 +660,10 @@ export function createRunManager(opts: RunManagerOptions) {
             // Persist the session id after every attempt (not just success):
             // a resource-retry inside the loop should reuse the same session
             // so the model's context across attempts stays consistent.
-            const nextSessionId = (result as { opencodeSessionId?: string }).opencodeSessionId;
-            if (nextSessionId && nextSessionId !== opencodeSessionId) {
-              await queries.chats.setOpencodeSessionId(pool, executionChatId, nextSessionId);
-              opencodeSessionId = nextSessionId;
+            const nextSessionId = (result as { piSessionId?: string }).piSessionId;
+            if (nextSessionId && nextSessionId !== piSessionId) {
+              await queries.chats.setPiSessionId(pool, executionChatId, nextSessionId);
+              piSessionId = nextSessionId;
             }
           }
           if (result.exitCode === 0) break;
@@ -708,7 +708,7 @@ export function createRunManager(opts: RunManagerOptions) {
       // Symmetric to the catch-block guard below: if `preemptChatRun`
       // already set state='cancelled' while we were awaiting the runner,
       // `finalizeExecution` was a WHERE-clause no-op and the row is
-      // still cancelled. opencode's session.abort path resolves with
+      // still cancelled. pi's session.abort path resolves with
       // exitCode=0, so without this guard the success path below would
       // happily read the (orphaned) log and insert another agent child —
       // producing one duplicate reply per preempted send when the user
@@ -980,7 +980,7 @@ export function createRunManager(opts: RunManagerOptions) {
    * (executeAt = now). Otherwise the existing time-based 30-minute fallback
    * applies.
    *
-   * The trigger uses the active chat agent's OpenCode-reported context window
+   * The trigger uses the active chat agent's pi-reported context window
    * when available. Defaults follow long-context RAG/memory practice: summarize
    * at a small fraction of the model window, but clamp the threshold so small
    * local models keep enough working context and frontier models do not wait
@@ -1000,7 +1000,7 @@ export function createRunManager(opts: RunManagerOptions) {
   const cancelSummary = summaryScheduler.cancelSummary;
   const cancelSummaryForChat = summaryScheduler.cancelSummaryForChat;
 
-  /** Cancels an in-flight exec: kills the opencode child if possible. */
+  /** Cancels an in-flight exec: kills the pi child if possible. */
   async function cancelRun(messageId: string): Promise<void> {
     await runtimeCancelRun(messageId);
     await queries.messages.updateMessage(pool, messageId, { state: "cancelled" });
@@ -1046,13 +1046,13 @@ export function createRunManager(opts: RunManagerOptions) {
 
   /**
    * Unconditionally cancel the chat's in-flight agent_turn so a new
-   * user send can fire cleanly. This matches opencode's own client
-   * pattern: opencode itself silently drops the new message's `parts`
+   * user send can fire cleanly. This matches pi's own client
+   * pattern: pi itself silently drops the new message's `parts`
    * if you POST to a busy session, so its bundled TUI/CLI calls
    * `session.abort(...)` before any new turn. We mirror that here.
    *
    * `POST /session/:id/abort` is safe to follow with a fresh send:
-   * opencode preserves session history/messages-on-disk and the new
+   * pi preserves session history/messages-on-disk and the new
    * turn starts cleanly against an `Idle` session. The prior turn's
    * partial assistant reply is kept on the row (the cancel path
    * resolves with `Cancelled` after `lastAssistant` is captured).
@@ -1073,12 +1073,12 @@ export function createRunManager(opts: RunManagerOptions) {
    * of zombie rows: only cancels when the log file has been silent for
    * `staleAfterMs`, so a healthy long-running step is never killed by
    * a periodic sweep. Not wired to the chat-send route any more — that
-   * uses `preemptChatRun` (always-preempt) to match opencode semantics.
+   * uses `preemptChatRun` (always-preempt) to match pi semantics.
    *
    * Why we keep it: a follow-up that catches a wedged daemon (e.g. a
    * deadlocked tool with the row stuck in `running` and no log
    * activity) can call this explicitly without forcing a preempt
-   * decision on healthy runs. The signal is log mtime — opencode
+   * decision on healthy runs. The signal is log mtime — pi
    * writes to the per-message log file on every event, so a
    * legitimately long-running step keeps the file growing.
    */
@@ -1103,7 +1103,7 @@ export function createRunManager(opts: RunManagerOptions) {
       const stat = await fsp.stat(logPath);
       mtimeMs = stat.mtimeMs;
     } catch {
-      // Missing log file means opencode hasn't emitted its first event
+      // Missing log file means pi hasn't emitted its first event
       // yet — usually container cold-start (entrypoint downloading
       // deps, `.deskrc` running). Stale-only mode is conservative:
       // skip rather than risk killing legitimately-progressing work.

@@ -112,4 +112,33 @@ describe("attachArtifactRef — global app path", () => {
       ),
     ).rejects.toThrow(/Built-in app artifact not found/);
   });
+
+  // Regression: before this guard, an agent that hit a NOT_FOUND on the
+  // correct `…/dist/fragments/<frag>` path (because dist hadn't been
+  // built yet) could retry with the source-side `…/fragments/<frag>`
+  // shape — which exists in the mounted source tree and so attached
+  // successfully, but the SPA's parseGlobalAppPath only routes the dist
+  // shape, leaving a stored-but-unrenderable artifactRef behind.
+  it("rejects built-in app paths missing the dist/fragments/<frag> shape", async () => {
+    await expect(
+      attachArtifactRef(
+        { pool, home },
+        {
+          chatId,
+          path: "/opt/desk-apps/chat-forms.app/fragments/multi-step",
+        },
+        () => undefined,
+      ),
+    ).rejects.toThrow(/Built-in app path must be/);
+    await expect(
+      attachArtifactRef(
+        { pool, home },
+        {
+          chatId,
+          path: "/opt/desk-apps/chat-forms.app/src/main.tsx",
+        },
+        () => undefined,
+      ),
+    ).rejects.toThrow(/Built-in app path must be/);
+  });
 });

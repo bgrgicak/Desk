@@ -102,7 +102,7 @@ export function chatNeedsBrowser(goal: GoalKey | null | undefined): boolean {
  * entry, everything else is preserved as-is.
  *
  * The shape mirrors the standard MCP `mcpServers` map (Claude Desktop /
- * opencode compatible) so user-added servers slot in without bespoke
+ * pi compatible) so user-added servers slot in without bespoke
  * config. `enabled: false` is emitted explicitly when playwright isn't
  * needed so the extension can DELETE its tools on the next session
  * boot, rather than relying on absence.

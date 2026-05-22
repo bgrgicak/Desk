@@ -27,7 +27,7 @@ Keys are never returned in plaintext over the API. The masking function lives in
 
 Keys are passed to containers as environment variables via `runtime/src/docker.ts → providerKeyEnv()` at create time and `providerKeyExecEnv()` per run. This means container-scoped credentials are visible to code running in the sandbox; create-time values may also be visible via `docker inspect` on the host. Because sandboxed code must be able to use the keys, switching to a tmpfs file does not reduce exposure — any code running in the container can read either.
 
-GitHub connections are exposed as both `GITHUB_TOKEN` and `GH_TOKEN` for CLI compatibility. The UI guides users to create a classic personal access token with the `repo` scope, plus `workflow` if agents should edit GitHub Actions workflow files. Classic tokens are broad, but they are currently the simplest compatible path for `gh`, GitHub API calls, private repo git operations, pull requests, issues, and HTTPS `git` from sandboxes. Deleting the connection removes Desk's local vault entry; users can revoke or rotate the token in GitHub settings. The runtime also creates a temporary `GIT_ASKPASS` helper during OpenCode runs so HTTPS `git` operations can authenticate non-interactively without requiring the `gh` CLI to be installed.
+GitHub connections are exposed as both `GITHUB_TOKEN` and `GH_TOKEN` for CLI compatibility. The UI guides users to create a classic personal access token with the `repo` scope, plus `workflow` if agents should edit GitHub Actions workflow files. Classic tokens are broad, but they are currently the simplest compatible path for `gh`, GitHub API calls, private repo git operations, pull requests, issues, and HTTPS `git` from sandboxes. Deleting the connection removes Desk's local vault entry; users can revoke or rotate the token in GitHub settings. The runtime also creates a temporary `GIT_ASKPASS` helper during pi runs so HTTPS `git` operations can authenticate non-interactively without requiring the `gh` CLI to be installed.
 
 The real risk is `docker inspect` access on the host, which requires Docker socket access (root-equivalent). Mitigated sufficiently by host access controls.
 
@@ -73,7 +73,7 @@ CREATE TABLE provider_key_access_log (
 
 User-stored credentials (logins for sites the user wants their agents
 to act on) live in a per-user [KDBX 4](https://keepass.info/help/kb/kdbx_4.html)
-file at `${DESK_HOME}/vaults/{userId}.kdbx`, encrypted with a master
+file at `${DESK_HOME}/.vaults/{userId}.kdbx`, encrypted with a master
 password the user sets.
 
 ### Threat model
@@ -302,7 +302,7 @@ are never logged. Set to 0 to disable.
 
 `none` is the right pick for paranoid deployments running agent
 workloads that only need on-disk file editing + a pre-cached local
-model. AI API calls (Anthropic, OpenAI, OpenCode), sandbox callbacks
+model. AI API calls (Anthropic, OpenAI), sandbox callbacks
 to `host.docker.internal`, and any tool that downloads dependencies
 all break — those are the intended trade-offs.
 

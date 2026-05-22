@@ -237,7 +237,7 @@ export function liveAssistantTextMessage(
   activeAgentTurn: ServerMessage | null,
 ): ServerMessage | null {
   // Do not render in-flight text deltas as a regular assistant bubble.
-  // opencode can briefly stream reasoning content as a `text` delta before a
+  // pi can briefly stream reasoning content as a `text` delta before a
   // later part update classifies the same part as `reasoning`; rendering here
   // makes private reasoning flash in the normal chat until the tool/reasoning
   // event catches up. Finalized messages are still rendered from persisted text

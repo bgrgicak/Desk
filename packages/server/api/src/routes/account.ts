@@ -396,7 +396,7 @@ export async function setProviders(
     // off in Settings. Without this, a user who had disabled the provider
     // and then re-entered a key would have the key saved as an "active"
     // connection but `resolveProviderKeys.isDisabled()` would still filter
-    // it out — opencode never sees the credential and reports the provider
+    // it out — pi never sees the credential and reports the provider
     // as unconfigured. Entering a fresh value into Settings implies the
     // user wants the key live; explicit disable still goes through the
     // separate `setProvidersMeta` toggle.

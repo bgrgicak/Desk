@@ -144,7 +144,7 @@ export function classifyResourceError(
   if (s.includes("enomem")) return "memory";
   if (s.includes("out of memory")) return "memory";
   if (s.includes("cannot allocate memory")) return "memory";
-  // setsid (util-linux) wraps the opencode exec for process-group cleanup.
+  // setsid (util-linux) wraps the pi exec for process-group cleanup.
   // Older setsid versions report a signal-killed child as
   //   `setsid: child <pid> did not exit normally: Success`
   // and exit 1 — so a cgroup OOM-kill (SIGKILL) reaches the runtime as
@@ -301,9 +301,9 @@ export async function ensureImage(kind: WorkspaceKind = "project"): Promise<void
  * When omitted the function falls back to reading the host env — that legacy
  * path is what tests without DB access use.
  *
- * `extraEnv` carries non-key env vars (e.g. `OPENCODE_AUTH_CONTENT` for the
+ * `extraEnv` carries non-key env vars (e.g. `PI_AUTH_JSON_BASE64` for the
  * Codex/ChatGPT bridge) that should be present at container birth so the
- * first opencode invocation has the auth blob already wired up.
+ * first pi invocation has the auth blob already wired up.
  */
 export async function createOrReuse(
   workspaceId: string,
@@ -423,7 +423,7 @@ async function createOrReuseImpl(
   try {
     // Egress policy. Default is "bridge" (full outbound) because the
     // sandbox needs to reach AI provider APIs (Anthropic, OpenAI,
-    // opencode), GitHub for git operations, and tool registries.
+    // pi), GitHub for git operations, and tool registries.
     // Operators running a paranoid deployment can set
     // DESK_SANDBOX_NETWORK="none" to drop all egress — breaks AI calls
     // and any tooling that downloads from the network, but keeps the
@@ -660,11 +660,11 @@ function parseBindStrings(strings: string[]): BindMount[] {
  * moved to DB-backed keys yet.
  *
  * `extraEnv` is emitted after filtering out managed connection key names.
- * Use it for non-key credentials such as `OPENCODE_AUTH_CONTENT`, which carry
+ * Use it for non-key credentials such as `PI_AUTH_JSON_BASE64`, which carry
  * their own validation contract (the value is an opaque OAuth blob, not a
  * per-provider key name).
  *
- * Only keys with non-empty values are emitted, so opencode's auto-detection
+ * Only keys with non-empty values are emitted, so pi's auto-detection
  * doesn't light up empty providers.
  */
 export function providerKeyEnv(
@@ -755,9 +755,9 @@ export function providerKeyExecEnv(
  * Names of every persisted connection env var the user can manage in
  * Settings, plus the managed-connection aliases that mirror them. Daemon
  * env builders prepend these as empty strings so a `docker exec -e KEY=`
- * launching opencode-serve overrides anything the container inherited at
+ * launching pi overrides anything the container inherited at
  * create time. Without this, a key the user disabled in Settings stays
- * visible to the warm daemon via the container's birth env and opencode
+ * visible to the warm daemon via the container's birth env and pi
  * exposes models for the "disabled" provider.
  */
 export function connectionEnvNames(): string[] {
@@ -939,18 +939,3 @@ export async function pruneDriftedContainers(drift: SandboxBindDrift[]): Promise
   }
 }
 
-/**
- * No-op under the pi runtime — there is no long-lived per-container
- * daemon to clean up after a desk-server restart. Pi sessions are
- * file-backed under the workspace bind-mount, so a desk-server restart
- * naturally finds them on the next turn without any cross-boot reset.
- *
- * Kept as an exported function so api/db boot paths can keep calling it
- * without conditionals; returns "didn't kill" for every workspace.
- */
-export async function killOpencodeDaemonsForOrphans(
-  workspaceIds: ReadonlyArray<string>,
-  _engineOverride?: Engine,
-): Promise<{ workspaceId: string; killed: boolean }[]> {
-  return workspaceIds.map((workspaceId) => ({ workspaceId, killed: false }));
-}

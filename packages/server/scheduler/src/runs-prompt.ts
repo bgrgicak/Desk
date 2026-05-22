@@ -72,8 +72,8 @@ export async function withChatTranscriptContext(
 
 /**
  * Returns the prompt the agent will receive plus any workspace-relative
- * attachment paths to forward to opencode via `--file`. We don't inline
- * paths into the prompt: opencode surfaces the file content directly,
+ * attachment paths to forward to pi via `--file`. We don't inline
+ * paths into the prompt: pi surfaces the file content directly,
  * and the picker-side path may live anywhere in the workspace, not just
  * `~/.chats/.../attachments/`.
  */

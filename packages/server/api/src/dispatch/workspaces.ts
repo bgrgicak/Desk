@@ -258,7 +258,7 @@ export async function dispatchWorkspaces(
     };
     const { agent, modelChanged } = await agentRoutes.patchAgent(pool, userId, segments[1], data);
     if (modelChanged && opts.refreshSandboxConnections) {
-      // opencode-serve caches each agent file's `model:` field at
+      // pi caches each agent file's `model:` field at
       // startup and ignores rewrites. Clearing chat sessions (done
       // inside patchAgent) is necessary but not sufficient — a new
       // session in the same daemon still inherits the cached agent

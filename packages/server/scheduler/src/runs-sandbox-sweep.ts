@@ -60,7 +60,7 @@ export function startIdleSweeper(pool: Pool, intervalMs: number = 60_000): NodeJ
 }
 
 /**
- * Soft-tier idle sweep: kill the opencode-serve daemon inside
+ * Soft-tier idle sweep: kill the pi runtime inside
  * sandbox containers whose workspace has been quiet for
  * `softIdleMs` (default 10 min), but keep the container running.
  * Saves ~400 MB of warm-daemon RSS per sandbox; the next message

@@ -1,7 +1,7 @@
 /**
  * Synthesize SSE-shaped events from a polled assistant message envelope.
  *
- * The opencode-serve poll path needs to emit reasoning-text deltas,
+ * The pi poll path needs to emit reasoning-text deltas,
  * tool status transitions, and one-shot static parts (step-start,
  * step-finish, …) as if they had arrived over SSE — the rest of the
  * runtime treats every event the same way regardless of source.
@@ -42,7 +42,7 @@ export function* synthesizeNonTextEvents(
     const partId = typeof part.id === "string" ? part.id : "";
     const prior = state && partId ? state.get(partId) ?? {} : {};
 
-    // Reasoning: opencode-serve doesn't reliably broadcast reasoning
+    // Reasoning: pi doesn't reliably broadcast reasoning
     // deltas over SSE for multi-step turns, so the polling loop is
     // the only path that sees reasoning growing. Mimic the SSE
     // delta shape — emit just the suffix added since the last

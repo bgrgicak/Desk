@@ -135,7 +135,7 @@ describe("formatEngineErrorMessage — secret redaction", () => {
       "exec",
       "-d",
       "--user", "0:0",
-      "--env", "OPENCODE_SERVER_PASSWORD=abc123-very-secret",
+      "--env", "PI_AUTH_JSON_BASE64=abc123-very-secret",
       "--env", "ANTHROPIC_API_KEY=sk-ant-real-key-xyz",
       "--env", "GITHUB_TOKEN=ghp_definitelyAtoken",
       "--env", "EMPTY_VAR=",
@@ -145,7 +145,7 @@ describe("formatEngineErrorMessage — secret redaction", () => {
     const msg = formatEngineErrorMessage("docker", args, "Error: container vanished", 1);
     expect(msg).toContain("docker exec -d --user 0:0");
     // Keys remain visible
-    expect(msg).toContain("OPENCODE_SERVER_PASSWORD=<REDACTED>");
+    expect(msg).toContain("PI_AUTH_JSON_BASE64=<REDACTED>");
     expect(msg).toContain("ANTHROPIC_API_KEY=<REDACTED>");
     expect(msg).toContain("GITHUB_TOKEN=<REDACTED>");
     expect(msg).toContain("EMPTY_VAR=<REDACTED>");

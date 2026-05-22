@@ -11,12 +11,12 @@ import { resolveProviderKeys } from "../providerKeys.js";
 import type { VaultStore } from "../vault/store.js";
 
 /**
- * Lists AI models that are ready to use — every entry is a provider opencode
+ * Lists AI models that are ready to use — every entry is a provider pi
  * has authenticated inside the sandbox (via host-forwarded API keys *or*
  * local sources like Codex). Models are server-wide config, not agent-
  * scoped, so the response is a bare array matching the convention of
  * `/workspaces`, `/agents`, etc. We still query through a warm sandbox
- * internally because opencode is the source of truth for provider
+ * internally because pi is the source of truth for provider
  * availability.
  *
  * Foundation of host-initiated sandboxed tool calling per ARCHITECTURE.md §7.

@@ -41,8 +41,8 @@ const fakePool = {} as never;
 const fakeWorkspace = { id: "wks_test", path: "desk", user_id: "usr_1", name: "Desk" };
 
 const FREE_MODELS = [
-  { id: "opencode/big-pickle", provider: "opencode" },
-  { id: "opencode/big-pickle", provider: "opencode" },
+  { id: "anthropic/claude-haiku-4-5", provider: "anthropic" },
+  { id: "anthropic/claude-haiku-4-5", provider: "anthropic" },
 ];
 const ALL_MODELS = [
   ...FREE_MODELS,
@@ -93,7 +93,7 @@ describe("listModels — decryption failure fallback", () => {
 describe("expandOpenAiBySource — pi's openai-codex/* → Desk's codex/* relabel", () => {
   it("relabels openai-codex/* → codex/* and passes other providers through", () => {
     const models = [
-      { id: "opencode/big-pickle", provider: "opencode" },
+      { id: "anthropic/claude-haiku-4-5", provider: "anthropic" },
       { id: "openai/gpt-5.4", provider: "openai" },
       { id: "openai-codex/gpt-5.4", provider: "openai-codex" },
       { id: "openai-codex/gpt-5.5", provider: "openai-codex" },
@@ -110,7 +110,7 @@ describe("expandOpenAiBySource — pi's openai-codex/* → Desk's codex/* relabe
     expect(out.find((m) => m.id === "openai/gpt-5.4")?.provider).toBe("openai");
     // Non-OpenAI providers are untouched.
     expect(out.find((m) => m.id === "anthropic/claude-4-7")?.provider).toBe("anthropic");
-    expect(out.find((m) => m.id === "opencode/big-pickle")?.provider).toBe("opencode");
+    expect(out.find((m) => m.id === "anthropic/claude-haiku-4-5")?.provider).toBe("anthropic");
   });
 
   it("is a no-op when pi did not emit any openai-codex/* models", () => {
@@ -178,11 +178,11 @@ describe("listModels — happy path", () => {
     vi.mocked(resolveProviderKeys).mockResolvedValue({});
     vi.mocked(runtimeListModels).mockResolvedValue(FREE_MODELS);
 
-    const models = await listModels(fakePool, undefined, { provider: "opencode" });
+    const models = await listModels(fakePool, undefined, { provider: "anthropic" });
     expect(models.length).toBeGreaterThan(0);
-    expect(models.every((m) => m.provider === "opencode")).toBe(true);
+    expect(models.every((m) => m.provider === "anthropic")).toBe(true);
     expect(runtimeListModels).toHaveBeenCalledWith(fakeWorkspace.id, fakeWorkspace.path, {
-      provider: "opencode",
+      provider: "anthropic",
       providerKeys: {},
       env: {},
     });

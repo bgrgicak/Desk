@@ -159,7 +159,7 @@ export async function getOrCreateAskAiChat(pool: Pool, userId: string): Promise<
 
 /**
  * Creates a workspace and ensures it has at least one enrolled agent. If the
- * caller has no agents yet, creates a default opencode-backed agent first.
+ * caller has no agents yet, creates a default pi-backed agent first.
  * Without this, chat creation would 400 on every agentId in the new workspace.
  * Users can override the enrollment via the Agent access settings panel.
  *

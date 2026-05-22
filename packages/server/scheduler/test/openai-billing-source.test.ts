@@ -18,10 +18,9 @@ import {
   resolveModelForRun,
 } from "../src/runs.js";
 
-// Pi consumes the OAuth blob via PI_AUTH_JSON_BASE64 — the legacy
-// OPENCODE_AUTH_CONTENT key is still emitted by localSources/codex.ts as
-// the "is OAuth available" signal the resolver reads from.
-const oauth = { OPENCODE_AUTH_CONTENT: "{\"openai-codex\":{\"type\":\"oauth\"}}" };
+// Pi consumes the Codex OAuth blob via PI_AUTH_JSON_BASE64; the resolver
+// also reads this key as the "is OAuth available" signal.
+const oauth = { PI_AUTH_JSON_BASE64: "eyJvcGVuYWktY29kZXgiOnsidHlwZSI6Im9hdXRoIn19" };
 
 describe("resolveOpenAiBillingSource", () => {
   it("passes through non-codex model ids and keys untouched", () => {
@@ -53,11 +52,11 @@ describe("resolveOpenAiBillingSource", () => {
     expect(out.providerKeys.ANTHROPIC_API_KEY).toBe("sk-ant");
   });
 
-  it("treats an empty OPENCODE_AUTH_CONTENT string as 'OAuth not available'", () => {
+  it("treats an empty PI_AUTH_JSON_BASE64 string as 'OAuth not available'", () => {
     const out = resolveOpenAiBillingSource(
       "codex/gpt-5.4",
       { OPENAI_API_KEY: "sk-xxx" },
-      { OPENCODE_AUTH_CONTENT: "" },
+      { PI_AUTH_JSON_BASE64: "" },
     );
     expect(out.runtimeModel).toBe("openai/gpt-5.4");
   });
@@ -97,9 +96,9 @@ describe("resolveModelForRun — auth-missing surfaces to pi (no Desk-side subst
     expect(out.reason).toBeNull();
   });
 
-  it("passes opencode/* through unchanged regardless of provider state", () => {
-    const out = resolveModelForRun("opencode/big-pickle", {}, {});
-    expect(out.runtimeModel).toBe("opencode/big-pickle");
+  it("passes anthropic/* through unchanged regardless of provider state", () => {
+    const out = resolveModelForRun("anthropic/claude-haiku-4-5", {}, {});
+    expect(out.runtimeModel).toBe("anthropic/claude-haiku-4-5");
     expect(out.reason).toBeNull();
   });
 

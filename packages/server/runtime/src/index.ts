@@ -10,7 +10,6 @@ export {
   growSandboxForResourceError,
   reapIdleSandboxes,
   softReapIdleDaemons,
-  killOpencodeDaemonsForOrphans,
   _resetGrowthStateForTest,
 } from "./docker.js";
 export type { SandboxHandle, SandboxBindDrift, ResourceFailureKind, GrowthResult } from "./docker.js";
@@ -40,8 +39,8 @@ export {
 } from "./mounts.js";
 export type { MountSet, MountPlan, MountPlanEntry } from "./mounts.js";
 export { writeBuiltinApps, BUILTIN_APPS_MANIFEST_FILE } from "./builtinApps.js";
-export { execRun, cancelRun } from "./opencode.js";
-export type { ExecRunOptions } from "./opencode.js";
+export { execRun, cancelRun } from "./execRun.js";
+export type { ExecRunOptions } from "./execRun.js";
 export { renderAgentFile, writeAgentFile } from "./agentFile.js";
 export type { AgentFileInput } from "./agentFile.js";
 export { renderPromptBody, loadAndSub } from "./prompt.js";

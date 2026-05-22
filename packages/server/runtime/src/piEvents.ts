@@ -61,7 +61,7 @@ export interface TranslateContext {
   /**
    * Annotation surfaced on every event when set: `{providerID, modelID}`
    * — used by the chat log so "what model produced this step?" is
-   * answerable from the log alone, mirroring the old opencode behavior.
+   * answerable from the log alone, mirroring the legacy runtime behavior.
    */
   model?: { providerID: string; modelID: string; agent?: string };
 }
