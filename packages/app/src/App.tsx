@@ -68,6 +68,7 @@ import {
   setPendingSettingsSection,
   setPendingMyAccountOpen,
 } from '@/store/slices/uiSlice'
+import { openArtifact } from '@/store/slices/previewPanelSlice'
 import { buildArtifactPrompt } from '@/lib/artifact-prompt'
 import { markChatReadQuietly } from '@/store/ws/middleware'
 import type { SendOptions } from '@/components/compose/ChatInput'
@@ -486,8 +487,26 @@ function AppInner() {
   // session); without useCallback every MessageBubble in the visible
   // window would re-render alongside, defeating the memo.
   const handleAttachmentClick = useCallback((att: AttachmentRef) => {
+    // Plain directories (not app bundles) have no inline preview — keep
+    // routing them to the Library folder view.
     if (att.kind === 'directory' && !appAttachmentToPreview(att.path)) {
       goTo({ wsId: att.workspaceId, view: 'context', item: null, folder: att.path })
+      return
+    }
+    // Files (and app bundles) open in the in-chat preview panel rather
+    // than navigating away to the full Library detail page. The panel
+    // is scoped to the chat the click came from (ChatView closes it on
+    // unmount). Falls back to the detail route only when there's no
+    // workspace context to mount the panel against.
+    const previewWorkspaceId = att.workspaceId ?? activeWorkspaceId
+    if (previewWorkspaceId) {
+      dispatch(openArtifact({
+        workspaceId: previewWorkspaceId,
+        path: att.path,
+        name: att.name,
+        mime: att.mime,
+        params: att.params,
+      }))
       return
     }
     goTo({
@@ -496,7 +515,7 @@ function AppInner() {
       item: att.path,
       artifactParams: att.params ? JSON.stringify(att.params) : null,
     })
-  }, [goTo])
+  }, [goTo, dispatch, activeWorkspaceId])
 
   // Promotes a chat-scoped attachment to the primary workspace library.
   // The `artifactId` is the artifact's workspace-relative path; for chat

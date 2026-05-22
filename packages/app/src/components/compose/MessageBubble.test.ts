@@ -1,5 +1,47 @@
 import { describe, expect, it } from 'vitest'
-import { artifactRefHref, attachmentAlignmentClass, eventDisplayChunks } from './MessageBubble'
+import { artifactRefHref, attachmentAlignmentClass, copyTextForMessages, eventDisplayChunks } from './MessageBubble'
+import type { ServerMessage } from '@/store/types'
+
+function msg(content: ServerMessage['content'], overrides: Partial<ServerMessage> = {}): ServerMessage {
+  return {
+    id: 'msg',
+    chatId: 'cht',
+    role: 'agent',
+    kind: 'chat',
+    content,
+    createdAt: '2026-05-22T10:00:00.000Z',
+    ...overrides,
+  }
+}
+
+describe('copyTextForMessages', () => {
+  it('copies a single text message verbatim', () => {
+    expect(copyTextForMessages([msg({ type: 'text', text: 'Here you go' })])).toBe('Here you go')
+  })
+
+  it('joins a grouped artifact card + follow-up into one block (text + artifact name)', () => {
+    const group = [
+      msg({ type: 'artifactRef', path: '.chats/cht/artifacts/report.pdf', name: 'report.pdf' }, { id: 'a' }),
+      msg({ type: 'text', text: 'I added the report above.' }, { id: 'b' }),
+    ]
+    expect(copyTextForMessages(group)).toBe('report.pdf\n\nI added the report above.')
+  })
+
+  it('falls back to the artifact basename when it has no name and no workspace', () => {
+    const group = [msg({ type: 'artifactRef', path: '.chats/cht/artifacts/diagram.png' }, { id: 'a' })]
+    expect(copyTextForMessages(group)).toBe('diagram.png')
+  })
+
+  it('emits a markdown link for the artifact when a workspace is known', () => {
+    const group = [msg({ type: 'artifactRef', path: '.chats/cht/artifacts/report.pdf', name: 'report.pdf' }, { id: 'a' })]
+    const out = copyTextForMessages(group, 'ws_1')
+    expect(out).toMatch(/^\[report\.pdf\]\(.*\/w\/ws_1\/context\?item=.*report\.pdf\)$/)
+  })
+
+  it('returns null when nothing copyable remains', () => {
+    expect(copyTextForMessages([msg({ type: 'text', text: '   ' })])).toBeNull()
+  })
+})
 
 describe('artifactRefHref', () => {
   it('opens chat artifact app directories as items instead of library folders', () => {

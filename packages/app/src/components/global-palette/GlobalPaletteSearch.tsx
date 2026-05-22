@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { MessageSquare, FileText, Sparkles, Briefcase } from 'lucide-react'
+import { MessageSquare, FileText, Briefcase } from 'lucide-react'
 import {
   Command,
   CommandEmpty,
@@ -11,7 +11,6 @@ import {
 } from '@agent-desk/ui'
 import { useGetWorkspacesQuery, useSearchQuery } from '@/store/api'
 import { useGlobalPalette } from './GlobalPaletteProvider'
-import { useGlobalChats } from './globalChatStore'
 import {
   filterSettingsTargets, filterWorkspaceTargets,
   SETTINGS_TARGETS, WORKSPACE_TARGETS,
@@ -51,11 +50,9 @@ export function GlobalPaletteSearch({
   onSelectChat,
   onSelectFile,
 }: GlobalPaletteSearchProps) {
-  const { query, setQuery, startNewChat, openChat } = useGlobalPalette()
+  const { query, setQuery } = useGlobalPalette()
   const trimmed = query.trim()
   const isSearching = trimmed.length > 0
-
-  const globalChats = useGlobalChats()
 
   const { data: workspaces = [] } = useGetWorkspacesQuery()
 
@@ -63,16 +60,6 @@ export function GlobalPaletteSearch({
     { q: trimmed, scope: 'all' },
     { skip: !isSearching || trimmed.length < 2 },
   )
-
-  // First section (no heading): up to 8 most recent global Ask AI chats.
-  // Workspace chats are intentionally excluded — they live in their
-  // workspace's sidebar; this surface is for cross-workspace AI history.
-  const recentChats = useMemo(() => {
-    if (isSearching) return null
-    return [...globalChats]
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-      .slice(0, 8)
-  }, [isSearching, globalChats])
 
   // "Recently viewed" used to cross-reference the workspace-wide library
   // listing against locally-marked savedArtifactIds. That listing is no
@@ -110,39 +97,12 @@ export function GlobalPaletteSearch({
   return (
     <Command shouldFilter={false} className={`${PALETTE_SIZING} min-h-0`}>
       <CommandInput
-        placeholder="Ask a question or search across all workspaces"
+        placeholder="Search across all your rooms"
         value={query}
         onValueChange={setQuery}
       />
       <CommandList className="min-h-0 max-h-[576px]" style={listMaxHeight ? { maxHeight: listMaxHeight } : undefined}>
         <CommandEmpty>No results found.</CommandEmpty>
-
-        {/* Lead with Ask AI so it is always visible while searching. */}
-        {isSearching && (
-          <CommandGroup heading="Ask AI">
-            <CommandItem value={`ask-ai:${trimmed}`} onSelect={() => startNewChat(trimmed)}>
-              <Sparkles className="text-muted-foreground" />
-              <span className="font-medium">Ask AI</span>
-              <span className="min-w-0 truncate text-muted-foreground">{trimmed}</span>
-            </CommandItem>
-          </CommandGroup>
-        )}
-
-        {/* Default view ─ no query: recent global Ask AI chats. */}
-        {!isSearching && recentChats && recentChats.length > 0 && (
-          <CommandGroup>
-            {recentChats.map(c => (
-              <CommandItem
-                key={`gchat:${c.id}`}
-                value={`gchat:${c.id}`}
-                onSelect={() => openChat(c.id)}
-              >
-                <Sparkles className="text-muted-foreground" />
-                <span className="truncate">{c.title}</span>
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
 
         {!isSearching && recentArtifacts && recentArtifacts.length > 0 && (
           <>
@@ -174,8 +134,7 @@ export function GlobalPaletteSearch({
 
         {!isSearching && (
           <>
-            <CommandSeparator />
-            <CommandGroup heading="This workspace">
+            <CommandGroup heading="This room">
               {WORKSPACE_TARGETS.map(renderTarget)}
             </CommandGroup>
             <CommandSeparator />
@@ -226,7 +185,7 @@ export function GlobalPaletteSearch({
           </CommandGroup>
         )}
         {isSearching && workspaceMatches.length > 0 && (
-          <CommandGroup heading="This workspace">
+          <CommandGroup heading="This room">
             {workspaceMatches.map(renderTarget)}
           </CommandGroup>
         )}
@@ -236,7 +195,7 @@ export function GlobalPaletteSearch({
           </CommandGroup>
         )}
         {isSearching && workspaceListMatches.length > 0 && (
-          <CommandGroup heading="Workspaces">
+          <CommandGroup heading="Rooms">
             {workspaceListMatches.map(w => (
               <CommandItem key={`ws:${w.id}`} value={`ws:${w.id}`} onSelect={() => onNavigateWorkspace(w.id)}>
                 <Briefcase className="text-muted-foreground" />
