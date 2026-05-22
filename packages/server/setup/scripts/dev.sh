@@ -31,25 +31,10 @@ if [ ! -x "${REPO_ROOT}/node_modules/.bin/vite" ] || [ ! -x "${REPO_ROOT}/node_m
   (cd "$REPO_ROOT" && npm install --include=optional --no-audit --no-fund)
 fi
 
-# 2. Ensure ROOMY_VAULT_PASSWORD is persisted in the repo .env (gitignored).
-#    The server uses it to auto-create and auto-unlock the per-user KDBX
-#    vault on boot; users do not currently have a manual database/vault
-#    unlock flow during setup.
+# 2. (removed) ROOMY_VAULT_PASSWORD no longer exists — vault passwords are
+#    chosen through the signup wizard and unlocked via the VaultDialog.
+
 ENV_FILE="${REPO_ROOT}/.env"
-roomy_vault_password=""
-if [ -f "$ENV_FILE" ]; then
-  roomy_vault_password="$(grep -E '^ROOMY_VAULT_PASSWORD=' "$ENV_FILE" 2>/dev/null | tail -n1 \
-    | sed -E 's/^ROOMY_VAULT_PASSWORD=//; s/^"(.*)"$/\1/; s/^'\''(.*)'\''$/\1/')"
-fi
-if [ -z "$roomy_vault_password" ]; then
-  echo "==> Generating ROOMY_VAULT_PASSWORD → ${ENV_FILE}"
-  roomy_vault_password="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
-  touch "$ENV_FILE"
-  if [ -s "$ENV_FILE" ] && [ -n "$(tail -c1 "$ENV_FILE")" ]; then
-    printf '\n' >> "$ENV_FILE"
-  fi
-  printf 'ROOMY_VAULT_PASSWORD=%s\n' "$roomy_vault_password" >> "$ENV_FILE"
-fi
 
 # 3. Ensure ~/Roomy/ exists. roomy-server's main.ts mkdirs the rest of the
 #    layout (.database, workspaces, .trash, .tmp, backups) on boot.

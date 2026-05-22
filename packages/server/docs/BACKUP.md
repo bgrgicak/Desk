@@ -98,11 +98,13 @@ The DB stores derivatives, not raw secrets:
   generated on first boot if missing — no need to back up.
 - **Per-user secrets vault** (provider API keys and logins for sites the agent
   should sign in to): a KDBX 4 file per user at
-  `${ROOMY_HOME}/.vaults/{userId}.kdbx`. It is encrypted with the auto-generated
-  `ROOMY_VAULT_PASSWORD` stored in `.env`; back up both the KDBX files and
-  `.env`, or the vault is unrecoverable.
+  `${ROOMY_HOME}/.vaults/{userId}.kdbx`. It is encrypted with a password the
+  user picks through the signup wizard (or the in-app VaultDialog on first
+  credential save). Back up the KDBX files; the password is not stored on
+  disk — if the user forgets it, the vault is unrecoverable.
 
 Persistence between restarts: everything except the in-memory WebSocket
-connection registry. User passwords, sessions, schedules, and messages live in
-the SQLite file; provider keys and site logins live in the KDBX vaults, which
-auto-unlock from `ROOMY_VAULT_PASSWORD` in `.env`.
+connection registry and the per-user vault unlock state. User passwords,
+sessions, schedules, and messages live in the SQLite file; provider keys and
+site logins live in the KDBX vaults, which the user re-unlocks through the
+VaultDialog after every server restart.

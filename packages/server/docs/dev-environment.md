@@ -18,10 +18,10 @@ lives under `~/Roomy/`.
   Detection lives in
   [`packages/server/runtime/src/engine.ts`](../runtime/src/engine.ts);
   override the auto-pick with `ROOMY_CONTAINER_ENGINE=docker|nerdctl`.
-- A `.env` file at the repo root (gitignored). The dev script
-  generates `ROOMY_VAULT_PASSWORD` on first run and writes it here.
-  AI-provider API keys are configured per-user via global account
-  settings → Models, not via this file.
+- An optional `.env` file at the repo root (gitignored) for any
+  Roomy env vars you want auto-loaded by the dev script. AI-provider
+  API keys are configured per-user via global account settings →
+  Models, not via this file.
 
 ### GitHub connection setup
 
@@ -56,11 +56,10 @@ npm run dev
 
 That:
 
-1. Generates `ROOMY_VAULT_PASSWORD` into `.env` if missing.
-2. Ensures `~/Roomy/` exists.
-3. Starts `roomy-server` (tsx watch) on http://127.0.0.1:35138/.
-4. Starts the Vite dev server on http://127.0.0.1:5173/.
-5. Wires Vite's `/api/*` proxy to `:35138`.
+1. Ensures `~/Roomy/` exists.
+2. Starts `roomy-server` (tsx watch) on http://127.0.0.1:35138/.
+3. Starts the Vite dev server on http://127.0.0.1:5173/.
+4. Wires Vite's `/api/*` proxy to `:35138`.
 
 One Ctrl+C kills both.
 

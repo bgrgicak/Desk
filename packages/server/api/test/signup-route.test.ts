@@ -18,7 +18,6 @@ let dbPath: string;
 let server: http.Server;
 let vault: VaultStore;
 let prevSignupEnv: string | undefined;
-let prevVaultPasswordEnv: string | undefined;
 
 function appOpts(): AppOptions {
   return {
@@ -77,14 +76,11 @@ beforeEach(async () => {
   await clearSessions(pool);
   clearRateLimits();
   prevSignupEnv = process.env.ROOMY_ENABLE_SIGNUP;
-  prevVaultPasswordEnv = process.env.ROOMY_VAULT_PASSWORD;
 });
 
 afterAll(async () => {
   if (prevSignupEnv === undefined) delete process.env.ROOMY_ENABLE_SIGNUP;
   else process.env.ROOMY_ENABLE_SIGNUP = prevSignupEnv;
-  if (prevVaultPasswordEnv === undefined) delete process.env.ROOMY_VAULT_PASSWORD;
-  else process.env.ROOMY_VAULT_PASSWORD = prevVaultPasswordEnv;
   server.close();
   server.closeAllConnections?.();
   if (pool) await pool.end();
@@ -210,9 +206,8 @@ describe("POST /auth/signup", () => {
     expect(agents).toEqual([]);
   });
 
-  it("does NOT auto-create a vault at signup, even with ROOMY_VAULT_PASSWORD set", async () => {
+  it("does NOT auto-create a vault at signup when no vaultPassword is supplied", async () => {
     process.env.ROOMY_ENABLE_SIGNUP = "1";
-    process.env.ROOMY_VAULT_PASSWORD = "would-have-been-auto-applied";
     const res = await request("POST", "/auth/signup", {
       username: "vaultless",
       email: "vaultless@example.com",

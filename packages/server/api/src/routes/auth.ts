@@ -284,8 +284,6 @@ export async function handleSignup(
 
   // When no vaultPassword is provided the per-user vault simply
   // doesn't exist yet — the VaultDialog owns first-time setup later.
-  // ROOMY_VAULT_PASSWORD still drives boot-time auto-unlock for
-  // pre-existing vaults (so dev/CI restarts don't lose state).
 
   return { token };
 }

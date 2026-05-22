@@ -46,6 +46,42 @@ async function pickFreePort(): Promise<number> {
   });
 }
 
+/** Test fixture for the per-user vault. Keep separate from any UX-visible
+ * default — operator-supplied passwords are no longer a thing. */
+const E2E_VAULT_PASSWORD = "e2e-vault-password";
+
+async function seedVault(
+  serverUrl: string,
+  username: string,
+  loginPassword: string,
+): Promise<void> {
+  const email = `${username}@roomy.local`;
+  const loginRes = await fetch(`${serverUrl}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password: loginPassword }),
+  });
+  if (loginRes.status !== 200) {
+    throw new Error(
+      `vault seed: login failed (${loginRes.status}): ${await loginRes.text()}`,
+    );
+  }
+  const { token } = (await loginRes.json()) as { token: string };
+  const setupRes = await fetch(`${serverUrl}/vault/setup`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ password: E2E_VAULT_PASSWORD }),
+  });
+  if (setupRes.status !== 200) {
+    throw new Error(
+      `vault seed: setup failed (${setupRes.status}): ${await setupRes.text()}`,
+    );
+  }
+}
+
 async function waitForHealth(url: string, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let lastErr: unknown;
@@ -125,12 +161,6 @@ export async function startRoomyServer(
     // workspace. UI affordances for the hub are out of scope for this
     // change set — opt out at boot until the UI catches up.
     ROOMY_HUB_AUTO_CREATE: "off",
-    // Auto-setup and unlock the per-user vault on boot so e2e tests can
-    // read and write provider keys without going through the vault UI flow.
-    // ROOMY_VAULT_AUTO_SETUP is opt-in (default off) outside test fixtures,
-    // so app users get the real "pick your own password" modal experience.
-    ROOMY_VAULT_PASSWORD: "e2e-vault-password",
-    ROOMY_VAULT_AUTO_SETUP: "on",
     ROOMY_FAKE_DRIVER_LOG_PROVIDER_KEYS: "1",
     // The e2e suite logs in for every spec, which makes the per-IP
     // auth.login rate-limit (10/min by default) fire and 429 later
@@ -156,6 +186,13 @@ export async function startRoomyServer(
   const url = `http://127.0.0.1:${port}`;
   try {
     await waitForHealth(`${url}/`);
+    // Seed the per-user vault via the API. Boot no longer auto-unlocks
+    // (ROOMY_VAULT_PASSWORD was dropped), so each fresh server starts
+    // with no vault. Set it up once here so every spec finds the same
+    // "logged-in, vault unlocked" steady state the old env-driven
+    // fixture produced. Specs that need a locked or absent vault should
+    // call /vault/lock or run against their own server.
+    await seedVault(url, username, password);
   } catch (e) {
     child.kill("SIGKILL");
     await fs.rm(dbDir, { recursive: true, force: true }).catch(() => undefined);

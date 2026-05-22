@@ -130,8 +130,10 @@ only an explicit logout does.
 
 - OS keyring integration (would let the master persist across server
   restarts on user-session hosts).
-- `ROOMY_VAULT_PASSWORD` env-var unlock (would let headless deploys
-  auto-unlock at boot).
+- Env-var unlock (would let headless deploys auto-unlock at boot —
+  previously supported via `ROOMY_VAULT_PASSWORD`, removed because the
+  master ended up in plaintext `.env` files that defeated the
+  encryption it was guarding).
 - App-write capability path (waits on per-app identity from #47).
 - Audit log for vault reads (mirror of `provider_key_access_log`).
 - Per-workspace ACLs (currently every workspace under the user can
@@ -219,8 +221,9 @@ unique — it's the name the agent uses for the user, not a handle),
 valid email (UNIQUE — this is the login identifier), password ≥ 12
 chars and ≠ the documented seed. Creates the user row, bootstraps a
 hub workspace (matching `main.ts` boot behaviour), sets up the
-per-user vault when `ROOMY_VAULT_PASSWORD` is set, returns a session
-token. Same rate-limit shape as `/auth/login`.
+per-user vault when the request body includes a `vaultPassword`
+(otherwise the vault is created later through the VaultDialog),
+returns a session token. Same rate-limit shape as `/auth/login`.
 
 ### First-run seed-password flag
 
@@ -238,13 +241,6 @@ they chose their own secret and don't need the prompt.
 (default 90) are pruned on boot and then on a daily cadence by the
 reaper in `api/src/main.ts`. Surfaced read-only at `GET
 /me/key-access-log` (user-scoped, paginated, ISO timestamps).
-
-### Misleading-log fix
-
-`api/src/main.ts` previously logged "auto-unlocked via ROOMY_SECRET_KEY"
-during vault auto-unlock. The variable actually read is
-`ROOMY_VAULT_PASSWORD` (a distinct env var from the AES-256 key for
-SQLite at-rest encryption). Fixed.
 
 ---
 

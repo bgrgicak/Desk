@@ -110,33 +110,6 @@ export async function ensureRoomyHome() {
   return home;
 }
 
-/**
- * Where the auto-unlock vault password lives.
- *   - Monorepo dev: repo-root .env (dev.sh shares it).
- *   - Published install: $ROOMY_HOME/.env.
- *
- * Returns the password. Generates one on first call.
- */
-async function ensureVaultPassword({ monorepoRoot, roomyHome }) {
-  const envFile = monorepoRoot ? path.join(monorepoRoot, ".env") : path.join(roomyHome, ".env");
-  let existing = "";
-  if (fs.existsSync(envFile)) {
-    existing = await fsp.readFile(envFile, "utf-8");
-    const m = existing.match(/^ROOMY_VAULT_PASSWORD=(.+)$/m);
-    if (m) return m[1].trim().replace(/^"|"$/g, "").replace(/^'|'$/g, "");
-  }
-  const { randomBytes } = await import("node:crypto");
-  const password = randomBytes(32).toString("base64");
-  log(`Generating ROOMY_VAULT_PASSWORD → ${envFile}`);
-  await fsp.mkdir(path.dirname(envFile), { recursive: true });
-  let body = existing;
-  if (body.length > 0 && !body.endsWith("\n")) body += "\n";
-  body += `ROOMY_VAULT_PASSWORD=${password}\n`;
-  await fsp.writeFile(envFile, body, { mode: 0o600 });
-  await fsp.chmod(envFile, 0o600);
-  return password;
-}
-
 function spawnInherit(cmd, args, { env, cwd }) {
   return spawn(cmd, args, {
     stdio: "inherit",
@@ -158,9 +131,10 @@ function attachStopHandlers(...children) {
 }
 
 async function cmdInit() {
-  const monorepoRoot = detectMonorepo();
+  // detectMonorepo() is still useful for future init steps; called for parity
+  // with `cmdStart`.
+  detectMonorepo();
   const home = await ensureRoomyHome();
-  await ensureVaultPassword({ monorepoRoot, roomyHome: home });
   log(`Roomy home: ${home}`);
   log("Init complete. Run `roomy start` to launch the server.");
 }
@@ -168,17 +142,15 @@ async function cmdInit() {
 async function cmdStart() {
   const monorepoRoot = detectMonorepo();
   const home = await ensureRoomyHome();
-  const vaultPassword = await ensureVaultPassword({ monorepoRoot, roomyHome: home });
 
   if (monorepoRoot) {
-    return cmdStartDev({ monorepoRoot, home, vaultPassword });
+    return cmdStartDev({ monorepoRoot, home });
   }
-  return cmdStartPublished({ home, vaultPassword });
+  return cmdStartPublished({ home });
 }
 
-async function cmdStartDev({ monorepoRoot, home, vaultPassword }) {
+async function cmdStartDev({ monorepoRoot, home }) {
   const env = {
-    ROOMY_VAULT_PASSWORD: vaultPassword,
     ROOMY_HOME: home,
     PORT: String(PORT),
     ROOMY_APP_PORT: String(APP_PORT),
@@ -202,7 +174,7 @@ async function cmdStartDev({ monorepoRoot, home, vaultPassword }) {
   attachStopHandlers(server, vite);
 }
 
-async function cmdStartPublished({ home, vaultPassword }) {
+async function cmdStartPublished({ home }) {
   const apiEntry = resolvePublishedApiEntry();
   if (!apiEntry) {
     process.stderr.write(
@@ -219,7 +191,6 @@ async function cmdStartPublished({ home, vaultPassword }) {
   }
 
   const env = {
-    ROOMY_VAULT_PASSWORD: vaultPassword,
     ROOMY_HOME: home,
     PORT: String(PORT),
     ROOMY_API_URL: `http://127.0.0.1:${PORT}`,
@@ -522,7 +493,7 @@ async function main() {
       process.stdout.write(
         "Usage: roomy [start|init|service|uninstall|version]\n" +
         "  start                              boot roomy-server (default)\n" +
-        "  init                               create ~/Roomy + ROOMY_VAULT_PASSWORD without starting\n" +
+        "  init                               create ~/Roomy without starting\n" +
         "  service install|uninstall          register/unregister Roomy as a system service\n" +
         "  service start|stop|status          control the installed system service\n" +
         "  uninstall [--remove-roomy-files]    remove the service + roomy/* docker images;\n" +

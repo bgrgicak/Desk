@@ -9,7 +9,6 @@ if [ -z "${ROOMY_HOME:-}" ]; then
   ROOMY_HOME=$(mktemp -d)
   export ROOMY_HOME
 fi
-export ROOMY_VAULT_PASSWORD="${ROOMY_VAULT_PASSWORD:-ci-local-vault-password}"
 export ROOMY_DB_PATH="${ROOMY_DB_PATH:-$ROOMY_HOME/.database/roomy.sqlite3}"
 
 mkdir -p "$ROOMY_HOME" "$(dirname "$ROOMY_DB_PATH")"

@@ -172,7 +172,6 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/roomy-home"
           echo "ROOMY_HOME=$RUNNER_TEMP/roomy-home" >> "$GITHUB_ENV"
-          echo "ROOMY_VAULT_PASSWORD=ci-vault-password" >> "$GITHUB_ENV"
           echo "ROOMY_DB_PATH=$RUNNER_TEMP/roomy-home/.database/roomy.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
@@ -219,7 +218,6 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/roomy-home"
           echo "ROOMY_HOME=$RUNNER_TEMP/roomy-home" >> "$GITHUB_ENV"
-          echo "ROOMY_VAULT_PASSWORD=ci-vault-password" >> "$GITHUB_ENV"
           echo "ROOMY_DB_PATH=$RUNNER_TEMP/roomy-home/.database/roomy.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
@@ -253,7 +251,6 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/roomy-home"
           echo "ROOMY_HOME=$RUNNER_TEMP/roomy-home" >> "$GITHUB_ENV"
-          echo "ROOMY_VAULT_PASSWORD=ci-vault-password" >> "$GITHUB_ENV"
           echo "ROOMY_DB_PATH=$RUNNER_TEMP/roomy-home/.database/roomy.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
@@ -300,7 +297,6 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/roomy-home"
           echo "ROOMY_HOME=$RUNNER_TEMP/roomy-home" >> "$GITHUB_ENV"
-          echo "ROOMY_VAULT_PASSWORD=ci-vault-password" >> "$GITHUB_ENV"
           echo "ROOMY_DB_PATH=$RUNNER_TEMP/roomy-home/.database/roomy.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies

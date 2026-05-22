@@ -63,7 +63,7 @@ npm run dev
 | Node.js 23 + npm (pinned by `.nvmrc` + `engines`) | use [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf | use [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf |
 | Docker | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | rootful or rootless — both auto-detected |
 
-API keys are configured per-user via Settings after the first sign-in. `npm run dev` generates `ROOMY_VAULT_PASSWORD` into `.env` on first run so the per-user secrets vault can auto-unlock on restart.
+API keys are configured per-user via Settings after the first sign-in. The per-user secrets vault is created and unlocked through the signup wizard (first run) and the in-app VaultDialog (returning users); on every server restart, the vault locks and the user re-enters their vault password through the dialog.
 
 ### Common commands
 
