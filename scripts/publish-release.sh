@@ -179,10 +179,19 @@ if [ -z "$docker_user" ]; then
 fi
 ok "Docker logged in as: $docker_user"
 
-# Namespace to push under. Override via ROOMY_DOCKER_NAMESPACE to push to
-# an org instead of the personal account.
-DOCKER_NAMESPACE="${ROOMY_DOCKER_NAMESPACE:-$(ask "Docker Hub namespace to push to" "$docker_user")}"
+# Namespace to push under. Default is `roomy-ai` so the pushed image
+# matches the hardcoded ROOMY_SANDBOX_IMAGE in @roomy-ai/cli's
+# cmdStartPublished. Override via ROOMY_DOCKER_NAMESPACE if you publish
+# under a different Docker Hub org/user — but then you also need to
+# update the CLI's hardcoded default or users will pull the wrong image.
+DOCKER_NAMESPACE="${ROOMY_DOCKER_NAMESPACE:-$(ask "Docker Hub namespace to push to" "roomy-ai")}"
 [ -n "$DOCKER_NAMESPACE" ] || die "No Docker namespace given."
+if [ "$DOCKER_NAMESPACE" != "roomy-ai" ]; then
+  warn "Namespace $DOCKER_NAMESPACE doesn't match the hardcoded default in"
+  warn "packages/cli/src/roomy.mjs (ROOMY_SANDBOX_IMAGE=roomy-ai/sandbox:alpha)."
+  warn "Update that hardcode too, or `npx @roomy-ai/cli` users will pull the wrong image."
+  confirm "Continue?" || die "Aborted."
+fi
 ok "Will push image as: ${c_bold}${DOCKER_NAMESPACE}/sandbox${c_reset}"
 
 hr
