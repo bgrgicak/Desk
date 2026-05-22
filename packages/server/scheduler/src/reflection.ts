@@ -2,13 +2,13 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Cron } from "croner";
-import type { Pool } from "@agent-desk/db";
-import { queries } from "@agent-desk/db";
-import { generateId } from "@agent-desk/shared";
-import { workspaceJournalDir, workspaceJournalPath, workspaceMemoryDir } from "@agent-desk/storage";
-import { resolveLocalSourceEnv } from "@agent-desk/runtime";
+import type { Pool } from "@roomy-ai/db";
+import { queries } from "@roomy-ai/db";
+import { generateId } from "@roomy-ai/shared";
+import { workspaceJournalDir, workspaceJournalPath, workspaceMemoryDir } from "@roomy-ai/storage";
+import { resolveLocalSourceEnv } from "@roomy-ai/runtime";
 import { resolveModelForRun } from "./runs-helpers.js";
-import { withModule } from "@agent-desk/shared/logger";
+import { withModule } from "@roomy-ai/shared/logger";
 const log = withModule("scheduler/reflection");
 
 /**
@@ -20,8 +20,8 @@ const log = withModule("scheduler/reflection");
  * plus any workspace memory edits the agent considers worth keeping.
  *
  * The AI call is abstracted as `ReflectFn` so unit tests can inject a
- * deterministic stub. Production should pass a real opencode-backed
- * implementation that calls the free `opencode/gpt-5-nano` model with
+ * deterministic stub. Production should pass a real pi-backed
+ * implementation that calls the free `anthropic/claude-haiku-4-5` model with
  * the reflection prompt.
  *
  * Output format conventions (driven by the reflection prompt):
@@ -64,7 +64,7 @@ export type ReflectFn<I> = (input: I) => Promise<ReflectionResult>;
 
 export interface RunDailyReflectionOptions {
   pool: Pool;
-  /** DESK_HOME root. */
+  /** ROOMY_HOME root. */
   home: string;
   /** Optional override of the date we're reflecting *on* (defaults to yesterday in server local time). */
   date?: string;
@@ -243,8 +243,8 @@ export async function runWorkspaceReflection(
 
   // Run the requested model through the same resolver chat fires use.
   // The agent file the reflection sandbox writes ends up with this
-  // `model:` line, and opencode-serve caches the agent file's model at
-  // daemon startup — feeding it the raw `codex/<name>` Desk relabel
+  // `model:` line, and pi caches the agent file's model at
+  // daemon startup — feeding it the raw `codex/<name>` Roomy relabel
   // would leave the daemon resolving against a provider it doesn't know
   // and 500 every reflection. The resolver also strips `OPENAI_API_KEY`
   // on the codex-OAuth path so the daemon picks the OAuth route instead

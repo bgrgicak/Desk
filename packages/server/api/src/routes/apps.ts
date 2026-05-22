@@ -1,5 +1,5 @@
 /**
- * Static-serve + capability bridge for Desk apps (issue #47, PR-C, PR-E).
+ * Static-serve + capability bridge for Roomy apps (issue #47, PR-C, PR-E).
  *
  * URL scheme:
  *   GET  /apps/chat/:chatId/:appName/dist/*    → serves a chat-artifact app
@@ -23,8 +23,8 @@
  *
  * The iframe is rendered without `allow-same-origin`, so generated app
  * JavaScript gets an opaque origin and cannot read the parent SPA's
- * sessionStorage/localStorage or act as first-party Desk code. Privileged
- * operations go through the injected `window.desk` postMessage bridge and
+ * sessionStorage/localStorage or act as first-party Roomy code. Privileged
+ * operations go through the injected `window.roomy` postMessage bridge and
  * are mediated by the parent SPA.
  */
 import { createHash, randomBytes } from "node:crypto";
@@ -32,19 +32,19 @@ import { createReadStream } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import * as path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { type Pool, queries } from "@agent-desk/db";
+import { type Pool, queries } from "@roomy-ai/db";
 import {
   NotFoundError,
   UnauthorizedError,
   ValidationError,
   generateId,
-} from "@agent-desk/shared";
+} from "@roomy-ai/shared";
 import {
   chatArtifactsDir,
   validateLibrarySubpath,
   workspaceRootPath,
   type StorageContext,
-} from "@agent-desk/storage";
+} from "@roomy-ai/storage";
 
 const APP_TOKEN_PREFIX = "app_";
 const APP_TOKEN_BYTES = 32;
@@ -92,7 +92,7 @@ const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
  * defense in depth).
  *
  * Keep this in sync with the capability list documented in the scaffold's
- * AGENTS.md and `desk.app.json` examples.
+ * AGENTS.md and `roomy.app.json` examples.
  */
 const KNOWN_CAPABILITIES = new Set<string>([
   "library.read",
@@ -156,15 +156,15 @@ function cookieNameFor(chatId: string, appName: string): string {
   // sent to another app's URL space. The cookie name itself encodes the
   // scope so a fetch from the parent SPA can't accidentally pick up the
   // wrong cookie either.
-  return `desk_app_${chatId}_${appName}`;
+  return `roomy_app_${chatId}_${appName}`;
 }
 
 function libraryCookieNameFor(workspaceId: string, appName: string): string {
-  return `desk_libapp_${workspaceId}_${appName}`;
+  return `roomy_libapp_${workspaceId}_${appName}`;
 }
 
 function globalCookieNameFor(chatId: string, appName: string): string {
-  return `desk_globalapp_${chatId}_${appName}`;
+  return `roomy_globalapp_${chatId}_${appName}`;
 }
 
 function parseCookies(req: IncomingMessage): Record<string, string> {
@@ -192,7 +192,7 @@ async function readManifest(distAppDir: string): Promise<AppManifest | null> {
   // The manifest sits at the app root, NOT inside dist/. distAppDir
   // ends in `/dist`, so step back one.
   const appRoot = path.dirname(distAppDir);
-  const manifestPath = path.join(appRoot, "desk.app.json");
+  const manifestPath = path.join(appRoot, "roomy.app.json");
   try {
     const raw = await readFile(manifestPath, "utf-8");
     const parsed = JSON.parse(raw) as AppManifest;
@@ -364,7 +364,7 @@ interface BridgeContext {
 }
 
 /**
-  * Inlines `window.desk` into the served `index.html`. The bridge exposes
+  * Inlines `window.roomy` into the served `index.html`. The bridge exposes
   * identity, declared capabilities, and narrow postMessage-backed methods.
   * The parent SPA validates the source iframe and performs privileged calls
   * on the app's behalf; the app itself runs with an opaque sandbox origin.
@@ -410,7 +410,7 @@ function applyScriptNonce(html: string, nonce: string): string {
  * resolves so font-induced layout shifts don't leave the iframe one
  * frame short.
  */
-export const BRIDGE_SCRIPT_BODY = `const t="desk.app.request";const r="desk.app.response";const s="desk.app.resize";let n=0;const p=new Map;function q(method,params){return new Promise((resolve,reject)=>{const id=Date.now()+":"+(++n);p.set(id,{resolve,reject});window.parent.postMessage({type:t,id,key:c.bridgeKey,method,params},"*")})}window.addEventListener("message",e=>{const m=e.data;if(!m||m.type!==r||!p.has(m.id))return;const h=p.get(m.id);p.delete(m.id);m.ok?h.resolve(m.result):h.reject(new Error(m.error||"Desk app bridge request failed"))});const storage={list(collection){return q("storage.list",{collection})},get(collection,id){return q("storage.get",{collection,id})},create(collection,doc){return q("storage.create",{collection,doc})},put(collection,id,doc){return q("storage.put",{collection,id,doc})},delete(collection,id){return q("storage.delete",{collection,id})}};const chat={sendMessage(text,opts){return q("chat.sendMessage",{text,artifactRefMessageId:opts&&opts.artifactRefMessageId})}};function u(){const b=document.body;const h=Math.ceil(Math.max(b?b.scrollHeight:0,b?b.offsetHeight:0));window.parent.postMessage({type:s,key:c.bridgeKey,height:h},"*")}let o=0;function v(){if(o)return;o=requestAnimationFrame(()=>{o=0;u()})}function w(){u();if(typeof ResizeObserver!=="undefined"){const ro=new ResizeObserver(v);if(document.body)ro.observe(document.body);if(document.documentElement)ro.observe(document.documentElement);window.addEventListener("load",v,{once:true});if(document.fonts&&document.fonts.ready)document.fonts.ready.then(v)}else{window.addEventListener("resize",v);window.addEventListener("load",v,{once:true})}}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",w,{once:true})}else{w()}window.desk={app:c.app,chatId:c.chatId,capabilities:c.capabilities,storage,chat,fetch(){throw new Error("desk.fetch is not enabled; use explicit window.desk capabilities")}};`;
+export const BRIDGE_SCRIPT_BODY = `const t="roomy.app.request";const r="roomy.app.response";const s="roomy.app.resize";let n=0;const p=new Map;function q(method,params){return new Promise((resolve,reject)=>{const id=Date.now()+":"+(++n);p.set(id,{resolve,reject});window.parent.postMessage({type:t,id,key:c.bridgeKey,method,params},"*")})}window.addEventListener("message",e=>{const m=e.data;if(!m||m.type!==r||!p.has(m.id))return;const h=p.get(m.id);p.delete(m.id);m.ok?h.resolve(m.result):h.reject(new Error(m.error||"Roomy app bridge request failed"))});const storage={list(collection){return q("storage.list",{collection})},get(collection,id){return q("storage.get",{collection,id})},create(collection,doc){return q("storage.create",{collection,doc})},put(collection,id,doc){return q("storage.put",{collection,id,doc})},delete(collection,id){return q("storage.delete",{collection,id})}};const chat={sendMessage(text,opts){return q("chat.sendMessage",{text,artifactRefMessageId:opts&&opts.artifactRefMessageId})}};function u(){const b=document.body;const h=Math.ceil(Math.max(b?b.scrollHeight:0,b?b.offsetHeight:0));window.parent.postMessage({type:s,key:c.bridgeKey,height:h},"*")}let o=0;function v(){if(o)return;o=requestAnimationFrame(()=>{o=0;u()})}function w(){u();if(typeof ResizeObserver!=="undefined"){const ro=new ResizeObserver(v);if(document.body)ro.observe(document.body);if(document.documentElement)ro.observe(document.documentElement);window.addEventListener("load",v,{once:true});if(document.fonts&&document.fonts.ready)document.fonts.ready.then(v)}else{window.addEventListener("resize",v);window.addEventListener("load",v,{once:true})}}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",w,{once:true})}else{w()}window.roomy={app:c.app,chatId:c.chatId,capabilities:c.capabilities,storage,chat,fetch(){throw new Error("roomy.fetch is not enabled; use explicit window.roomy capabilities")}};`;
 
 function injectBridge(html: string, ctx: BridgeContext, nonce: string): string {
   const payload = JSON.stringify({
@@ -437,15 +437,15 @@ function injectBridge(html: string, ctx: BridgeContext, nonce: string): string {
 }
 
 /**
- * `true` when desk-server is being terminated over TLS. Driven by the
- * `DESK_SECURE_COOKIES` env var: set it to `1` (or any non-empty value
+ * `true` when roomy-server is being terminated over TLS. Driven by the
+ * `ROOMY_SECURE_COOKIES` env var: set it to `1` (or any non-empty value
  * other than `0` / `false`) in production behind HTTPS so per-app
  * cookies carry the `Secure` attribute. Defaults to off because dev runs
  * over plain HTTP — forcing `Secure` there causes browsers to drop the
  * cookie silently and the iframe loses its session.
  */
 function secureCookies(): boolean {
-  const raw = process.env.DESK_SECURE_COOKIES;
+  const raw = process.env.ROOMY_SECURE_COOKIES;
   if (!raw) return false;
   const v = raw.toLowerCase();
   return v !== "0" && v !== "false";
@@ -460,7 +460,7 @@ function setAppCookie(
   // App-scoped + HttpOnly + SameSite=Strict means a leaked token can't
   // be reused by JS in a different origin, can't be sent on cross-site
   // navigations, and is invisible to the iframe's own scripts. `Secure`
-  // is gated on DESK_SECURE_COOKIES so dev keeps working over HTTP.
+  // is gated on ROOMY_SECURE_COOKIES so dev keeps working over HTTP.
   const flags = [
     `${cookieName}=${encodeURIComponent(token)}`,
     `Path=${cookiePath}`,
@@ -485,11 +485,11 @@ function setAppCookie(
  * Tradeoffs:
  * - **`Content-Security-Policy`**: `'self'` for scripts + styles +
   *   fonts + connect lets the app load its own bundles and
-  *   embed `@agent-desk/ui` styles. `img-src` additionally allows
+  *   embed `@roomy-ai/ui` styles. `img-src` additionally allows
   *   `https:` so result-set fragments (chat-cards thumbnails, etc.) can
   *   render previews straight from third-party CDNs — images don't
   *   execute and can't read data back, so the leak surface is just the
-  *   user's IP to the image host. Privileged Desk calls go through the
+  *   user's IP to the image host. Privileged Roomy calls go through the
   *   parent postMessage bridge, not direct iframe fetches. Inline `<script>`
  *   from the bridge is gated on its sha256 hash so the CSP doesn't
  *   need `'unsafe-inline'`. Inline styles from Tailwind v4 / shadcn
@@ -506,7 +506,7 @@ function setAppCookie(
  *   only otherwise — keeps app-specific paths from leaking.
  * - **`Permissions-Policy`**: refuse the most dangerous platform
  *   features at the iframe level — camera/microphone/geolocation
- *   should require explicit Desk capability, not be implicitly
+ *   should require explicit Roomy capability, not be implicitly
  *   available because the iframe is same-origin.
  */
 function nonceForRequest(): string {
@@ -519,7 +519,7 @@ function setSecurityHeaders(res: ServerResponse, nonce: string): void {
   // 'unsafe-inline' is allowed only because Tailwind/shadcn emit a small
   // number of style blocks at build time and we don't have hashes for
   // those yet. Connect is `'self'` for app-owned assets and non-privileged
-  // same-origin calls; Desk capabilities are parent-mediated.
+  // same-origin calls; Roomy capabilities are parent-mediated.
   const csp = [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
@@ -765,14 +765,14 @@ export class IssueRateLimitError extends Error {
 
 // ── Global scope (built-in apps) ───────────────────────────────────────
 //
-// Built-in apps live in `${DESK_HOME}/.apps/<name>.app/`, populated by
-// `writeBuiltinApps` on server start (mirrors @agent-desk/desk-apps) and
-// mounted into every sandbox at `/opt/desk-apps/`. They're visible from
+// Built-in apps live in `${ROOMY_HOME}/.apps/<name>.app/`, populated by
+// `writeBuiltinApps` on server start (mirrors @roomy-ai/apps) and
+// mounted into every sandbox at `/opt/roomy-apps/`. They're visible from
 // every chat without being scoped to any particular workspace.
 //
 // URL scheme: `/apps/global/:chatId/:appName/dist/*`. The chatId is in the
 // path purely for session and cookie scoping — global apps resolve only
-// against `${DESK_HOME}/.apps/`. The bridge's `chatId` still binds
+// against `${ROOMY_HOME}/.apps/`. The bridge's `chatId` still binds
 // `chats.write` capability to the calling chat.
 
 async function resolveGlobalAppDist(
@@ -862,7 +862,7 @@ async function verifyGlobalAppToken(
 /**
  * Handler for `GET /apps/global/:chatId/:appName/dist/*`. Mirrors the chat
  * scope's token/cookie/bridge flow, but resolves the app's dist directory
- * against `${DESK_HOME}/.apps/` (Desk-shipped built-in apps), independent
+ * against `${ROOMY_HOME}/.apps/` (Roomy-shipped built-in apps), independent
  * of any workspace.
  */
 export async function handleStaticGlobalAppRequest(
@@ -1179,7 +1179,7 @@ export async function handleStaticLibraryAppRequest(
   // the workspace match.
   const cookies = parseCookies(req);
   const cookieEntry = Object.entries(cookies).find(
-    ([k]) => k.startsWith("desk_libapp_") && k.endsWith(`_${appName}`),
+    ([k]) => k.startsWith("roomy_libapp_") && k.endsWith(`_${appName}`),
   );
   const cookieToken = cookieEntry ? cookieEntry[1] : undefined;
 
@@ -1207,7 +1207,7 @@ export async function handleStaticLibraryAppRequest(
     }
     // The cookie name we matched on encodes the workspaceId — re-check
     // against the session row (defense in depth).
-    const cookieWs = cookieEntry![0].slice("desk_libapp_".length, -1 - appName.length);
+    const cookieWs = cookieEntry![0].slice("roomy_libapp_".length, -1 - appName.length);
     if (ses.workspaceId !== cookieWs) {
       throw new UnauthorizedError("Invalid app token");
     }

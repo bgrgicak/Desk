@@ -4,7 +4,7 @@
  * `pi --list-models` — e.g. CJS `require` calls leaking into ESM runtime,
  * argv plumbing, or ID-shape drift in pi's output parser.
  *
- * Originally asserted that the free `opencode/big-pickle` model was
+ * Originally asserted that the free `anthropic/claude-haiku-4-5` model was
  * always present (no key required). That free tier is gone, so the
  * spec now only asserts the **shape** of the endpoint — array of
  * `{ id, provider }` items with the canonical `provider/model` id
@@ -22,11 +22,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
-import { detectEngine, sandboxImage, type Engine } from "@agent-desk/runtime";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { detectEngine, sandboxImage, type Engine } from "@roomy-ai/runtime";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -52,18 +52,16 @@ let createdAgentId: string | undefined;
 beforeAll(async () => {
   if (SKIP) return;
 
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-tools-models-it-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-tools-models-it-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "testuser";
-  process.env.DESK_SEED_PASSWORD = "test-pass-1234";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "test-pass-1234" });
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-tools-models-it-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-tools-models-it-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const runManager = createRunManager({
     pool,
@@ -78,7 +76,7 @@ beforeAll(async () => {
   port = (server.address() as net.AddressInfo).port;
 
   const loginRes = await httpJson("POST", "/auth/login", undefined, {
-    username: "testuser",
+    email: "testuser@roomy.local",
     password: "test-pass-1234",
   });
   token = (loginRes.body as { token: string }).token;
@@ -94,9 +92,9 @@ afterAll(async () => {
   // Sandboxes are keyed per-workspace now (M3), not per-agent.
   if (engineForSetup) {
     try {
-      const all = await engineForSetup.list({ all: true, namePrefix: "desk-sandbox-wks_" });
+      const all = await engineForSetup.list({ all: true, namePrefix: "roomy-sandbox-wks_" });
       for (const c of all) {
-        if (c.name.startsWith("desk-sandbox-wks_")) {
+        if (c.name.startsWith("roomy-sandbox-wks_")) {
           await engineForSetup.remove(c.id, true).catch(() => {});
         }
       }
@@ -122,7 +120,7 @@ describeIf("GET /tools/models (real Docker + pi)", () => {
     // `<provider>/<model>` id shape — that's the contract the SPA's
     // model-picker depends on regardless of which providers happen to
     // be available. We deliberately do not assert any specific
-    // provider/model is present: the free opencode tier the test once
+    // provider/model is present: the free model tier the test once
     // relied on is gone, and asserting on "anthropic" or "openai"
     // requires keys most CI runs won't have.
     for (const m of body) {

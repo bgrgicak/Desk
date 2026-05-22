@@ -1,10 +1,10 @@
 {
-  "name": "@agent-desk/desktop",
+  "name": "@roomy-ai/desktop",
   "version": "0.1.0-alpha.0",
   "private": true,
   "type": "module",
-  "description": "Desk desktop application (Electron)",
-  "author": "Agent Desk",
+  "description": "Roomy desktop application (Electron)",
+  "author": "Agent Roomy",
   "repository": {
     "type": "git",
     "url": "https://github.com/bgrgicak/Desk.git"

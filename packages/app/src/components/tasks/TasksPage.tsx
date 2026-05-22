@@ -10,7 +10,7 @@ import {
   PopoverTrigger,
   PopoverContent,
   useIsMobile,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import type { Task, TaskOccurrence } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 import { TopBarActions, TopBarContentActions, TopBarCenter } from '@/components/layout/TopBar'

@@ -4,11 +4,11 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, queries } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
-import { hashPassword } from "@agent-desk/db";
+import { Pool, runMigrations, queries } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
+import { hashPassword } from "@roomy-ai/db";
 import { createApp, type AppOptions } from "../src/app.js";
 import { issueSession, clearSessions } from "../src/auth/sessions.js";
 import { clearRateLimits } from "../src/auth/rateLimit.js";
@@ -57,14 +57,14 @@ function request(method: string, reqPath: string, opts: { token?: string; body?:
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ratelimit-http-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-ratelimit-http-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ratelimit-http-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-ratelimit-http-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   userId = generateId("user");
   await queries.users.insert(pool, {
@@ -89,7 +89,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 describe("rate limiting — HTTP layer", () => {
@@ -98,7 +98,7 @@ describe("rate limiting — HTTP layer", () => {
     let last;
     for (let i = 0; i < 11; i++) {
       last = await request("POST", "/auth/login", {
-        body: { username: "ratelimit-test", password: "wrong" },
+        body: { email: "ratelimit@example.com", password: "wrong" },
       });
     }
     expect(last?.status).toBe(429);
@@ -109,11 +109,11 @@ describe("rate limiting — HTTP layer", () => {
 
   it("still allows a successful login from a fresh IP after limit was reset", async () => {
     for (let i = 0; i < 11; i++) {
-      await request("POST", "/auth/login", { body: { username: "ratelimit-test", password: "wrong" } });
+      await request("POST", "/auth/login", { body: { email: "ratelimit@example.com", password: "wrong" } });
     }
     clearRateLimits("auth.login");
     const ok = await request("POST", "/auth/login", {
-      body: { username: "ratelimit-test", password: "correct-horse-battery" },
+      body: { email: "ratelimit@example.com", password: "correct-horse-battery" },
     });
     expect(ok.status).toBe(200);
     expect(typeof (ok.body as { token?: string }).token).toBe("string");

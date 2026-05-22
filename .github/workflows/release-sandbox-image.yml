@@ -3,12 +3,12 @@ name: Release sandbox image
 # On pushes to tags shaped like v0.1.0-alpha.0, build the sandbox
 # Docker image and push it to Docker Hub as
 #   <DOCKER_HUB_ORG>/sandbox:<tag-without-v>
-# matching the npm version of @agent-desk/cli for the same tag.
+# matching the npm version of @roomy-ai/cli for the same tag.
 #
 # Requires repo secrets:
 #   DOCKER_HUB_USERNAME — account that has push rights on DOCKER_HUB_ORG
 #   DOCKER_HUB_TOKEN    — Docker Hub access token (not the password)
-#   DOCKER_HUB_ORG      — repo namespace (e.g. "agentdesk"). If unset,
+#   DOCKER_HUB_ORG      — repo namespace (e.g. "roomy-ai"). If unset,
 #                         the job is skipped — useful while §4's open
 #                         question (org name) hasn't been settled.
 
@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   build-and-push:
-    name: Build and push agent-desk sandbox image
+    name: Build and push roomy-ai sandbox image
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 
@@ -85,5 +85,5 @@ jobs:
             ${{ env.DOCKER_HUB_ORG }}/sandbox:${{ steps.tag.outputs.version }}
             ${{ env.DOCKER_HUB_ORG }}/sandbox:alpha
           # alpha tag tracks the latest prerelease so the CLI can pull
-          # by a stable name when DESK_SANDBOX_IMAGE isn't pinned to a
+          # by a stable name when ROOMY_SANDBOX_IMAGE isn't pinned to a
           # specific version.

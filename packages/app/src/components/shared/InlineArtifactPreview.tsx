@@ -16,8 +16,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
   cn,
-} from '@agent-desk/ui'
-import { iconForFile, isMarkdownFile, type FileKind } from '@/data/file-kind'
+} from '@roomy-ai/ui'
+import { fileTypeLabel, iconForFile, isMarkdownFile, type FileKind } from '@/data/file-kind'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { AppPreview, appAttachmentToPreview } from '@/components/context/AppPreview'
 import { useGetLibraryFileQuery } from '@/store/api'
@@ -548,7 +548,15 @@ export function UnsupportedFileCard({
   onDelete,
 }: UnsupportedFileCardProps) {
   const FileIcon = useMemo(() => iconForFile(name, mime ?? undefined), [name, mime])
-  const secondary = workspaceName ? `${workspaceName} · ${path}` : path
+  // Describe the file by its type (App, Image, Video, …) rather than
+  // exposing the raw — often chat-scoped, hidden — filesystem path.
+  // Keep the workspace prefix when present (global/home chat) so the
+  // room context isn't lost.
+  const typeLabel = useMemo(
+    () => fileTypeLabel(name, mime ?? undefined, !!appAttachmentToPreview(path)),
+    [name, mime, path],
+  )
+  const secondary = workspaceName ? `${workspaceName} · ${typeLabel}` : typeLabel
 
   // For image artifacts, swap the file-type icon swatch for a real
   // thumbnail of the image. We reuse `useArtifactPreview` in panel
@@ -590,7 +598,7 @@ export function UnsupportedFileCard({
       onClick={onPreview}
       onKeyDown={handleKeyDown}
       className={cn(
-        'group relative w-full min-w-0 max-w-full mt-3 mb-5 cursor-pointer',
+        'group relative w-full min-w-0 max-w-full mt-3 mb-3 cursor-pointer',
         'rounded-xl border transition-colors',
         'flex items-center gap-3 px-4 py-3',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',

@@ -10,7 +10,6 @@ export {
   growSandboxForResourceError,
   reapIdleSandboxes,
   softReapIdleDaemons,
-  killOpencodeDaemonsForOrphans,
   _resetGrowthStateForTest,
 } from "./docker.js";
 export type { SandboxHandle, SandboxBindDrift, ResourceFailureKind, GrowthResult } from "./docker.js";
@@ -40,19 +39,19 @@ export {
 } from "./mounts.js";
 export type { MountSet, MountPlan, MountPlanEntry } from "./mounts.js";
 export { writeBuiltinApps, BUILTIN_APPS_MANIFEST_FILE } from "./builtinApps.js";
-export { execRun, cancelRun } from "./opencode.js";
-export type { ExecRunOptions } from "./opencode.js";
+export { execRun, cancelRun } from "./execRun.js";
+export type { ExecRunOptions } from "./execRun.js";
 export { renderAgentFile, writeAgentFile } from "./agentFile.js";
 export type { AgentFileInput } from "./agentFile.js";
 export { renderPromptBody, loadAndSub } from "./prompt.js";
 export type { RenderPromptInput } from "./prompt.js";
 export {
-  writeDeskSkillFiles,
+  writeRoomySkillFiles,
   writeGoalSkillFiles,
-  DESK_SKILLS_SANDBOX_DIR,
+  ROOMY_SKILLS_SANDBOX_DIR,
   GOAL_SKILLS_SANDBOX_DIR,
-  DESK_SKILL_PREFIX,
-  DESK_GOAL_SKILL_PREFIX,
+  ROOMY_SKILL_PREFIX,
+  ROOMY_GOAL_SKILL_PREFIX,
   goalSkillName,
 } from "./goalSkills.js";
 export { createDriver, buildDaemonEnv, buildPiEnv, hasActiveRunForContainer, isContainerGoneError } from "./driver.js";
@@ -82,6 +81,7 @@ export {
   listLocalSourceStatuses,
   loadLocalSourceEnv,
   resolveLocalSourceEnv,
+  resolveAvailableLocalSourceEnv,
 } from "./localSources/index.js";
 export type {
   LocalSource,

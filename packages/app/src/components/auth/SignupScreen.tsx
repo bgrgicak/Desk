@@ -1,156 +1,141 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Check } from 'lucide-react'
-import { Button, Input, Textarea, cn } from '@agent-desk/ui'
-import { getSessionToken, setSessionToken } from '@/auth/session'
+import { Bot, FolderKanban, Lock, ShieldCheck, Sparkles, UserRound } from 'lucide-react'
+import { Button, Input, cn } from '@roomy-ai/ui'
+import { setSessionToken } from '@/auth/session'
 import { extractApiError } from '@/lib/api-error'
+import { BackgroundBlobs } from '@/components/layout/BackgroundBlobs'
+import { WorkspaceForm } from '@/components/workspace/WorkspaceForm'
+import { ROOM_PALETTE } from '@/components/rooms/palette'
+import { ModelsSection } from '@/components/settings/ModelsSection'
+import type { ModelsFocus } from '@/router/nav'
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ── Step model ────────────────────────────────────────────────────────────────
 
-const CAROUSEL_SLIDES = [
-  { bg: '#EEF2FF' },
-  { bg: '#F0FDF4' },
-  { bg: '#FFF7ED' },
-  { bg: '#FDF4FF' },
-  { bg: '#F0F9FF' },
-]
+type StepId = 'account' | 'room' | 'vault' | 'models'
+const STEPS: readonly StepId[] = ['account', 'room', 'vault', 'models']
 
-const EMOJI_OPTIONS = [
-  '🏡','💼','🎨','📚','🚀','💡','🌿','⚡',
-  '🎯','🔬','💻','🎵','🌍','⭐','🏆','🔒',
-  '🌊','🦋','🍀','🔥','🧠','🌸','🎭','🐝',
-]
+interface StepMeta {
+  title: string
+  description: string
+}
 
-const COLOR_OPTIONS = [
-  { value: '#fef3c7', label: 'Amber'  },
-  { value: '#dbeafe', label: 'Blue'   },
-  { value: '#fce7f3', label: 'Pink'   },
-  { value: '#d1fae5', label: 'Green'  },
-  { value: '#ede9fe', label: 'Purple' },
-  { value: '#ffedd5', label: 'Orange' },
-  { value: '#fee2e2', label: 'Red'    },
-  { value: '#ccfbf1', label: 'Teal'   },
-]
+const STEP_META: Record<StepId, StepMeta> = {
+  account: {
+    title: 'Create your account',
+    description: 'Your information is used to access and secure your private data.',
+  },
+  room: {
+    title: 'Add a room (optional)',
+    description: 'Rooms keep a project’s chats, tasks and library together. You can run everything from Home and add rooms whenever you need them.',
+  },
+  vault: {
+    title: 'Secure your credentials',
+    description: 'Roomy encrypts every API key and OAuth token with a password only you know.',
+  },
+  models: {
+    title: 'Add AI providers',
+    description: 'Connect a provider so your agents can think. OpenCode’s free models work out of the box — add Claude or ChatGPT for stronger reasoning.',
+  },
+}
 
-type ProviderKind = 'claude' | 'chatgpt'
+// ── Right panel explainer cards ──────────────────────────────────────────────
 
-const PROVIDERS: { kind: ProviderKind; name: string; placeholder: string }[] = [
-  { kind: 'claude',  name: 'Claude',   placeholder: 'sk-ant-…' },
-  { kind: 'chatgpt', name: 'ChatGPT',  placeholder: 'sk-…'     },
-]
+interface ExplainerCard {
+  icon: typeof Sparkles
+  eyebrow: string
+  heading: string
+  bullets: string[]
+}
 
-type Step = 0 | 1 | 2
+const EXPLAINER: Record<StepId, ExplainerCard> = {
+  account: {
+    icon: UserRound,
+    eyebrow: 'Welcome to Roomy',
+    heading: 'Your private workspace for agents and knowledge',
+    bullets: [
+      'One account, all your chats, tasks and files in one place.',
+      'Everything stays on this server unless you connect a provider.',
+      'Sign in from any browser once your account is set up.',
+    ],
+  },
+  room: {
+    icon: FolderKanban,
+    eyebrow: 'About rooms',
+    heading: 'Rooms separate projects so context never leaks',
+    bullets: [
+      'A room scopes its chats, tasks, library and agent permissions.',
+      'Home runs alongside rooms — use it for one-off chats without a project.',
+      'Skip this step if you only need Home for now; create rooms later.',
+    ],
+  },
+  vault: {
+    icon: ShieldCheck,
+    eyebrow: 'About the vault',
+    heading: 'Credentials are encrypted with a password only you know',
+    bullets: [
+      'API keys and OAuth tokens are encrypted at rest with this password.',
+      'We never see it after this step, so it can’t be recovered.',
+      'You’ll re-enter it after signing in on a new browser.',
+    ],
+  },
+  models: {
+    icon: Bot,
+    eyebrow: 'About AI providers',
+    heading: 'Pick which models power your agents',
+    bullets: [
+      'OpenCode’s free models are ready to use without a key.',
+      'Add Claude or ChatGPT for stronger reasoning — keys stay on this server.',
+      'Manage models anytime from My account → AI providers.',
+    ],
+  },
+}
 
-const STEP_META: { title: string; description: string }[] = [
-  { title: 'Create your account',    description: 'Your information is used to access and secure your private data.'              },
-  { title: 'Set up your workspace',  description: 'Workspaces keep your projects, agents, and context organized and separate.'    },
-  { title: 'Connect an AI provider', description: 'Connect an AI provider to power your agents. You can add more later in Settings.' },
-]
-
-// ── Password strength ─────────────────────────────────────────────────────────
+// ── Password strength (account step) ─────────────────────────────────────────
 
 function getStrength(pw: string): number {
   if (!pw) return 0
   let s = 0
   if (pw.length >= 8)             s++
   if (pw.length >= 12)            s++
-  if (/[A-Z]/.test(pw))          s++
-  if (/[0-9]/.test(pw))          s++
-  if (/[^A-Za-z0-9]/.test(pw))   s++
+  if (/[A-Z]/.test(pw))           s++
+  if (/[0-9]/.test(pw))           s++
+  if (/[^A-Za-z0-9]/.test(pw))    s++
   return Math.min(s, 4)
 }
 
 const STRENGTH_LABEL = ['', 'Weak', 'Fair', 'Good', 'Strong']
 const STRENGTH_COLOR = ['', 'bg-red-400', 'bg-orange-400', 'bg-yellow-400', 'bg-green-500']
 
-// ── Brand glyphs ──────────────────────────────────────────────────────────────
+const ACCOUNT_PASSWORD_MIN = 12
+const VAULT_PASSWORD_MIN = 8
 
-function ClaudeLogo({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden className={className}>
-      <path fill="currentColor" d="M13.827 3.52h3.603L24 20h-3.603l-6.57-16.48zM6.569 3.52h3.767L16.906 20h-3.674l-1.343-3.461H5.017L3.673 20H0L6.569 3.52zm4.132 9.959L8.453 7.687 6.205 13.479z" />
-    </svg>
-  )
-}
-
-function OpenAILogo({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden className={className}>
-      <path fill="currentColor" d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.911 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.182a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.998-2.9 6.056 6.056 0 0 0-.748-7.073zm-9.022 12.608a4.476 4.476 0 0 1-2.876-1.04l.142-.08 4.778-2.759a.795.795 0 0 0 .393-.681v-6.737l2.02 1.169a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.495 4.494zm-9.66-4.126a4.471 4.471 0 0 1-.535-3.013l.142.085 4.783 2.758a.771.771 0 0 0 .78 0l5.843-3.368v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.499 4.499 0 0 1-6.14-1.647zM2.341 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.677l5.814 3.354-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786a4.504 4.504 0 0 1-1.647-6.14zm16.597 3.856L13.104 8.364l2.015-1.164a.076.076 0 0 1 .071 0l4.83 2.79a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.41 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.499 4.499 0 0 1 6.68 4.66zM8.307 12.863l-2.02-1.164a.08.08 0 0 1-.038-.056V6.074A4.499 4.499 0 0 1 13.626 2.62l-.142.08L8.7 5.46a.795.795 0 0 0-.393.681zm1.098-2.365 2.602-1.5 2.607 1.5v3l-2.598 1.5-2.607-1.5z" />
-    </svg>
-  )
-}
-
-// ── Right carousel panel ──────────────────────────────────────────────────────
-
-function CarouselPanel() {
-  const [active, setActive] = useState(0)
-
-  useEffect(() => {
-    const id = setInterval(() => setActive(i => (i + 1) % CAROUSEL_SLIDES.length), 10_000)
-    return () => clearInterval(id)
-  }, [])
-
-  return (
-    <div className="relative flex-1 overflow-hidden rounded-r-2xl border-l border-border/50">
-      <AnimatePresence initial={false}>
-        <motion.div
-          key={active}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.6, ease: 'easeInOut' }}
-          className="absolute inset-0"
-          style={{ backgroundColor: CAROUSEL_SLIDES[active].bg }}
-        />
-      </AnimatePresence>
-
-      {/* Dot indicators */}
-      <div className="absolute bottom-5 left-0 right-0 flex justify-center gap-1.5">
-        {CAROUSEL_SLIDES.map((_, i) => (
-          <button
-            key={i}
-            onClick={() => setActive(i)}
-            aria-label={`Slide ${i + 1}`}
-            className={cn(
-              'h-1.5 rounded-full transition-all duration-300',
-              i === active ? 'w-4 bg-foreground/50' : 'w-1.5 bg-foreground/20 hover:bg-foreground/35',
-            )}
-          />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ── Step forms ────────────────────────────────────────────────────────────────
+// ── Step bodies ──────────────────────────────────────────────────────────────
 
 interface AccountData {
+  // Stored on the server as `username` but presented to the user as
+  // their display name — what the agent calls them in conversation.
   username: string
   email: string
   password: string
   confirmPassword: string
 }
 
-function AccountStep({ data, onChange }: {
+function AccountStepBody({ data, onChange }: {
   data: AccountData
   onChange: (next: Partial<AccountData>) => void
 }) {
   const strength = getStrength(data.password)
-  const strengthLabel = STRENGTH_LABEL[strength]
-  const strengthColor = STRENGTH_COLOR[strength]
-
   return (
     <div className="space-y-4">
       <div className="space-y-1.5">
-        <label className="text-xs font-medium text-muted-foreground">Username</label>
+        <label className="text-xs font-medium text-muted-foreground">Your name</label>
         <Input
           autoFocus
-          autoComplete="username"
-          autoCapitalize="none"
+          autoComplete="name"
           value={data.username}
           onChange={e => onChange({ username: e.target.value })}
-          placeholder="e.g. jsmith"
+          placeholder="What should we call you?"
         />
       </div>
 
@@ -181,12 +166,19 @@ function AccountStep({ data, onChange }: {
                   key={level}
                   className={cn(
                     'h-1 flex-1 rounded-full transition-colors duration-300',
-                    strength >= level ? strengthColor : 'bg-muted',
+                    strength >= level ? STRENGTH_COLOR[strength] : 'bg-muted',
                   )}
                 />
               ))}
             </div>
-            <p className="text-xs text-muted-foreground">{strengthLabel}</p>
+            <p className="text-xs text-muted-foreground">
+              {STRENGTH_LABEL[strength]}
+              {data.password.length < ACCOUNT_PASSWORD_MIN && (
+                <span className="ml-1 opacity-70">
+                  &middot; minimum {ACCOUNT_PASSWORD_MIN} characters
+                </span>
+              )}
+            </p>
           </div>
         )}
       </div>
@@ -200,435 +192,432 @@ function AccountStep({ data, onChange }: {
           onChange={e => onChange({ confirmPassword: e.target.value })}
         />
         {data.confirmPassword.length > 0 && data.password !== data.confirmPassword && (
-          <p className="text-xs text-red-500">Passwords don't match</p>
+          <p className="text-xs text-red-500">Passwords don&apos;t match</p>
         )}
       </div>
     </div>
   )
 }
 
-interface WorkspaceData {
-  name: string
-  emoji: string
-  color: string
-  description: string
-}
-
-function WorkspaceStep({ data, onChange }: {
-  data: WorkspaceData
-  onChange: (next: Partial<WorkspaceData>) => void
+function VaultStepBody({
+  password, confirmPassword, onPasswordChange, onConfirmChange, error,
+}: {
+  password: string
+  confirmPassword: string
+  onPasswordChange: (v: string) => void
+  onConfirmChange: (v: string) => void
+  error: string | null
 }) {
+  const tooShort = password.length > 0 && password.length < VAULT_PASSWORD_MIN
+  const mismatch = confirmPassword.length > 0 && password !== confirmPassword
   return (
     <div className="space-y-4">
-      {/* Preview + name */}
-      <div className="flex items-center gap-3">
-        <div
-          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-2xl select-none"
-          style={{ backgroundColor: data.color }}
-        >
-          {data.emoji}
-        </div>
-        <Input
-          placeholder="Workspace name"
-          value={data.name}
-          onChange={e => onChange({ name: e.target.value })}
-          className="flex-1"
-        />
-      </div>
-
-      {/* Color */}
-      <div>
-        <p className="text-xs font-medium text-muted-foreground mb-2">Color</p>
-        <div className="flex gap-2 flex-wrap">
-          {COLOR_OPTIONS.map(({ value, label }) => (
-            <button
-              key={value}
-              type="button"
-              title={label}
-              onClick={() => onChange({ color: value })}
-              className={cn(
-                'h-6 w-6 rounded-full transition-all',
-                data.color === value ? 'ring-2 ring-offset-2 ring-foreground/40 scale-110' : 'hover:scale-110',
-              )}
-              style={{ backgroundColor: value }}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* Emoji */}
-      <div>
-        <p className="text-xs font-medium text-muted-foreground mb-2">Icon</p>
-        <div className="grid grid-cols-8 gap-1">
-          {EMOJI_OPTIONS.map(e => (
-            <button
-              key={e}
-              type="button"
-              onClick={() => onChange({ emoji: e })}
-              className={cn(
-                'flex items-center justify-center h-8 w-8 rounded-md text-lg transition-colors',
-                data.emoji === e ? 'bg-muted ring-1 ring-ring/40' : 'hover:bg-muted',
-              )}
-            >
-              {e}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Description */}
-      <div>
-        <p className="text-xs font-medium text-muted-foreground mb-2">
-          Description <span className="opacity-50">(optional)</span>
+      <div className="flex items-start gap-3 rounded-lg border border-border/60 bg-muted/30 p-3">
+        <Lock className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Pick a password you can remember. Roomy never sees it after this step, so
+          if you lose it the encrypted credentials cannot be recovered.
         </p>
-        <Textarea
-          placeholder="What's this workspace for?"
-          value={data.description}
-          onChange={e => onChange({ description: e.target.value })}
-          rows={2}
-          className="resize-none"
-        />
       </div>
-    </div>
-  )
-}
 
-interface AISetupData {
-  kind: ProviderKind | null
-  apiKey: string
-}
-
-function AISetupStep({ data, onChange }: {
-  data: AISetupData
-  onChange: (next: Partial<AISetupData>) => void
-}) {
-  return (
-    <div className="space-y-5">
-      {/* Provider picker */}
       <div className="space-y-1.5">
-        <p className="text-xs font-medium text-muted-foreground">Provider</p>
-        <div className="grid grid-cols-2 gap-2">
-          {PROVIDERS.map(p => (
-            <button
-              key={p.kind}
-              type="button"
-              onClick={() => onChange({ kind: p.kind, apiKey: '' })}
-              className={cn(
-                'flex items-center gap-2.5 rounded-xl border p-3.5 text-left transition-colors',
-                data.kind === p.kind
-                  ? 'border-foreground/30 bg-muted/50'
-                  : 'hover:bg-muted/40',
-              )}
-            >
-              <ProviderGlyph kind={p.kind} />
-              <span className="text-sm font-medium">{p.name}</span>
-              {data.kind === p.kind && (
-                <Check className="ml-auto h-3.5 w-3.5 text-foreground/60" />
-              )}
-            </button>
-          ))}
-        </div>
+        <label htmlFor="vault-password" className="text-xs font-medium text-muted-foreground">
+          Vault password
+        </label>
+        <Input
+          id="vault-password"
+          type="password"
+          autoFocus
+          autoComplete="new-password"
+          value={password}
+          onChange={e => onPasswordChange(e.target.value)}
+          data-testid="vault-password-input"
+        />
+        {tooShort && (
+          <p className="text-xs text-destructive">Minimum {VAULT_PASSWORD_MIN} characters.</p>
+        )}
       </div>
 
-      {/* API key */}
-      {data.kind && (
-        <motion.div
-          initial={{ opacity: 0, y: 4 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.15 }}
-          className="space-y-1.5"
-        >
-          <p className="text-xs font-medium text-muted-foreground">API key</p>
-          <Input
-            type="password"
-            autoFocus
-            autoComplete="off"
-            value={data.apiKey}
-            onChange={e => onChange({ apiKey: e.target.value })}
-            placeholder={PROVIDERS.find(p => p.kind === data.kind)?.placeholder}
-          />
-          <p className="text-xs text-muted-foreground/70">Stored locally and never sent to our servers.</p>
-        </motion.div>
+      <div className="space-y-1.5">
+        <label htmlFor="vault-password-confirm" className="text-xs font-medium text-muted-foreground">
+          Confirm vault password
+        </label>
+        <Input
+          id="vault-password-confirm"
+          type="password"
+          autoComplete="new-password"
+          value={confirmPassword}
+          onChange={e => onConfirmChange(e.target.value)}
+          data-testid="vault-password-confirm"
+        />
+        {mismatch && <p className="text-xs text-destructive">Passwords don&apos;t match.</p>}
+      </div>
+
+      {error && (
+        <p className="text-xs text-destructive" role="alert">{error}</p>
       )}
     </div>
   )
 }
 
-function ProviderGlyph({ kind }: { kind: ProviderKind }) {
-  if (kind === 'claude') {
-    return (
-      <span className="shrink-0 h-8 w-8 rounded-lg flex items-center justify-center bg-[#F5E6DA] text-[#CC785C]">
-        <ClaudeLogo className="h-[18px] w-[18px]" />
-      </span>
-    )
-  }
+// ── Right panel ──────────────────────────────────────────────────────────────
+
+function ExplainerPanel({ step }: { step: StepId }) {
+  const card = EXPLAINER[step]
+  const Icon = card.icon
   return (
-    <span className="shrink-0 h-8 w-8 rounded-lg flex items-center justify-center bg-black text-white">
-      <OpenAILogo className="h-[18px] w-[18px]" />
-    </span>
+    <div className="relative flex-1 hidden md:flex flex-col overflow-hidden rounded-r-2xl border-l border-border/50 bg-gradient-to-br from-muted/20 to-muted/40">
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={step}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.22, ease: 'easeOut' }}
+          className="flex flex-1 flex-col justify-center px-8 py-10"
+        >
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-background/80 border border-border/60 shadow-sm">
+            <Icon className="h-5 w-5 text-foreground/70" />
+          </div>
+          <p className="mt-5 text-xs font-medium uppercase tracking-wider text-muted-foreground/80">
+            {card.eyebrow}
+          </p>
+          <h2 className="mt-2 text-lg font-semibold leading-snug text-foreground">
+            {card.heading}
+          </h2>
+          <ul className="mt-5 space-y-2.5">
+            {card.bullets.map((b, i) => (
+              <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-foreground/40" />
+                <span className="leading-relaxed">{b}</span>
+              </li>
+            ))}
+          </ul>
+        </motion.div>
+      </AnimatePresence>
+    </div>
   )
 }
 
-
-// ── Main export ───────────────────────────────────────────────────────────────
+// ── Main export ──────────────────────────────────────────────────────────────
 
 interface SignupScreenProps {
   onSignIn: () => void
   onComplete: () => void
 }
 
+interface RoomDraft {
+  name: string
+  description: string
+  color: string
+}
+
 export function SignupScreen({ onSignIn, onComplete }: SignupScreenProps) {
-  const [step, setStep] = useState<Step>(0)
+  const [stepIndex, setStepIndex] = useState(0)
+  const [modelsFocus, setModelsFocus] = useState<ModelsFocus>(null)
+  const step = STEPS[stepIndex]
+  const totalSteps = STEPS.length
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Step 0 — account details (collected, not submitted, until the
+  // vault step). Holding all wizard input in component state means
+  // the only network call that creates server-side state is the final
+  // /auth/signup POST. Nothing lands in the DB or on disk if the user
+  // abandons the wizard halfway through.
   const [account, setAccount] = useState<AccountData>({
     username: '', email: '', password: '', confirmPassword: '',
   })
-  const [workspace, setWorkspace] = useState<WorkspaceData>({
-    name: 'General', emoji: '🏡', color: '#fef3c7', description: '',
-  })
-  const [aiSetup, setAISetup] = useState<AISetupData>({ kind: null, apiKey: '' })
+
+  // Step 1 — optional first room. `null` means the user skipped or
+  // hasn't visited this step; an object means they filled it in.
+  const [roomDraft, setRoomDraft] = useState<RoomDraft | null>(null)
+
+  // Step 2 — vault password. Same deferral story: collected here,
+  // submitted with the rest of the wizard.
+  const [vaultPassword, setVaultPassword] = useState('')
+  const [vaultConfirm, setVaultConfirm] = useState('')
 
   const scrollRef = useRef<HTMLDivElement>(null)
+  useEffect(() => { scrollRef.current?.scrollTo({ top: 0 }) }, [stepIndex])
 
-  // Scroll form area back to top on step change
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: 0 })
-  }, [step])
-
-  // Password policy on the server is min length 12 — match it here so
-  // the user gets fast feedback instead of a 400 on submit.
-  const PASSWORD_MIN_LENGTH = 12
-
-  const canProceed = (() => {
-    if (isSubmitting) return false
-    if (step === 0) {
-      return (
-        account.username.trim() &&
-        account.email.trim() &&
-        account.password.length >= PASSWORD_MIN_LENGTH &&
-        account.password === account.confirmPassword
-      )
-    }
-    if (step === 1) return !!workspace.name.trim()
-    return true // AI setup is always skippable
-  })()
-
-  const primaryLabel = (() => {
-    if (isSubmitting && step === 0) return 'Creating account…'
-    if (isSubmitting && step === 2) return 'Saving…'
-    if (step === 0) return 'Set up workspace'
-    if (step === 1) return 'Set up AI'
-    const hasCredentials = aiSetup.kind && aiSetup.apiKey.trim()
-    return hasCredentials ? 'Go to Desk' : 'Skip to Desk'
-  })()
-
-  const handlePrimary = async () => {
+  const goNext = () => {
     setError(null)
-    if (step === 0) {
-      // Step 0 → 1: create the account on the server. On success the
-      // session token is stored so subsequent steps (provider keys) can
-      // hit authenticated endpoints. The server also bootstraps a hub
-      // workspace for the new user so the SPA lands on a real
-      // workspace, not "No workspaces".
-      setIsSubmitting(true)
-      try {
-        const res = await fetch('/api/auth/signup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: account.username.trim(),
-            email: account.email.trim(),
-            password: account.password,
-          }),
-        })
-        if (res.status !== 200) {
-          let message = `Signup failed (${res.status}).`
-          try {
-            const body = (await res.json()) as { message?: string }
-            if (body.message) message = body.message
-          } catch {
-            // Non-JSON response; keep the default message.
-          }
-          setError(message)
-          return
-        }
-        const body = (await res.json()) as { token: string }
-        setSessionToken(body.token)
-        setStep(1)
-      } catch (err) {
-        setError(extractApiError(err) ?? 'Network error while creating account.')
-      } finally {
-        setIsSubmitting(false)
+    setStepIndex(i => Math.min(i + 1, totalSteps - 1))
+  }
+
+  const accountReady = (
+    account.username.trim().length > 0
+    && account.email.trim().length > 0
+    && account.password.length >= ACCOUNT_PASSWORD_MIN
+    && account.password === account.confirmPassword
+  )
+
+  const vaultReady = (
+    vaultPassword.length >= VAULT_PASSWORD_MIN
+    && vaultPassword === vaultConfirm
+  )
+
+  // Final atomic submit — fires at the end of the vault step. Sends
+  // account credentials, optional first room, and vault password in
+  // a single request. The server creates the user, hub, optional
+  // room, and vault as one unit (with rollback on partial failure)
+  // and returns a session token.
+  const submitWizard = async () => {
+    if (!vaultReady || isSubmitting) return
+    setError(null)
+    setIsSubmitting(true)
+    try {
+      const payload: Record<string, unknown> = {
+        username: account.username.trim(),
+        email: account.email.trim(),
+        password: account.password,
+        vaultPassword,
       }
-      return
-    }
-    if (step === 1) {
-      // Persist the workspace details the user typed in step 1.  The
-      // server's `handleSignup` already created the user's hub; this
-      // call adds a *project* workspace with the chosen name/icon so
-      // the wizard's preview doesn't lie ("you created General" but
-      // no row landed).  A failure surfaces inline and lets the user
-      // retry — we don't advance to step 2 until the workspace is in.
-      const trimmedName = workspace.name.trim()
-      if (trimmedName) {
-        setIsSubmitting(true)
+      if (roomDraft && roomDraft.name.trim().length > 0) {
+        payload.workspace = {
+          name: roomDraft.name.trim(),
+          description: roomDraft.description.trim() || undefined,
+          color: roomDraft.color,
+        }
+      }
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (res.status !== 200) {
+        let message = `Signup failed (${res.status}).`
         try {
-          const res = await fetch('/api/workspaces', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${getSessionToken()}`,
-            },
-            body: JSON.stringify({
-              name: trimmedName,
-              icon: workspace.emoji,
-              color: workspace.color,
-              description: workspace.description || undefined,
-            }),
-          })
-          if (!res.ok) {
-            setError(`Could not create workspace (${res.status}).`)
-            return
-          }
-        } catch (err) {
-          setError(extractApiError(err) ?? 'Network error while creating workspace.')
-          return
-        } finally {
-          setIsSubmitting(false)
+          const body = (await res.json()) as { message?: string }
+          if (body.message) message = body.message
+        } catch { /* non-JSON */ }
+        // Account-level conflicts (409 — username / email taken) need
+        // the user back at step 0 to edit their credentials; vault /
+        // workspace errors stay on the current step.
+        if (res.status === 409) {
+          setStepIndex(0)
         }
+        setError(message)
+        return
       }
-      setStep(2)
-      return
+      const body = (await res.json()) as { token: string }
+      setSessionToken(body.token)
+      goNext()
+    } catch (err) {
+      setError(extractApiError(err) ?? 'Network error while creating account.')
+    } finally {
+      setIsSubmitting(false)
     }
-    // Step 2 → done. If the user provided an AI provider key, persist
-    // it via the standard provider-keys endpoint; otherwise jump to the
-    // workspace. A failure to save the key surfaces an inline error
-    // and does not block the user from finishing onboarding.
-    if (aiSetup.kind && aiSetup.apiKey.trim()) {
-      setIsSubmitting(true)
-      try {
-        const envKey = aiSetup.kind === 'claude' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY'
-        const res = await fetch('/api/me/providers', {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${getSessionToken() ?? ''}`,
-          },
-          body: JSON.stringify({ providers: { [envKey]: aiSetup.apiKey.trim() } }),
-        })
-        if (res.status !== 200) {
-          let message = `Saving API key failed (${res.status}).`
-          try {
-            const body = (await res.json()) as { message?: string }
-            if (body.message) message = body.message
-          } catch {
-            // Non-JSON response.
-          }
-          setError(`${message} You can add the key later in Settings.`)
-          // Continue anyway so the user isn't stuck.
-        }
-      } catch (err) {
-        setError(`${extractApiError(err) ?? 'Network error saving API key.'} You can add the key later in Settings.`)
-      } finally {
-        setIsSubmitting(false)
-      }
+  }
+
+  // Per-step primary action. The room step renders no wizard footer at
+  // all — its primary lives inside WorkspaceForm.
+  let primary: { label: string; disabled: boolean; onClick: () => void } | null = null
+  if (step === 'account') {
+    primary = {
+      label: 'Continue',
+      disabled: !accountReady,
+      onClick: goNext,
     }
-    onComplete()
+  } else if (step === 'vault') {
+    primary = {
+      label: isSubmitting ? 'Creating account…' : 'Create account',
+      disabled: !vaultReady || isSubmitting,
+      onClick: () => void submitWizard(),
+    }
+  } else if (step === 'models') {
+    primary = {
+      label: 'Go to Roomy',
+      disabled: false,
+      onClick: onComplete,
+    }
   }
 
   return (
-    <div
-      className="relative z-10 w-full max-w-[860px] mx-4"
-      style={{ maxHeight: 'calc(100vh - 48px)' }}
-    >
-      <div className="flex rounded-2xl bg-background/95 backdrop-blur-sm border border-border/60 shadow-2xl overflow-hidden" style={{ height: '600px' }}>
+    <div className="relative flex min-h-screen items-center justify-center">
+      <BackgroundBlobs />
 
-        {/* ── Left: form ── */}
-        <div className="flex flex-col w-[480px] shrink-0">
-
-          {/* Step counter + heading (non-scrolling) */}
-          <div className="shrink-0 px-6 pt-6 pb-4">
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.div
-                key={step}
-                initial={{ opacity: 0, y: 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -4 }}
-                transition={{ duration: 0.18, ease: 'easeOut' }}
-              >
-                <p className="text-sm text-muted-foreground mb-3">Step {step + 1} of 3</p>
-                <h1 className="text-xl font-semibold tracking-tight">{STEP_META[step].title}</h1>
-                <p className="text-sm text-muted-foreground mt-1">{STEP_META[step].description}</p>
-              </motion.div>
-            </AnimatePresence>
-          </div>
-
-          {/* Scrollable form body */}
-          <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 pb-5">
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.div
-                key={step}
-                initial={{ opacity: 0, x: 12 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -12 }}
-                transition={{ duration: 0.18, ease: 'easeOut' }}
-              >
-                {step === 0 && (
-                  <AccountStep data={account} onChange={d => setAccount(p => ({ ...p, ...d }))} />
-                )}
-                {step === 1 && (
-                  <WorkspaceStep data={workspace} onChange={d => setWorkspace(p => ({ ...p, ...d }))} />
-                )}
-                {step === 2 && (
-                  <AISetupStep data={aiSetup} onChange={d => setAISetup(p => ({ ...p, ...d }))} />
-                )}
-              </motion.div>
-            </AnimatePresence>
-          </div>
-
-          {/* Footer — no top border, sticks at bottom via shrink-0 */}
-          <div className="shrink-0 px-6 pb-6 pt-4 space-y-3">
-            {error && (
-              <p data-testid="signup-error" className="text-sm text-destructive">{error}</p>
-            )}
-            <div className="flex flex-col gap-2">
-              <Button
-                className="w-full"
-                disabled={!canProceed}
-                onClick={handlePrimary}
-                data-testid="signup-primary"
-              >
-                {primaryLabel}
-              </Button>
-              {step > 0 && (
-                <Button
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => setStep(s => (s - 1) as Step)}
+      <motion.div
+        initial={{ opacity: 0, scale: 0.97 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.22, ease: 'easeOut' }}
+        className="relative z-10 w-full max-w-[920px] mx-4"
+        style={{ maxHeight: 'calc(100vh - 48px)' }}
+      >
+        <div
+          className="flex rounded-2xl bg-background/95 backdrop-blur-sm border border-border/60 shadow-2xl overflow-hidden"
+          style={{ height: '640px' }}
+        >
+          {/* Left: form */}
+          <div className="flex flex-col w-full md:w-[500px] md:shrink-0">
+            <div className="shrink-0 px-6 pt-6 pb-4">
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.div
+                  key={step}
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.18, ease: 'easeOut' }}
                 >
-                  Back
-                </Button>
-              )}
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Step {stepIndex + 1} of {totalSteps}
+                  </p>
+                  <h1 className="text-xl font-semibold tracking-tight">{STEP_META[step].title}</h1>
+                  <p className="text-sm text-muted-foreground mt-1">{STEP_META[step].description}</p>
+                </motion.div>
+              </AnimatePresence>
             </div>
 
-            <p className="text-center text-sm text-muted-foreground">
-              Already have an account?{' '}
-              <button
-                type="button"
-                onClick={onSignIn}
-                className="text-foreground font-medium hover:underline underline-offset-4 transition-colors"
-              >
-                Sign in
-              </button>
-            </p>
-          </div>
-        </div>
+            {/* Body — most steps use the wizard’s scroll container; the
+                room and models steps embed components that scroll
+                themselves, so we render them outside the scroll wrapper. */}
+            {step === 'room' && (
+              <RoomStep
+                initial={roomDraft ?? { name: '', description: '', color: ROOM_PALETTE[0].value }}
+                onContinue={(draft) => {
+                  setRoomDraft(draft.name.trim().length > 0 ? draft : null)
+                  goNext()
+                }}
+                onSkip={() => {
+                  setRoomDraft(null)
+                  goNext()
+                }}
+              />
+            )}
+            {step === 'models' && (
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                <ModelsSection focus={modelsFocus} onChangeFocus={setModelsFocus} />
+              </div>
+            )}
+            {(step === 'account' || step === 'vault') && (
+              <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 pb-5">
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.div
+                    key={step}
+                    initial={{ opacity: 0, x: 12 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -12 }}
+                    transition={{ duration: 0.18, ease: 'easeOut' }}
+                  >
+                    {step === 'account' && (
+                      <AccountStepBody
+                        data={account}
+                        onChange={d => setAccount(p => ({ ...p, ...d }))}
+                      />
+                    )}
+                    {step === 'vault' && (
+                      <VaultStepBody
+                        password={vaultPassword}
+                        confirmPassword={vaultConfirm}
+                        onPasswordChange={setVaultPassword}
+                        onConfirmChange={setVaultConfirm}
+                        error={null}
+                      />
+                    )}
+                  </motion.div>
+                </AnimatePresence>
+              </div>
+            )}
 
-        {/* ── Right: carousel ── */}
-        <CarouselPanel />
-      </div>
+            {/* Footer — the room step renders its own (WorkspaceForm’s
+                sticky save bar). Errors for the room step are shown
+                inline above WorkspaceForm’s footer via this same block. */}
+            {primary !== null ? (
+              <div className="shrink-0 px-6 pb-6 pt-4 space-y-3">
+                {error && (
+                  <p data-testid="signup-error" className="text-sm text-destructive">{error}</p>
+                )}
+                <Button
+                  className="w-full"
+                  disabled={primary.disabled}
+                  onClick={primary.onClick}
+                  data-testid="signup-primary"
+                >
+                  {primary.label}
+                </Button>
+                {step === 'account' && (
+                  <p className="text-center text-sm text-muted-foreground">
+                    Already have an account?{' '}
+                    <button
+                      type="button"
+                      onClick={onSignIn}
+                      className="text-foreground font-medium hover:underline underline-offset-4 transition-colors"
+                    >
+                      Sign in
+                    </button>
+                  </p>
+                )}
+              </div>
+            ) : error ? (
+              <div className="shrink-0 px-6 pb-3">
+                <p data-testid="signup-error" className="text-sm text-destructive">{error}</p>
+              </div>
+            ) : null}
+          </div>
+
+          {/* Right: explainer panel */}
+          <ExplainerPanel step={step} />
+        </div>
+      </motion.div>
     </div>
+  )
+}
+
+// ── Room step (uses the shared WorkspaceForm) ────────────────────────────────
+
+/**
+ * The room step is a pure data-collection surface — it does NOT
+ * create the workspace server-side. Values are captured and bubbled
+ * to the wizard via `onContinue`, which advances to the vault step;
+ * the actual workspace creation happens in the final atomic
+ * /auth/signup call at the end of the wizard, alongside user + vault
+ * creation.
+ *
+ * The shared WorkspaceForm's `onSubmit` returns a workspace id in
+ * its normal usage so the form can attach a freshly uploaded icon to
+ * the just-created workspace. During onboarding there's no workspace
+ * id yet (creation is deferred), so a custom icon picked at this
+ * step would be silently dropped if WorkspaceForm tried to persist
+ * it. That's a deliberate, minor trade-off: the user can set the
+ * icon from Settings → Workspace right after onboarding finishes,
+ * and the alternative (plumbing pending-icon state through the
+ * wizard and reattaching after the atomic signup returns) added
+ * more surface area than the prototype warrants.
+ */
+function RoomStep({
+  initial, onContinue, onSkip,
+}: {
+  initial: { name: string; description: string; color: string }
+  onContinue: (draft: { name: string; description: string; color: string }) => void
+  onSkip: () => void
+}) {
+  return (
+    <WorkspaceForm
+      key="onboarding-room"
+      mode="create"
+      initial={initial}
+      submitLabel="Continue"
+      onSubmit={async (vals) => {
+        onContinue({
+          name: vals.name,
+          description: vals.description,
+          color: vals.color,
+        })
+        // No server-side id yet — the wizard atomically creates the
+        // workspace at the very end alongside the user account.
+        return undefined
+      }}
+      footerStart={
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onSkip}
+          data-testid="signup-skip-room"
+        >
+          Skip for now
+        </Button>
+      }
+    />
   )
 }

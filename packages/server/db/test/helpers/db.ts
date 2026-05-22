@@ -6,7 +6,7 @@ import { runMigrations } from "../../src/migrate.js";
  *
  * Uses an in-memory database (`:memory:`) — no filesystem bytes, no
  * cross-test contamination, teardown is implicit. Tests that need
- * cross-connection visibility should override DESK_DB_PATH to a temp
+ * cross-connection visibility should override ROOMY_DB_PATH to a temp
  * file and skip this helper.
  */
 export async function setupTestDb(): Promise<Pool> {

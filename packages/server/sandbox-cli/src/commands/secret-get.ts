@@ -2,10 +2,10 @@ import { getJson } from "../client.js";
 import { CliError } from "../errors.js";
 import { output } from "../index.js";
 
-export const usage = "desk-agent secret get <title>";
+export const usage = "roomy-agent secret get <title>";
 
 export const help = `\
-desk-agent secret get — read the full plaintext entry for a stored secret
+roomy-agent secret get — read the full plaintext entry for a stored secret
 by title.
 
 Returns the entry's password and any other fields the user filled in

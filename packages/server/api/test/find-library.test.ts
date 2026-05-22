@@ -2,9 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations } from "@agent-desk/db";
-import { generateId } from "@agent-desk/shared";
-import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-desk/storage";
+import { Pool, runMigrations } from "@roomy-ai/db";
+import { generateId } from "@roomy-ai/shared";
+import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@roomy-ai/storage";
 import { findLibraryItems } from "../src/routes/search.js";
 
 let pool: Pool;
@@ -15,11 +15,11 @@ let workspaceId: string;
 let workspaceSlug: string;
 
 beforeAll(async () => {
-  dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-find-library-db-"));
+  dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-find-library-db-"));
   pool = new Pool({ path: path.join(dbDir, "test.sqlite3") });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-find-library-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-find-library-"));
   await ensureLayout(home);
 
   userId = generateId("user");
@@ -51,7 +51,7 @@ async function writeWorkspaceFile(relPath: string, body: string): Promise<void> 
 describe("findLibraryItems", () => {
   it("discovers fragment manifests with params_schema via the existing file index", async () => {
     await writeWorkspaceFile(
-      "todos.app/fragments/list/desk.fragment.json",
+      "todos.app/fragments/list/roomy.fragment.json",
       JSON.stringify({
         name: "todo-list",
         description: "Inline list view of todos.",
@@ -80,11 +80,11 @@ describe("findLibraryItems", () => {
     expect(hits.some((hit) => hit.kind === "note" && hit.path === "notes/kanban.md")).toBe(true);
   });
 
-  it("surfaces Desk-shipped global apps in every workspace's library", async () => {
+  it("surfaces Roomy-shipped global apps in every workspace's library", async () => {
     const globalAppDir = path.join(home, ".apps", "chat-forms.app");
     await fs.mkdir(path.join(globalAppDir, "fragments", "yes-no"), { recursive: true });
     await fs.writeFile(
-      path.join(globalAppDir, "desk.app.json"),
+      path.join(globalAppDir, "roomy.app.json"),
       JSON.stringify({
         name: "chat-forms",
         description: "Built-in forms for agents to ask the user structured questions via UI.",
@@ -94,7 +94,7 @@ describe("findLibraryItems", () => {
       "utf-8",
     );
     await fs.writeFile(
-      path.join(globalAppDir, "fragments", "yes-no", "desk.fragment.json"),
+      path.join(globalAppDir, "fragments", "yes-no", "roomy.fragment.json"),
       JSON.stringify({
         name: "yes-no",
         description: "Ask the user a yes/no question via UI buttons.",
@@ -109,26 +109,26 @@ describe("findLibraryItems", () => {
       expect.objectContaining({
         kind: "app",
         name: "chat-forms",
-        path: "/opt/desk-apps/chat-forms.app",
-        workspaceSlug: "_desk_apps",
+        path: "/opt/roomy-apps/chat-forms.app",
+        workspaceSlug: "_roomy_apps",
       }),
     ]));
 
     const frags = await findLibraryItems(pool, { pool, home }, userId, { kind: "fragment" });
-    const yesNo = frags.find((hit) => hit.path === "/opt/desk-apps/chat-forms.app/dist/fragments/yes-no");
+    const yesNo = frags.find((hit) => hit.path === "/opt/roomy-apps/chat-forms.app/dist/fragments/yes-no");
     expect(yesNo).toMatchObject({
       kind: "fragment",
       name: "yes-no",
-      workspaceSlug: "_desk_apps",
+      workspaceSlug: "_roomy_apps",
       params_schema: { question: "The yes/no question to display." },
     });
 
     // Query-based filtering uses substring match across name + description.
     const queried = await findLibraryItems(pool, { pool, home }, userId, { query: "yes/no" });
-    expect(queried.some((hit) => hit.path === "/opt/desk-apps/chat-forms.app/dist/fragments/yes-no")).toBe(true);
+    expect(queried.some((hit) => hit.path === "/opt/roomy-apps/chat-forms.app/dist/fragments/yes-no")).toBe(true);
 
     // Even when the search is scoped to a specific workspace, global apps still show up.
     const inWorkspace = await findLibraryItems(pool, { pool, home }, userId, { kind: "app", workspaceId });
-    expect(inWorkspace.some((hit) => hit.path === "/opt/desk-apps/chat-forms.app")).toBe(true);
+    expect(inWorkspace.some((hit) => hit.path === "/opt/roomy-apps/chat-forms.app")).toBe(true);
   });
 });

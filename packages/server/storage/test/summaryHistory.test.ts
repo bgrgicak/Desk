@@ -21,7 +21,7 @@ const MSG_ID = "msg_summary_test_msg";
 let home: string;
 
 beforeAll(async () => {
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-summary-history-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-summary-history-"));
   await ensureLayout(home);
   await ensureWorkspaceLayout(home, SLUG);
 });

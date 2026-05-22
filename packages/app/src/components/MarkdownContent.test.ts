@@ -38,15 +38,15 @@ async function renderMarkdown(
 
 describe('parseEntityUrl', () => {
   it('ignores malformed encoded entity links', () => {
-    expect(parseEntityUrl('desk-entity:chat:%')).toBeNull()
+    expect(parseEntityUrl('roomy-entity:chat:%')).toBeNull()
   })
 
   it('renders malformed encoded entity links as inert text', async () => {
-    const markup = await renderMarkdown({ text: '[bad](desk-entity:chat:%)' })
+    const markup = await renderMarkdown({ text: '[bad](roomy-entity:chat:%)' })
 
     expect(markup).toContain('bad')
     expect(markup).not.toContain('<a')
-    expect(markup).not.toContain('desk-entity:chat:%')
+    expect(markup).not.toContain('roomy-entity:chat:%')
   })
 
   it('renders chat IDs as real links when the current workspace is known', async () => {

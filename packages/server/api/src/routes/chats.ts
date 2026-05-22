@@ -1,11 +1,11 @@
-import { type Pool } from "@agent-desk/db";
+import { type Pool } from "@roomy-ai/db";
 import { Readable } from "node:stream";
 import * as fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import * as path from "node:path";
 import { Cron } from "croner";
-import { queries } from "@agent-desk/db";
-import { generateId, ConflictError, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, MessageContentSchema, messageTextPreview, type AttachmentRef, type Chat, type Message, type MessageKind, type WsEvent } from "@agent-desk/shared";
+import { queries } from "@roomy-ai/db";
+import { generateId, ConflictError, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, MessageContentSchema, messageTextPreview, type AttachmentRef, type Chat, type Message, type MessageKind, type WsEvent } from "@roomy-ai/shared";
 import { z } from "zod";
 import {
   listSummaryHistory,
@@ -18,8 +18,8 @@ import {
   workspaceRootPath,
   type SummaryVersion,
   type StorageContext,
-} from "@agent-desk/storage";
-import { withModule } from "@agent-desk/shared/logger";
+} from "@roomy-ai/storage";
+import { withModule } from "@roomy-ai/shared/logger";
 import { workspaceSlugForChat } from "./chats-shared.js";
 
 const log = withModule("api/routes/chats");
@@ -175,9 +175,9 @@ export async function patchChat(
   // When only unread is being cleared, delegate to markRead which uses a
   // targeted UPDATE for the same atomicity guarantee.
   // Note: when agentId is in the patch, `updateMeta` also atomically
-  // nulls opencode_session_id — opencode-serve binds providerID/modelID
-  // to the session at creation, so reusing the old session after a
-  // model swap would silently keep the prior model.
+  // nulls pi_session_id — the pi session is bound to the prior agent's
+  // model at creation, so reusing it after a model swap would silently
+  // keep that model.
   if (hasMetaFields) {
     const updateData = unread !== undefined ? { ...metaFields, unread } : metaFields;
     const chat = await queries.chats.updateMeta(pool, id, updateData);
@@ -1052,7 +1052,7 @@ export async function getMessageLogs(
 /**
  * Soft-deletes a chat. Cancels scheduler refs for every pending/recurring
  * message, deletes the chat row (FK cascade drops all message rows), and
- * moves the chat's on-disk directories to `~/Desk/.trash/`. Emits a
+ * moves the chat's on-disk directories to `~/Roomy/.trash/`. Emits a
  * `chat.deleted` WS event with the deleted chat's ids so clients can drop
  * it from their sidebar. Returns the (now-removed) workspace id so the
  * caller can broadcast the event correctly.

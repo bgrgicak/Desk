@@ -19,7 +19,7 @@ When the user says any of:
 - "kick off a task"
 
 …or any close variant, you **must not** begin implementation in the
-current chat. Create a manual Desk task with `desk-agent task schedule`
+current chat. Create a manual Roomy task with `roomy-agent task schedule`
 using the body template below, then stop and tell the user the task was
 created and where to find it. Do not preview the work, do not summarise
 what you're about to do — the task body already contains all of that.
@@ -53,13 +53,13 @@ Stay in the chat and answer directly when the user asks for:
 - A small one-command check or lookup
 - A tiny edit clearly meant to be done inline (one line, one file)
 - A scheduling/reminder request — those become tasks via `--at` / `--cron`
-  on `desk-agent task schedule`, not via a separate manual task card
+  on `roomy-agent task schedule`, not via a separate manual task card
 - A reply to an in-progress conversation where the user is iterating
   with you turn-by-turn
 
 ### How to create the task
 
-Run `desk-agent task schedule --chat <thisChatId> --title "<short
+Run `roomy-agent task schedule --chat <thisChatId> --title "<short
 verb-led title>"` and pass the body below as the positional content
 argument. The server posts the anchor in this chat, spawns a thread,
 **and immediately starts running the task** in that thread (unless you
@@ -103,7 +103,7 @@ Verification:
 - <…>
 
 Completion handoff:
-When done, run `desk-agent task complete --chat <thisThreadChatId>
+When done, run `roomy-agent task complete --chat <thisThreadChatId>
 --message "<short outcome>"`. The message must include:
 - summary of outcome (one short paragraph)
 - files changed (paths only, no diffs)

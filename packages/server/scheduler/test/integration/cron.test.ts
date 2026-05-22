@@ -7,9 +7,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Cron } from "croner";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
-import { generateId } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture, queries } from "@roomy-ai/db";
+import { generateId } from "@roomy-ai/shared";
 import { createRunManager } from "../../src/runs.js";
 
 let pool: Pool;
@@ -18,14 +18,12 @@ let home: string;
 let dbPath: string;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-sched-cron-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-sched-cron-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "cron-user";
-  process.env.DESK_SEED_PASSWORD = "pw";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "cron-user", password: "pw" });
 
   const { rows: wsRows } = await pool.query("SELECT id FROM workspaces LIMIT 1");
   const workspaceId = wsRows[0].id as string;
@@ -43,8 +41,8 @@ beforeAll(async () => {
     [chatId, workspaceId, agentId, "Cron Test"],
   );
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-cron-"));
-  process.env.DESK_HOME = home;
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-cron-"));
+  process.env.ROOMY_HOME = home;
 });
 
 afterAll(async () => {

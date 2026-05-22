@@ -1,20 +1,20 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { queries, type Pool } from "@agent-desk/db";
+import { queries, type Pool } from "@roomy-ai/db";
 import {
   ConflictError,
   LOCAL_FILESYSTEM_MOUNT_MARKER,
   LOCAL_FILESYSTEM_PROVIDER_ID,
   type LocalFilesystemConnectionMetadata,
   type LocalFilesystemDirectoryConfig,
-} from "@agent-desk/shared";
+} from "@roomy-ai/shared";
 import type { SandboxHandle } from "./docker.js";
-import { chatAttachmentsDir, summaryStorageDir, workspaceRootPath } from "@agent-desk/storage";
+import { chatAttachmentsDir, summaryStorageDir, workspaceRootPath } from "@roomy-ai/storage";
 
 /**
  * Mount model (workspace-as-home):
  *
- *   host: ~/Desk/desk/              →   sandbox: /home/agent/   (rw)
+ *   host: ~/Roomy/roomy/              →   sandbox: /home/agent/   (rw)
  *
  * The workspace root *is* the agent's home directory inside the sandbox.
  * User-visible files live at the root; dot-prefixed entries (`.chats/`,
@@ -33,8 +33,8 @@ export const SANDBOX_HOME = "/home/agent";
 // The host's bundled skills are mounted read-only at SKILLS_SANDBOX_MOUNT_DIR
 // and symlinked here by the sandbox entrypoint.
 export const SKILLS_SANDBOX_DIR = `${SANDBOX_HOME}/.agents/skills`;
-export const SKILLS_SANDBOX_MOUNT_DIR = "/opt/desk-skills";
-export const APPS_SANDBOX_MOUNT_DIR = "/opt/desk-apps";
+export const SKILLS_SANDBOX_MOUNT_DIR = "/opt/roomy-skills";
+export const APPS_SANDBOX_MOUNT_DIR = "/opt/roomy-apps";
 
 /** Host-side global skills directory. Mounted read-only into each sandbox. */
 export function skillsHostDir(home: string): string {
@@ -43,10 +43,10 @@ export function skillsHostDir(home: string): string {
 
 /**
  * Host-side built-in apps directory. Populated on server start by
- * `writeBuiltinApps` from the bundled `@agent-desk/desk-apps` source.
+ * `writeBuiltinApps` from the bundled `@roomy-ai/apps` source.
  * Mounted read-only into every sandbox at `APPS_SANDBOX_MOUNT_DIR` so
- * agents can `desk-agent chat attach-artifact` a built-in fragment using
- * its in-sandbox path (e.g. `/opt/desk-apps/chat-forms.app/dist/fragments/yes_no`).
+ * agents can `roomy-agent chat attach-artifact` a built-in fragment using
+ * its in-sandbox path (e.g. `/opt/roomy-apps/chat-forms.app/dist/fragments/yes_no`).
  */
 export function appsHostDir(home: string): string {
   return path.join(home, ".apps");
@@ -66,7 +66,7 @@ export interface MountSet {
 /**
  * Records the current-run → current-chat mapping and ensures the workspace
  * root exists (so the bind-mount has something to show). Returns the
- * MountSet the driver can pass to OpenCode via the system prompt / chat
+ * MountSet the driver can pass to pi via the system prompt / chat
  * context.
  */
 export async function projectMounts(
@@ -88,7 +88,7 @@ export async function projectMounts(
     mountSet.attachmentsInSandbox = `${SANDBOX_HOME}/.chats/${opts.chatId}/attachments`;
     // Pre-create notes/ so the agent stops reporting "no summaries dir" before
     // the first materializeSummary() call. The system prompt advertises this
-    // path in opencode.ts; matching it on disk keeps the two consistent.
+    // path in execRun.ts; matching it on disk keeps the two consistent.
     await fs.mkdir(summaryStorageDir(opts.home, opts.workspaceSlug, opts.chatId), { recursive: true });
   }
 
@@ -132,7 +132,7 @@ export interface MountPlanEntry {
   /**
    * Classifier used by tooling and debugging manifests. "external" covers
    * user-attached directories (e.g. ~/Projects/foo) that live outside the
-   * Desk-managed tree.
+   * Roomy-managed tree.
    */
   category: "workspace" | "external";
   /** When false, createOrReuse must not create a missing source path. */
@@ -145,8 +145,8 @@ export type MountPlan = MountPlanEntry[];
 
 /**
  * Default mount plan — one rw bind of the workspace root onto the
- * container's $HOME, plus global Desk skills mounted read-only outside
- * $HOME and symlinked into OpenCode's skills path by the entrypoint. Custom
+ * container's $HOME, plus global Roomy skills mounted read-only outside
+ * $HOME and symlinked into pi's skills path by the entrypoint. Custom
  * plans can be built by callers that need to expose additional directories
  * (e.g. ~/Projects) alongside.
  *
@@ -235,7 +235,7 @@ async function targetIsAvailableMountPoint(targetPath: string, _mountId: string)
     const stat = await fs.lstat(targetPath);
     if (!stat.isDirectory()) return false;
     const marker = await readMountMarker(targetPath);
-    // Any Desk local-filesystem marker means this directory is only a host-side
+    // Any Roomy local-filesystem marker means this directory is only a host-side
     // placeholder for a nested bind mount. The directory id can change when the
     // connection is edited, so do not treat a stale marker id as user content.
     // Duplicate selected mount names are rejected before this check.

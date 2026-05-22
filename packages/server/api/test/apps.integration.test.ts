@@ -1,7 +1,7 @@
 /**
  * PR-C: static-app route + per-app capability bridge.
  *
- * Real desk-server, real SQLite, real fs. Materializes a `<name>.app/`
+ * Real roomy-server, real SQLite, real fs. Materializes a `<name>.app/`
  * artifact for a chat with a built `dist/index.html`, then exercises the
  * full path:
  *   1. `POST /apps/chat/:chatId/:appName/issue` returns a per-app token
@@ -19,14 +19,14 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { Pool, runMigrations, insertSeedFixture } from "@roomy-ai/db";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 import {
   chatArtifactsDir,
   ensureLayout,
   ensureWorkspaceLayout,
-} from "@agent-desk/storage";
+} from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -46,18 +46,16 @@ const APP_NAME = "todo-tracker";
 const OTHER_APP = "notes-app";
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-apps-int-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-apps-int-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "apps-int-user";
-  process.env.DESK_SEED_PASSWORD = "pw";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "apps-int-user", password: "pw" });
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-apps-int-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-apps-int-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const { rows: wsRows } = await pool.query<{ id: string; path: string }>(
     "SELECT id, path FROM workspaces LIMIT 1",
@@ -86,7 +84,7 @@ beforeAll(async () => {
   );
   await fs.mkdir(path.join(appRoot, "dist", "assets"), { recursive: true });
   await fs.writeFile(
-    path.join(appRoot, "desk.app.json"),
+    path.join(appRoot, "roomy.app.json"),
     JSON.stringify({
       name: APP_NAME,
       description: "Test app",
@@ -112,7 +110,7 @@ beforeAll(async () => {
   );
   await fs.mkdir(path.join(otherAppRoot, "dist"), { recursive: true });
   await fs.writeFile(
-    path.join(otherAppRoot, "desk.app.json"),
+    path.join(otherAppRoot, "roomy.app.json"),
     JSON.stringify({ name: OTHER_APP, capabilities: [] }),
     "utf8",
   );
@@ -134,7 +132,7 @@ beforeAll(async () => {
   port = (server.address() as net.AddressInfo).port;
 
   const login = await httpRaw("POST", "/auth/login", {
-    body: { username: "apps-int-user", password: "pw" },
+    body: { email: "apps-int-user@roomy.local", password: "pw" },
   });
   authToken = (login.bodyJson as { token: string }).token;
 });
@@ -157,7 +155,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 interface RawResponse {
@@ -241,7 +239,7 @@ describe("static-app route + capability bridge", () => {
       expiresAt: string;
     };
     expect(issued.token.startsWith("app_")).toBe(true);
-    expect(issued.cookieName).toBe(`desk_app_${chatId}_${APP_NAME}`);
+    expect(issued.cookieName).toBe(`roomy_app_${chatId}_${APP_NAME}`);
     expect(issued.bridgeKey).toMatch(/^[a-f0-9]{64}$/);
     expect(issued.capabilities).toEqual([
       "library.read",
@@ -272,8 +270,8 @@ describe("static-app route + capability bridge", () => {
 
     // Bootstrap response body is the injected index.html.
     expect(bootstrap.headers["content-type"]).toContain("text/html");
-    expect(bootstrap.body).toContain("window.desk");
-    expect(bootstrap.body).toContain("desk.app.request");
+    expect(bootstrap.body).toContain("window.roomy");
+    expect(bootstrap.body).toContain("roomy.app.request");
     expect(bootstrap.body).toContain("storage.list");
     expect(bootstrap.body).toContain(`"bridgeKey":"${issued.bridgeKey}"`);
     expect(bootstrap.body).toContain(`"chatId":"${chatId}"`);
@@ -347,7 +345,7 @@ describe("static-app route + capability bridge", () => {
 
     const traversal = await httpRaw(
       "GET",
-      `/apps/chat/${chatId}/${APP_NAME}/dist/..%2Fdesk.app.json`,
+      `/apps/chat/${chatId}/${APP_NAME}/dist/..%2Froomy.app.json`,
       { headers: { Cookie: cookie } },
     );
     expect([401, 404]).toContain(traversal.status);
@@ -394,7 +392,7 @@ describe("static-app route + capability bridge", () => {
     );
     await fs.mkdir(path.join(xssAppRoot, "dist"), { recursive: true });
     await fs.writeFile(
-      path.join(xssAppRoot, "desk.app.json"),
+      path.join(xssAppRoot, "roomy.app.json"),
       JSON.stringify({
         name: xssApp,
         capabilities: [
@@ -448,11 +446,11 @@ describe("static-app route + capability bridge", () => {
     clearAppIssueRateLimit();
   });
 
-  it("sets `Secure` on the cookie when DESK_SECURE_COOKIES=1", async () => {
+  it("sets `Secure` on the cookie when ROOMY_SECURE_COOKIES=1", async () => {
     // The flag is read per-request (via process.env), so we can flip it
     // mid-suite — restore on cleanup so we don't leak state.
-    const prev = process.env.DESK_SECURE_COOKIES;
-    process.env.DESK_SECURE_COOKIES = "1";
+    const prev = process.env.ROOMY_SECURE_COOKIES;
+    process.env.ROOMY_SECURE_COOKIES = "1";
     try {
       const issue = await httpRaw(
         "POST",
@@ -465,7 +463,7 @@ describe("static-app route + capability bridge", () => {
       expect(setCookie).toContain(issued.cookieName);
       expect(setCookie).toContain("Secure");
       // Sanity: Secure-off mode shouldn't have it. Re-toggle and re-issue.
-      process.env.DESK_SECURE_COOKIES = "0";
+      process.env.ROOMY_SECURE_COOKIES = "0";
       const issue2 = await httpRaw(
         "POST",
         `/apps/chat/${chatId}/${APP_NAME}/issue`,
@@ -477,8 +475,8 @@ describe("static-app route + capability bridge", () => {
       expect(setCookie2).toContain(issued2.cookieName);
       expect(setCookie2).not.toContain("Secure");
     } finally {
-      if (prev === undefined) delete process.env.DESK_SECURE_COOKIES;
-      else process.env.DESK_SECURE_COOKIES = prev;
+      if (prev === undefined) delete process.env.ROOMY_SECURE_COOKIES;
+      else process.env.ROOMY_SECURE_COOKIES = prev;
     }
   });
 

@@ -11,11 +11,12 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuTrigger,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import type { ContextItem } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 import { iconForItem } from '@/data/file-kind'
 import { FileActionMenuItems } from '@/components/library/FileActionMenuItems'
+import type { HomePinRef } from '@/hooks/use-home-pins'
 
 export const DRAG_TYPE_LIBRARY_ITEM = 'application/x-library-item'
 export const DRAG_TYPE_PINNED_ITEM  = 'application/x-pinned-item'
@@ -48,11 +49,13 @@ interface LibraryCardProps {
   isPinned?: boolean
   onPin?: () => void
   onUnpin?: () => void
+  /** When provided, the kebab shows a "Show in Home" (Favorites) toggle. */
+  homePin?: HomePinRef
   isDraggable?: boolean
 }
 
 /**
- * Unified card used for both Library and Desk surfaces. Folders are not
+ * Unified card used for both Library and Roomy surfaces. Folders are not
  * rendered here — callers handle folder rows separately because their
  * navigation semantics differ from leaf items.
  */
@@ -74,6 +77,7 @@ export const LibraryCard = memo(function LibraryCard({
   isPinned,
   onPin,
   onUnpin,
+  homePin,
   isDraggable,
 }: LibraryCardProps) {
   const Icon = iconForItem(item)
@@ -118,6 +122,7 @@ export const LibraryCard = memo(function LibraryCard({
           onDownload={onDownload}
           onRename={onRename}
           onMove={onMove}
+          homePin={homePin}
           onDelete={onDelete}
         />
       </DropdownMenuContent>

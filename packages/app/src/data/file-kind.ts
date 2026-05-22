@@ -16,7 +16,7 @@ import type { ContextItem } from './ui-types'
 
 export type FileKind = 'image' | 'video' | 'audio' | 'pdf' | 'html' | 'docx' | 'text' | 'app' | 'unknown'
 
-/** True when `name` is a Desk app directory (ends with `.app`). */
+/** True when `name` is a Roomy app directory (ends with `.app`). */
 export function isAppDirectory(name: string): boolean {
   return name.endsWith('.app') && name !== '.app'
 }
@@ -101,6 +101,27 @@ export function fileKindForItem(item: ContextItem): FileKind {
   if (item.type === 'note' || item.type === 'link') return 'text'
   if (isAppDirectory(item.name)) return 'app'
   return fileKindFrom(item.name, item.mimeType)
+}
+
+const FILE_KIND_LABELS: Record<FileKind, string> = {
+  app: 'App',
+  image: 'Image',
+  video: 'Video',
+  audio: 'Audio',
+  pdf: 'PDF',
+  html: 'Web page',
+  docx: 'Document',
+  text: 'Text',
+  unknown: 'Unknown file type',
+}
+
+/** Human-readable label for a file kind — used as an item card's
+ *  description (e.g. "App", "Image", "Video") in place of the raw path.
+ *  App directories aren't detectable from name/mime alone, so callers
+ *  that have a richer signal (an app path) should pass `isApp`. */
+export function fileTypeLabel(name: string, mimeType?: string | null, isApp = false): string {
+  const kind: FileKind = isApp || isAppDirectory(name) ? 'app' : fileKindFrom(name, mimeType)
+  return FILE_KIND_LABELS[kind]
 }
 
 export function iconForFile(name: string, mimeType?: string | null): LucideIcon {

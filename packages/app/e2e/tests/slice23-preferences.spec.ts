@@ -11,8 +11,8 @@ import { test, expect } from "../fixtures";
 test("preferences toggle persists across reload", async ({ loggedInPage }) => {
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
 
-  // Open Customize → Preferences.
-  await loggedInPage.getByRole("button", { name: /Customize/ }).click();
+  // Open Settings → Preferences.
+  await loggedInPage.getByRole("button", { name: /Settings/ }).click();
   let dialog = loggedInPage.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Preferences$/ }).click();
 
@@ -22,21 +22,23 @@ test("preferences toggle persists across reload", async ({ loggedInPage }) => {
   // Pick a non-default view ("tasks") to verify persistence.
   await dialog.getByTestId("prefs-default-view-tasks").click();
 
-  // Reload, re-open Customize → Preferences. The value must stick.
+  // Reload and verify the value persisted. The Settings modal lives in
+  // the URL query string now (`?settings=preferences`), so after reload
+  // the dialog re-opens on Preferences automatically — no need to click
+  // Settings again. Just wait for the dialog to render.
   await loggedInPage.reload();
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
-  await loggedInPage.getByRole("button", { name: /Customize/ }).click();
   dialog = loggedInPage.getByRole("dialog");
-  await dialog.getByRole("button", { name: /^Preferences$/ }).click();
+  await expect(dialog).toBeVisible();
 
   // The selected view button has the active styling — assert via its
   // class containing the active-state classes.
   const tasksButton = dialog.getByTestId("prefs-default-view-tasks");
   await expect(tasksButton).toHaveClass(/bg-foreground/);
 
-  // The persisted blob lives at desk.prefs.<userId>; assert the shape.
+  // The persisted blob lives at roomy.prefs.<userId>; assert the shape.
   const stored = await loggedInPage.evaluate(() => {
-    const keys = Object.keys(localStorage).filter(k => k.startsWith("desk.prefs."));
+    const keys = Object.keys(localStorage).filter(k => k.startsWith("roomy.prefs."));
     if (keys.length !== 1) return null;
     return localStorage.getItem(keys[0]);
   });

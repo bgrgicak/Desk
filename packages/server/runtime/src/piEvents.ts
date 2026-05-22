@@ -1,6 +1,6 @@
 /**
  * Translates pi's `--mode json` event stream into the run-format JSON
- * events Desk's scheduler + UI already know how to consume.
+ * events Roomy's scheduler + UI already know how to consume.
  *
  * The downstream consumers (scheduler/runs-helpers.ts, app's
  * MessageBubble/messageVisibility) read a small set of `type` values
@@ -61,7 +61,7 @@ export interface TranslateContext {
   /**
    * Annotation surfaced on every event when set: `{providerID, modelID}`
    * — used by the chat log so "what model produced this step?" is
-   * answerable from the log alone, mirroring the old opencode behavior.
+   * answerable from the log alone, mirroring the legacy runtime behavior.
    */
   model?: { providerID: string; modelID: string; agent?: string };
 }

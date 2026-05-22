@@ -1,9 +1,9 @@
 {
-  "name": "@agent-desk/app-scaffold",
+  "name": "@roomy-ai/app-scaffold",
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "Template for an agent-authored Desk app. Cloned by `desk-agent app create` into a chat artifact directory.",
+  "description": "Template for an agent-authored Roomy app. Cloned by `roomy-agent app create` into a chat artifact directory.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -13,7 +13,7 @@
     "verify": "node scripts/verify.mjs"
   },
   "dependencies": {
-    "@agent-desk/ui": ">=0.1.0-0",
+    "@roomy-ai/ui": ">=0.1.0-0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.14.1"

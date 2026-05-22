@@ -1,8 +1,8 @@
-# Desk App — Agent Handoff
+# Roomy App — Agent Handoff
 
 ## What This Is
 
-A high-fidelity React prototype for **Desk**, an AI productivity app. It's a design prototype only — no backend, all data mocked. The focus is on interaction design, visual polish, and exploring UX patterns for an AI-native workspace.
+A high-fidelity React prototype for **Roomy**, an AI productivity app. It's a design prototype only — no backend, all data mocked. The focus is on interaction design, visual polish, and exploring UX patterns for an AI-native workspace.
 
 ## Running the App
 
@@ -49,8 +49,8 @@ app/src/
     │   ├── ArtifactDetail.tsx       # Full artifact view + conversation panel
     │   ├── ArtifactPreview.tsx      # Renders artifact content by type
     │   └── ConversationPanel.tsx    # Side/bottom conversation panel
-    ├── desk/
-    │   ├── DeskGrid.tsx             # Artifact card grid with filters
+    ├── pinned/
+    │   ├── RoomyGrid.tsx             # Artifact card grid with filters
     │   ├── ArtifactCard.tsx         # Individual artifact card
     │   └── ArtifactThumbnail.tsx    # Type-aware thumbnail renderer
     ├── today/
@@ -76,7 +76,7 @@ app/src/
 Navigation is entirely state-driven in `App.tsx` — no router library.
 
 ```
-activeView: 'desk' | 'runs' | 'context'    ← main nav
+activeView: 'pinned' | 'runs' | 'context'    ← main nav
 selectedChatId: string | null               ← opens chat shell over main view
 selectedArtifact: Artifact | null           ← opens artifact detail
 todaySheetOpen: boolean                     ← slides in Inbox sheet from left
@@ -92,7 +92,7 @@ Workspace switching lives in `WorkspaceBar`. The three workspaces (General, Work
 
 ### Visual Hierarchy
 - **Workspace bar** (`h-[51px]`) — topmost, spans full width
-- **Sidebar** — workspace identity + nav (Desk / Runs / Library) + chat list
+- **Sidebar** — workspace identity + nav (Roomy / Runs / Library) + chat list
 - **Main area** — content changes based on `activeView`
 - The whole app sits in a rounded card with `bg-muted` outer background and `bg-background` inner
 
@@ -187,14 +187,14 @@ Lucide React exclusively. Import directly: `import { Inbox, Bot, Zap } from 'luc
 
 Key icon mappings used in this project:
 - Artifact types: `FileText` (doc), `Zap` (app/run), `ImageIcon` (image), `Table` (spreadsheet), `Globe` (site)
-- Navigation: `LayoutGrid` (Desk), `Zap` (Runs), `FolderOpen` (Library), `Inbox` (Inbox)
+- Navigation: `LayoutGrid` (Roomy), `Zap` (Runs), `FolderOpen` (Library), `Inbox` (Inbox)
 - Actions: `MoreHorizontal` (kebab), `CheckCircle2` (complete), `Sparkles` (not relevant), `Clock` (later)
 
 ## What's Been Built
 
 All primary views are implemented:
 
-- ✅ **Desk** — artifact grid with filter chips, artifact detail with conversation panel
+- ✅ **Roomy** — artifact grid with filter chips, artifact detail with conversation panel
 - ✅ **Inbox** — sorted/grouped list, detail panel with chat + quick replies + UI cards
 - ✅ **Runs** — active/scheduled/past runs, run detail panel
 - ✅ **Library (Context)** — context item list + detail

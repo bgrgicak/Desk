@@ -5,7 +5,7 @@
  * the sandbox reaches out to host-mediated tools via UDS). `execInSandbox` is
  * the inverse: the host control plane invoking a command inside a warm sandbox
  * and capturing its output. It underpins control-plane features such as model
- * discovery (`opencode models`) and is the seam through which future
+ * discovery (`pi --list-models`) and is the seam through which future
  * sandbox-scoped read operations will flow.
  */
 

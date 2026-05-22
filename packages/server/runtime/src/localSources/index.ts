@@ -1,7 +1,7 @@
 /**
  * Local source registry. Each entry is a model provider running on the
  * user's host (Codex CLI auth, future LM Studio / Ollama servers, …) that
- * Desk can detect and bridge into the sandbox via env vars.
+ * Roomy can detect and bridge into the sandbox via env vars.
  *
  * To register a new local source: add its `LocalSource` implementation
  * under `./<name>.ts`, then add it to `LOCAL_SOURCES` keyed by `kind`.
@@ -9,7 +9,7 @@
  * kind — `listLocalSources()` and `loadLocalSourceEnv()` iterate the
  * registry.
  */
-import { type Pool, queries } from "@agent-desk/db";
+import { type Pool, queries } from "@roomy-ai/db";
 import { codexLocalSource } from "./codex.js";
 import type { LocalSource, LocalSourceKind, LocalSourceStatus } from "./types.js";
 
@@ -23,21 +23,19 @@ export const LOCAL_SOURCE_KINDS: readonly LocalSourceKind[] = Object.keys(LOCAL_
 /**
  * Names of env vars that local sources inject into the sandbox.
  *
- * Daemon env builders prepend these as empty strings (alongside the
- * cloud `CONNECTION_ENV_VARS`) so a `docker exec -e KEY=` launching
- * `opencode serve` overrides anything the container inherited at
- * create time. Without this, a local source the user disabled in
- * Settings stays visible to the warm daemon through the container's
- * birth env — e.g. Codex's `OPENCODE_AUTH_CONTENT` blob keeps flowing
- * into the daemon even after the user toggles Codex off, and the
- * daemon keeps using the stale OAuth path.
+ * Per-run env builders prepend these as empty strings (alongside the
+ * cloud `CONNECTION_ENV_VARS`) so a `docker exec -e KEY=` launching pi
+ * overrides anything the container inherited at create time. Without
+ * this, a local source the user disabled in Settings stays visible to
+ * pi through the container's birth env — e.g. Codex's pi auth blob
+ * keeps flowing into pi even after the user toggles Codex off, and pi
+ * keeps using the stale OAuth path.
  *
  * Hand-maintained for the prototype: each entry must match the keys a
  * `LocalSource.loadEnv()` implementation can emit. When you add a new
  * local source, append its env vars here too.
  */
 export const LOCAL_SOURCE_ENV_NAMES: readonly string[] = [
-  "OPENCODE_AUTH_CONTENT",
   // Pi reads this in piClient.ts to seed each per-invocation auth.json
   // from the host's OAuth credentials (e.g. ~/.codex/auth.json). Empty
   // means "no codex/oauth-based provider — pi falls back to env-vars
@@ -79,6 +77,26 @@ export async function resolveLocalSourceEnv(
   const out: Record<string, string> = {};
   for (const kind of LOCAL_SOURCE_KINDS) {
     if (meta[kind]?.enabled !== true) continue;
+    const env = loadLocalSourceEnv(kind);
+    if (!env) continue;
+    Object.assign(out, env);
+  }
+  return out;
+}
+
+/**
+ * Env-var map for every local source detected on this host, regardless of
+ * user opt-in. Use only for read-only listing surfaces (e.g. the model
+ * picker): we want users to see Codex models in the dropdown the moment
+ * their host has a valid sign-in, without having to first commit to
+ * "enabled" — that opt-in is the runtime concern and is set when the
+ * agent is actually saved/run.
+ */
+export function resolveAvailableLocalSourceEnv(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const kind of LOCAL_SOURCE_KINDS) {
+    const status = LOCAL_SOURCES[kind].detect();
+    if (!status.available) continue;
     const env = loadLocalSourceEnv(kind);
     if (!env) continue;
     Object.assign(out, env);

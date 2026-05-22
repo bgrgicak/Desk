@@ -2,22 +2,22 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export interface DeskSkillSpec {
+export interface RoomySkillSpec {
   name: string;
   description: string;
   metadata?: Record<string, string>;
   body: () => string;
 }
 
-export const DESK_CLI_SKILL_NAME = "desk-cli";
-export const DESK_TASK_SCHEDULE_SKILL_NAME = "desk-cli-task-schedule";
-export const DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME = "desk-cli-chat-attach-artifact";
-export const DESK_CHAT_SEARCH_MESSAGES_SKILL_NAME = "desk-cli-chat-search-messages";
-export const DESK_FIND_LIBRARY_SKILL_NAME = "desk-cli-find-library";
-export const DESK_FILE_TO_MARKDOWN_SKILL_NAME = "desk-cli-file-to-markdown";
-export const DESK_APP_SCAFFOLD_SKILL_NAME = "desk-app-scaffold";
-export const DESK_APP_STORAGE_SKILL_NAME = "desk-app-storage";
-export const DESK_PERSISTENCE_SKILL_NAME = "desk-persistence";
+export const ROOMY_CLI_SKILL_NAME = "roomy-cli";
+export const ROOMY_TASK_SCHEDULE_SKILL_NAME = "roomy-cli-task-schedule";
+export const ROOMY_CHAT_ATTACH_ARTIFACT_SKILL_NAME = "roomy-cli-chat-attach-artifact";
+export const ROOMY_CHAT_SEARCH_MESSAGES_SKILL_NAME = "roomy-cli-chat-search-messages";
+export const ROOMY_FIND_LIBRARY_SKILL_NAME = "roomy-cli-find-library";
+export const ROOMY_FILE_TO_MARKDOWN_SKILL_NAME = "roomy-cli-file-to-markdown";
+export const ROOMY_APP_SCAFFOLD_SKILL_NAME = "roomy-app-scaffold";
+export const ROOMY_APP_STORAGE_SKILL_NAME = "roomy-app-storage";
+export const ROOMY_PERSISTENCE_SKILL_NAME = "roomy-persistence";
 const CLI_SKILL_FILE = {
   built: "sandbox-cli-skill.md",
   source: "../../sandbox-cli/skill.md",
@@ -54,7 +54,7 @@ function readCliManual(): string {
 function extractSection(markdown: string, heading: string): string {
   const start = markdown.indexOf(heading);
   if (start === -1) {
-    throw new Error(`Missing heading "${heading}" in Desk CLI skill source`);
+    throw new Error(`Missing heading "${heading}" in Roomy CLI skill source`);
   }
   const next = markdown.indexOf("\n## ", start + heading.length);
   return markdown.slice(start, next === -1 ? undefined : next).trim();
@@ -62,41 +62,41 @@ function extractSection(markdown: string, heading: string): string {
 
 function taskScheduleReference(): string {
   return [
-    "# Desk task scheduling reference",
+    "# Roomy task scheduling reference",
     "",
-    extractSection(readCliManual(), "## desk-agent task schedule"),
+    extractSection(readCliManual(), "## roomy-agent task schedule"),
   ].join("\n");
 }
 
 function chatAttachArtifactReference(): string {
   return [
-    "# Desk chat artifact attachment reference",
+    "# Roomy chat artifact attachment reference",
     "",
-    extractSection(readCliManual(), "## desk-agent chat attach-artifact"),
+    extractSection(readCliManual(), "## roomy-agent chat attach-artifact"),
   ].join("\n");
 }
 
 function chatSearchMessagesReference(): string {
   return [
-    "# Desk chat-message search reference",
+    "# Roomy chat-message search reference",
     "",
-    extractSection(readCliManual(), "## desk-agent chat search-messages"),
+    extractSection(readCliManual(), "## roomy-agent chat search-messages"),
   ].join("\n");
 }
 
 function findLibraryReference(): string {
   return [
-    "# Desk library discovery reference",
+    "# Roomy library discovery reference",
     "",
-    extractSection(readCliManual(), "## desk-agent find library"),
+    extractSection(readCliManual(), "## roomy-agent find library"),
   ].join("\n");
 }
 
 function fileToMarkdownReference(): string {
   return [
-    "# Desk document conversion reference",
+    "# Roomy document conversion reference",
     "",
-    extractSection(readCliManual(), "## desk-agent file to-markdown"),
+    extractSection(readCliManual(), "## roomy-agent file to-markdown"),
   ].join("\n");
 }
 
@@ -112,59 +112,59 @@ function readPersistenceGuide(): string {
   return readSkill(PERSISTENCE_SKILL_FILE);
 }
 
-export const DESK_REFERENCE_SKILLS: ReadonlyArray<DeskSkillSpec> = [
+export const ROOMY_REFERENCE_SKILLS: ReadonlyArray<RoomySkillSpec> = [
   {
-    name: DESK_CLI_SKILL_NAME,
+    name: ROOMY_CLI_SKILL_NAME,
     description:
-      "Use when the agent needs the full Desk CLI command manual, including command selection, environment, output, syntax, examples, and failure modes.",
+      "Use when the agent needs the full Roomy CLI command manual, including command selection, environment, output, syntax, examples, and failure modes.",
     body: readCliManual,
   },
   {
-    name: DESK_TASK_SCHEDULE_SKILL_NAME,
+    name: ROOMY_TASK_SCHEDULE_SKILL_NAME,
     description:
-      "Use when the agent needs syntax, examples, cron reference, or failure modes for scheduling Desk tasks.",
+      "Use when the agent needs syntax, examples, cron reference, or failure modes for scheduling Roomy tasks.",
     body: taskScheduleReference,
   },
   {
-    name: DESK_CHAT_ATTACH_ARTIFACT_SKILL_NAME,
+    name: ROOMY_CHAT_ATTACH_ARTIFACT_SKILL_NAME,
     description:
-      "Use when the agent needs syntax or examples for surfacing generated artifacts in Desk chat.",
+      "Use when the agent needs syntax or examples for surfacing generated artifacts in Roomy chat.",
     body: chatAttachArtifactReference,
   },
   {
-    name: DESK_CHAT_SEARCH_MESSAGES_SKILL_NAME,
+    name: ROOMY_CHAT_SEARCH_MESSAGES_SKILL_NAME,
     description:
       "Use when the agent needs to recall something the user mentioned in another chat, earlier in this chat (before the latest summary), or across the workspace's history. Full-text search over messages and chat summaries.",
     body: chatSearchMessagesReference,
   },
   {
-    name: DESK_FIND_LIBRARY_SKILL_NAME,
+    name: ROOMY_FIND_LIBRARY_SKILL_NAME,
     description:
       "Use before answering whether a reusable library item exists, or before building a new app, fragment, note, or doc, to discover existing library items and their params_schema.",
     body: findLibraryReference,
   },
   {
-    name: DESK_FILE_TO_MARKDOWN_SKILL_NAME,
+    name: ROOMY_FILE_TO_MARKDOWN_SKILL_NAME,
     description:
       "Use when the agent needs syntax, supported formats, or examples for converting documents to Markdown/text.",
     body: fileToMarkdownReference,
   },
   {
-    name: DESK_APP_SCAFFOLD_SKILL_NAME,
+    name: ROOMY_APP_SCAFFOLD_SKILL_NAME,
     description:
-      "Use when authoring or modifying a Desk app: scaffold layout, fragments, build workflow, capability rules, and the static-only constraint.",
+      "Use when authoring or modifying a Roomy app: scaffold layout, fragments, build workflow, capability rules, and the static-only constraint.",
     body: readAppScaffoldGuide,
   },
   {
-    name: DESK_APP_STORAGE_SKILL_NAME,
+    name: ROOMY_APP_STORAGE_SKILL_NAME,
     description:
-      "Use when inspecting, importing, exporting, migrating, repairing, or doing CRUD against an existing Desk app's stored records.",
+      "Use when inspecting, importing, exporting, migrating, repairing, or doing CRUD against an existing Roomy app's stored records.",
     body: readAppStorageGuide,
   },
   {
-    name: DESK_PERSISTENCE_SKILL_NAME,
+    name: ROOMY_PERSISTENCE_SKILL_NAME,
     description:
-      "Use when making sandbox installs or configuration persist across restarts with ~/.deskrc.",
+      "Use when making sandbox installs or configuration persist across restarts with ~/.roomyrc.",
     body: readPersistenceGuide,
   },
 ];

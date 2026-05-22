@@ -63,7 +63,7 @@ import {
   RadioGroupItem,
   Skeleton,
   useIsMobile,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { TopBarActions, TopBarContentActions } from '@/components/layout/TopBar'
 import { useContentAreaInsets } from '@/components/shared/splitPane'
 import type { ContextItem, Folder } from '@/data/ui-types'
@@ -142,8 +142,8 @@ export function ContextList({ onItemClick, onCompose, onPinItem, onUnpinItem, on
   const isMobile = useIsMobile()
 
   const [searchQuery, setSearchQuery] = useState('')
-  const [typeFilter, setTypeFilter] = usePersistedState<TypeFilter>('desk.context.typeFilter', 'all')
-  const [viewMode, setViewMode] = usePersistedState<ViewMode>('desk.context.viewMode', 'list')
+  const [typeFilter, setTypeFilter] = usePersistedState<TypeFilter>('roomy.context.typeFilter', 'all')
+  const [viewMode, setViewMode] = usePersistedState<ViewMode>('roomy.context.viewMode', 'list')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   const { developerMode, loaded: prefsLoaded } = usePrefs()
@@ -510,7 +510,7 @@ export function ContextList({ onItemClick, onCompose, onPinItem, onUnpinItem, on
 
   // Apply filters. Hidden mode shows the server's showHidden=true superset —
   // all normal entries plus dot-prefixed/gitignored entries — regardless of
-  // mime kind, so users can also navigate into hidden subtrees like `.opencode/`.
+  // mime kind, so users can also navigate into hidden subtrees like `.pi/`.
   const showFolders =
     typeFilter === 'all' || typeFilter === 'folder' || typeFilter === 'hidden'
   const filteredFolders = showFolders
@@ -1044,6 +1044,11 @@ export function ContextList({ onItemClick, onCompose, onPinItem, onUnpinItem, on
                   isPinned={item.pinned}
                   onPin={onPinItem ? () => onPinItem(item) : undefined}
                   onUnpin={onUnpinItem ? () => onUnpinItem(item) : undefined}
+                  homePin={
+                    activeWorkspaceId
+                      ? { kind: item.type === 'app' ? 'artifact' : 'file', id: item.id, workspaceId: activeWorkspaceId, label: item.name }
+                      : undefined
+                  }
                   isDraggable={!!onPinItem}
                 />
               ))}
@@ -1175,6 +1180,11 @@ export function ContextList({ onItemClick, onCompose, onPinItem, onUnpinItem, on
                 isPinned={item.pinned}
                 onPin={onPinItem ? () => onPinItem(item) : undefined}
                 onUnpin={onUnpinItem ? () => onUnpinItem(item) : undefined}
+                homePin={
+                  activeWorkspaceId
+                    ? { kind: item.type === 'app' ? 'artifact' : 'file', id: item.id, workspaceId: activeWorkspaceId, label: item.name }
+                    : undefined
+                }
                 isDraggable={!!onPinItem}
               />
             ))}

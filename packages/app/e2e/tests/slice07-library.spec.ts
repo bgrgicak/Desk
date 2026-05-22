@@ -13,7 +13,7 @@ async function uploadLibraryFile(
   name: string,
   body: string,
 ): Promise<void> {
-  const boundary = `----desk-e2e-${Math.random().toString(16).slice(2)}`;
+  const boundary = `----roomy-e2e-${Math.random().toString(16).slice(2)}`;
   const bodyBuf = Buffer.concat([
     Buffer.from(
       `--${boundary}\r\n` +

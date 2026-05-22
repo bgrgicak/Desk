@@ -12,10 +12,10 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, queries, runMigrations, hashPassword } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId, type Message } from "@agent-desk/shared";
+import { Pool, queries, runMigrations, hashPassword } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId, type Message } from "@roomy-ai/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -60,13 +60,13 @@ function request(
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-task-status-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-task-status-db-"));
   pool = new Pool({ path: path.join(dbDir, "test.sqlite3") });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-task-status-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-task-status-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const runManager = createRunManager({ pool, execRunFn: async () => ({ exitCode: 0 }) });
   server = createApp({ pool, storage: { pool, home }, runManager });
@@ -102,7 +102,7 @@ beforeAll(async () => {
   anchorChatId = generateId("chat");
   await queries.chats.insert(pool, { id: anchorChatId, workspaceId, agentId, title: "Anchor" });
 
-  const login = await request("POST", "/auth/login", { username: "ts_user", password: "ts-pw-XX" });
+  const login = await request("POST", "/auth/login", { email: "ts@example.com", password: "ts-pw-XX" });
   token = (login.body as { token: string }).token;
 });
 

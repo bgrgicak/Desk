@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { cn } from '@agent-desk/ui'
+import { cn } from '@roomy-ai/ui'
 
 // Full-viewport blob backdrop. Ellipses sit at the bottom edge of the SVG
 // viewBox so their bodies hang off the visible area; the heavily-blurred

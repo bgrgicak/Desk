@@ -1,7 +1,7 @@
-import type { Pool } from "@agent-desk/db";
-import type { StorageContext } from "@agent-desk/storage";
-import type { createRunManager } from "@agent-desk/scheduler";
-import type { WsEvent } from "@agent-desk/shared";
+import type { Pool } from "@roomy-ai/db";
+import type { StorageContext } from "@roomy-ai/storage";
+import type { createRunManager } from "@roomy-ai/scheduler";
+import type { WsEvent } from "@roomy-ai/shared";
 import type { VaultStore } from "../vault/store.js";
 
 /**
@@ -20,7 +20,14 @@ export interface DispatchContext {
   storage: StorageContext;
   vault: VaultStore;
   runManager: ReturnType<typeof createRunManager>;
-  emit: (event: WsEvent) => void;
+  /**
+   * Broadcast a WS event. Recipient is normally derived from the event
+   * payload (workspaceId/chatId/messageId → owning user). The optional
+   * `recipientUserId` is for events whose payload can't reveal the
+   * recipient — currently global `connection.changed` toggles, which
+   * carry no workspaceId.
+   */
+  emit: (event: WsEvent, recipientUserId?: string) => void;
   /** Hot-refresh callback for connector / local-source mutations. */
   refreshConnections: (
     userId: string,

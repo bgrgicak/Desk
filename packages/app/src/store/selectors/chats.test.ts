@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { GOAL_KEYS } from '@agent-desk/shared'
+import { GOAL_KEYS } from '@roomy-ai/shared'
 import { narrowChatGoal, toUiChat } from './chats'
 import type { ServerChat } from '../types'
 

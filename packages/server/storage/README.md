@@ -1,14 +1,14 @@
-# @agent-desk/storage
+# @roomy-ai/storage
 
-File storage layer for Desk. Abstracts local filesystem access used by agents and the API server.
+File storage layer for Roomy. Abstracts local filesystem access used by agents and the API server.
 
 ## Install
 
 ```sh
-npm install @agent-desk/storage@alpha
+npm install @roomy-ai/storage@alpha
 ```
 
-This package is an internal server component published so that `@agent-desk/cli` can depend on it.
+This package is an internal server component published so that `@roomy-ai/cli` can depend on it.
 
 ## License
 

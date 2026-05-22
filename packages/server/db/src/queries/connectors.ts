@@ -1,4 +1,4 @@
-import { generateId } from "@agent-desk/shared";
+import { generateId } from "@roomy-ai/shared";
 import { type Pool, transact } from "../pool.js";
 
 export type ConnectorStatus = "active" | "disabled" | "error" | "revoked";

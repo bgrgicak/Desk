@@ -153,7 +153,7 @@ describe("migrations", () => {
       );
       await freshPool.query(
         `INSERT INTO agents (id, user_id, name, model)
-         VALUES ('agt_test', 'usr_test', 'Agent', 'opencode/big-pickle')`,
+         VALUES ('agt_test', 'usr_test', 'Agent', 'anthropic/claude-haiku-4-5')`,
       );
       await freshPool.query(
         `INSERT INTO workspaces (id, user_id, name, path)

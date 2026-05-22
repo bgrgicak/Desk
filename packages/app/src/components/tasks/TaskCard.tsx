@@ -24,7 +24,7 @@ import {
   Dialog,
   DialogContent,
   DialogTitle,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import type { Task } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 import { initialsOf } from '@/lib/initials'
@@ -260,7 +260,7 @@ export const TaskCard = memo(function TaskCard({
           data-testid={`task-replies-${task.id}`}
         >
           <MessageSquare className="h-4 w-4" />
-          {repliesCount > 0 ? `${repliesCount} replies` : 'Replies'}
+          {repliesCount > 0 ? `Chat (${repliesCount})` : 'Chat'}
         </Button>
 
         {/* Mark as done split button */}

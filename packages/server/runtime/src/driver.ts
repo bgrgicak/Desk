@@ -11,7 +11,7 @@
  *
  * Event flow:
  *   1. `execRun` ensures the container is up and pre-creates per-run
- *      mounts (handled upstream by `opencode.ts`).
+ *      mounts (handled upstream by `execRun.ts`).
  *   2. Spawns pi via `docker exec`, with the chat session id, provider,
  *      model, and a single text prompt (prompt + attachment references).
  *   3. Pi emits JSON events line-by-line on stdout; the driver translates
@@ -26,11 +26,11 @@
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { SANDBOX_HOME, type MountPlan } from "./mounts.js";
-import { managedConnectionDefinitions } from "@agent-desk/shared";
+import { managedConnectionDefinitions } from "@roomy-ai/shared";
 import { connectionEnvNames } from "./docker.js";
 import { LOCAL_SOURCE_ENV_NAMES } from "./localSources/index.js";
 import { runPi, type PiHandle } from "./piClient.js";
-import { withModule } from "@agent-desk/shared/logger";
+import { withModule } from "@roomy-ai/shared/logger";
 const log = withModule("runtime/driver");
 
 export interface RunOptions {
@@ -47,18 +47,15 @@ export interface RunOptions {
   workspaceSlug: string;
   /** Chat this run belongs to. Used as pi's session id for cross-turn context. */
   chatId?: string;
-  /** DESK_HOME root. When omitted, runtime storage resolution is used. */
+  /** ROOMY_HOME root. When omitted, runtime storage resolution is used. */
   home?: string;
   mountPlan?: MountPlan;
   /**
    * Pi session id for the chat. Threaded in so the runtime stays
    * DB-agnostic; when undefined the driver derives one from `chatId`
    * (chat-scoped runs) or generates a UUID (ad-hoc runs).
-   *
-   * The field name is kept as `opencodeSessionId` for back-compat with
-   * the chat row column; semantics are now "the pi session id we passed".
    */
-  opencodeSessionId?: string | null;
+  piSessionId?: string | null;
   /**
    * Called once per stdout/stderr/event log line. May be sync or async —
    * the driver tracks any returned promise and awaits all of them before
@@ -87,10 +84,10 @@ export interface RunOptions {
   extraEnv?: Record<string, string>;
   /**
    * Per-run sandbox session token. Written to a fixed in-container path
-   * before each turn; the in-sandbox `desk-agent` CLI reads it from there.
+   * before each turn; the in-sandbox `roomy-agent` CLI reads it from there.
    */
   sandboxToken?: string;
-  /** URL the in-sandbox `desk-agent` CLI POSTs to. */
+  /** URL the in-sandbox `roomy-agent` CLI POSTs to. */
   apiUrl?: string;
 }
 
@@ -108,7 +105,7 @@ export interface ExecResult {
    * onto the chat row so subsequent turns reuse the same pi session.
    * Always populated unless the run failed before pi was invoked.
    */
-  opencodeSessionId?: string;
+  piSessionId?: string;
   /** Runtime model id that handled the successful attempt, or the last failed attempt. */
   model?: string;
 }
@@ -119,7 +116,7 @@ export interface SandboxDriver {
 }
 
 export function createDriver(): SandboxDriver {
-  if (process.env.DESK_SANDBOX_DRIVER === "fake") {
+  if (process.env.ROOMY_SANDBOX_DRIVER === "fake") {
     return createFakeDriver();
   }
   return createRealDriver();
@@ -134,7 +131,7 @@ function createFakeDriver(): SandboxDriver {
 
       const lines = [
         "Starting fake sandbox run...",
-        ...(process.env.DESK_FAKE_DRIVER_LOG_PROVIDER_KEYS === "1"
+        ...(process.env.ROOMY_FAKE_DRIVER_LOG_PROVIDER_KEYS === "1"
           ? [`Provider keys: ${Object.keys(opts.providerKeys ?? {}).sort().join(",") || "none"}`]
           : []),
         `Processing prompt: ${opts.prompt.slice(0, 50)}...`,
@@ -142,7 +139,7 @@ function createFakeDriver(): SandboxDriver {
         "Run complete.",
       ];
 
-      const stepDelayMs = parseInt(process.env.DESK_FAKE_DRIVER_STEP_DELAY_MS ?? "10", 10);
+      const stepDelayMs = parseInt(process.env.ROOMY_FAKE_DRIVER_STEP_DELAY_MS ?? "10", 10);
       let seq = 0;
       for (const line of lines) {
         if (cancelled.has(runId)) {
@@ -154,7 +151,7 @@ function createFakeDriver(): SandboxDriver {
 
       return {
         exitCode: 0,
-        opencodeSessionId: opts.opencodeSessionId ?? `fake_session_${runId}`,
+        piSessionId: opts.piSessionId ?? `fake_session_${runId}`,
         model: opts.model,
       };
     },
@@ -175,7 +172,7 @@ export function toSandboxPath(rel: string): string {
  * `{providerID, modelID}`. Falls back to no provider when the input has
  * no slash (pi infers from the model id in that case).
  *
- * `codex/<name>` is a Desk-only UI relabel for OpenAI models authed via
+ * `codex/<name>` is a Roomy-only UI relabel for OpenAI models authed via
  * the ChatGPT/Codex bridge. Pi exposes those under the `openai-codex`
  * provider id (separate from `openai`, which requires an API key), so
  * translate the UI's `codex/` prefix back to pi's `openai-codex` for runs.
@@ -213,7 +210,7 @@ export function piModelReference(model: string): string {
 /**
  * Builds the single prompt string pi receives for a turn. Folds attachment
  * references in as additional sentences so the agent knows what files to
- * read; pi has no separate "parts" concept like opencode did.
+ * read; pi has no separate "parts" concept, so everything goes inline.
  */
 export function buildPiPrompt(opts: { prompt: string; attachments?: string[] }): string {
   if (!opts.attachments || opts.attachments.length === 0) return opts.prompt;
@@ -292,8 +289,8 @@ function createRealDriver(): SandboxDriver {
         }
 
         // Write the per-run sandbox token to a per-run in-container path
-        // before invoking pi. The in-sandbox `desk-agent` CLI reads from
-        // this path when DESK_SANDBOX_TOKEN isn't set in its env.
+        // before invoking pi. The in-sandbox `roomy-agent` CLI reads from
+        // this path when ROOMY_SANDBOX_TOKEN isn't set in its env.
         //
         // A per-run path is required because the container is shared
         // across all runs in the same workspace. With a single fixed
@@ -314,7 +311,7 @@ function createRealDriver(): SandboxDriver {
 
       const handle = await acquireReadyHandle();
 
-      const sessionId = opts.opencodeSessionId ?? opts.chatId ?? randomUUID();
+      const sessionId = opts.piSessionId ?? opts.chatId ?? randomUUID();
 
       let seq = 0;
       const pendingLogs: Promise<unknown>[] = [];
@@ -370,7 +367,7 @@ function createRealDriver(): SandboxDriver {
           const handledModel = result.model ?? attemptModel;
           lastResult = {
             exitCode,
-            opencodeSessionId: sessionId,
+            piSessionId: sessionId,
             model: handledModel,
           };
 
@@ -389,7 +386,7 @@ function createRealDriver(): SandboxDriver {
         }
 
         await Promise.all(pendingLogs);
-        return lastResult ?? { exitCode: 1, opencodeSessionId: sessionId };
+        return lastResult ?? { exitCode: 1, piSessionId: sessionId };
       } finally {
         activeRuns.delete(opts.runId);
         if (opts.sandboxToken) {
@@ -422,22 +419,21 @@ function createRealDriver(): SandboxDriver {
  * Per-run path for the sandbox session token inside the container.
  *
  * The container is shared across all runs in the same workspace, so
- * using a single fixed path (e.g. `/tmp/desk-sandbox-token`) lets
+ * using a single fixed path (e.g. `/tmp/roomy-sandbox-token`) lets
  * concurrent runs stomp each other's token. When the run that won the
  * write finished and revoked its token, the still-running run's
- * desk-agent CLI calls would read the now-revoked token and the API
+ * roomy-agent CLI calls would read the now-revoked token and the API
  * would return UNAUTHORIZED. Keying the path on runId eliminates that
  * cross-run sharing.
  */
 export function sandboxTokenPath(runId: string): string {
-  return `/tmp/desk-sandbox-token-${runId}`;
+  return `/tmp/roomy-sandbox-token-${runId}`;
 }
 
 /**
  * Match the failures that mean "this attempt needs a fresh container,
- * not retry on the existing one". Same surface as the old opencode
- * recovery — the underlying container engine produces the same strings
- * regardless of which agent runtime we use.
+ * not retry on the existing one". The underlying container engine
+ * produces the same strings regardless of which agent runtime we use.
  */
 export function isContainerGoneError(message: string): boolean {
   return (
@@ -540,8 +536,8 @@ export function buildPiEnv(opts: {
     ...(opts.providerKeys ?? {}),
     ...(opts.extraEnv ?? {}),
     ...buildManagedConnectionAliases(opts.providerKeys),
-    ...(opts.runId ? { DESK_SANDBOX_TOKEN_PATH: sandboxTokenPath(opts.runId) } : {}),
-    ...(opts.apiUrl ? { DESK_API_URL: opts.apiUrl } : {}),
+    ...(opts.runId ? { ROOMY_SANDBOX_TOKEN_PATH: sandboxTokenPath(opts.runId) } : {}),
+    ...(opts.apiUrl ? { ROOMY_API_URL: opts.apiUrl } : {}),
   };
 }
 

@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
-import { queries } from "@agent-desk/db";
-import { ConflictError, LOCAL_FILESYSTEM_PROVIDER_ID, NotFoundError, ValidationError, type LocalFilesystemConnectionMetadata, type WsEvent } from "@agent-desk/shared";
+import { queries } from "@roomy-ai/db";
+import { ConflictError, LOCAL_FILESYSTEM_PROVIDER_ID, NotFoundError, ValidationError, type LocalFilesystemConnectionMetadata, type WsEvent } from "@roomy-ai/shared";
 import {
   listLibrary,
   listLibraryFolders,
@@ -20,7 +20,7 @@ import {
   type FileRef,
   type FolderRef,
   type VirtualLibraryMount,
-} from "@agent-desk/storage";
+} from "@roomy-ai/storage";
 
 /**
  * Resolves a workspace's on-disk slug. Used by every library route handler

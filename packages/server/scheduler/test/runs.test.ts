@@ -2,11 +2,11 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
-import { generateId, type WsEvent } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture, queries } from "@roomy-ai/db";
+import { generateId, type WsEvent } from "@roomy-ai/shared";
 import { createRunManager } from "../src/runs.js";
-import type { LogEvent } from "@agent-desk/runtime";
+import type { LogEvent } from "@roomy-ai/runtime";
 
 let pool: Pool;
 let agentId: string;
@@ -15,14 +15,12 @@ let workspaceId: string;
 let dbPath: string;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-scheduler-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-scheduler-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "testuser";
-  process.env.DESK_SEED_PASSWORD = "testpass";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "testpass" });
 
   const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");
   agentId = agentRows[0].id as string;
@@ -41,9 +39,9 @@ beforeAll(async () => {
     [chatId, workspaceId, agentId, "Test Chat"],
   );
 
-  // Log files land under $DESK_HOME/desk/.chats/{chatId}/logs/
-  const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "desk-scheduler-"));
-  process.env.DESK_HOME = tmpHome;
+  // Log files land under $ROOMY_HOME/roomy/.chats/{chatId}/logs/
+  const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-scheduler-"));
+  process.env.ROOMY_HOME = tmpHome;
 });
 
 afterAll(async () => {
@@ -129,10 +127,10 @@ async function listTaskRuns(taskId: string): Promise<Array<{ id: string; state: 
 
 describe("fireMessage", () => {
   it("honors the fake sandbox driver without creating a real sandbox", async () => {
-    const prevDriver = process.env.DESK_SANDBOX_DRIVER;
-    const prevImage = process.env.DESK_SANDBOX_IMAGE;
-    process.env.DESK_SANDBOX_DRIVER = "fake";
-    process.env.DESK_SANDBOX_IMAGE = "missing/desk-sandbox:e2e-fake";
+    const prevDriver = process.env.ROOMY_SANDBOX_DRIVER;
+    const prevImage = process.env.ROOMY_SANDBOX_IMAGE;
+    process.env.ROOMY_SANDBOX_DRIVER = "fake";
+    process.env.ROOMY_SANDBOX_IMAGE = "missing/roomy-sandbox:e2e-fake";
 
     try {
       const messageId = await insertPendingMessage({ type: "text", text: "hello fake driver" });
@@ -146,14 +144,14 @@ describe("fireMessage", () => {
       expect(message?.state).toBe("succeeded");
     } finally {
       if (prevDriver === undefined) {
-        delete process.env.DESK_SANDBOX_DRIVER;
+        delete process.env.ROOMY_SANDBOX_DRIVER;
       } else {
-        process.env.DESK_SANDBOX_DRIVER = prevDriver;
+        process.env.ROOMY_SANDBOX_DRIVER = prevDriver;
       }
       if (prevImage === undefined) {
-        delete process.env.DESK_SANDBOX_IMAGE;
+        delete process.env.ROOMY_SANDBOX_IMAGE;
       } else {
-        process.env.DESK_SANDBOX_IMAGE = prevImage;
+        process.env.ROOMY_SANDBOX_IMAGE = prevImage;
       }
     }
   });
@@ -543,8 +541,8 @@ execRunFn: async () => ({ exitCode: 1 }),
     expect(succeeded?.state).toBe("succeeded");
 
     const logDir = path.join(
-      process.env.DESK_HOME!,
-      "desk",
+      process.env.ROOMY_HOME!,
+      "roomy",
       ".chats",
       chatId,
       "logs",
@@ -803,8 +801,6 @@ execRunFn: async (_id, _agentId, prompt, onLog) => {
 
     expect(capturedGoal).toBeNull();
   });
-
-
 
   it("populates agentFileInput.goal and chatId from chats.goal so the system prompt sees the goal", async () => {
     let captured: { goal?: unknown; chatId?: unknown } = {};
@@ -1134,7 +1130,7 @@ execRunFn: async () => ({ exitCode: 1 }),
     // parent to `running` so the kanban card lands on Active, runs the
     // agent, then hands off: afterTaskRun does NOT propagate a clean
     // success onto the parent. The canonical close is
-    // `desk-agent task complete`, and auto-completing here would steal
+    // `roomy-agent task complete`, and auto-completing here would steal
     // the Needs-input hand-off (the agent's reply lands in the thread,
     // flipping chat.unread) AND break callers that issue task complete
     // after the run terminates (the endpoint refuses terminal state).
@@ -1336,7 +1332,7 @@ describe("scheduleSummary", () => {
   describe("hybrid trigger (P2.2 token-budget)", () => {
     /**
      * The transcript-since-last-summary is what scheduleSummary tokenizes.
-     * Each call sets `DESK_SUMMARY_MODEL_CONTEXT_WINDOW` to a small value
+     * Each call sets `ROOMY_SUMMARY_MODEL_CONTEXT_WINDOW` to a small value
      * so we don't have to manufacture millions of tokens to trip the
      * budget. With window=1000 and fraction=0.6, the budget is 600 tokens
      * — a few user messages get us across.
@@ -1346,11 +1342,11 @@ describe("scheduleSummary", () => {
     }
 
     afterEach(() => {
-      delete process.env.DESK_SUMMARY_MODEL_CONTEXT_WINDOW;
-      delete process.env.DESK_SUMMARY_TRIGGER_FRACTION;
-      delete process.env.DESK_SUMMARY_TRIGGER_TOKENS;
-      delete process.env.DESK_SUMMARY_TRIGGER_MIN_TOKENS;
-      delete process.env.DESK_SUMMARY_TRIGGER_MAX_TOKENS;
+      delete process.env.ROOMY_SUMMARY_MODEL_CONTEXT_WINDOW;
+      delete process.env.ROOMY_SUMMARY_TRIGGER_FRACTION;
+      delete process.env.ROOMY_SUMMARY_TRIGGER_TOKENS;
+      delete process.env.ROOMY_SUMMARY_TRIGGER_MIN_TOKENS;
+      delete process.env.ROOMY_SUMMARY_TRIGGER_MAX_TOKENS;
     });
 
     async function insertUserMessageBody(text: string): Promise<void> {
@@ -1362,8 +1358,8 @@ describe("scheduleSummary", () => {
     }
 
     it("schedules far-future executeAt when the transcript is well under the token budget", async () => {
-      process.env.DESK_SUMMARY_MODEL_CONTEXT_WINDOW = "200000";
-      delete process.env.DESK_SUMMARY_TRIGGER_FRACTION;
+      process.env.ROOMY_SUMMARY_MODEL_CONTEXT_WINDOW = "200000";
+      delete process.env.ROOMY_SUMMARY_TRIGGER_FRACTION;
 
       const mgr = createRunManager({ pool, execRunFn: async () => ({ exitCode: 0 }) });
       await clearChatTranscript();
@@ -1384,8 +1380,8 @@ describe("scheduleSummary", () => {
 
     it("fires the summary immediately (executeAt = now) when the transcript exceeds the token budget", async () => {
       // Tiny window so a single long message trips it.
-      process.env.DESK_SUMMARY_MODEL_CONTEXT_WINDOW = "1000";
-      process.env.DESK_SUMMARY_TRIGGER_FRACTION = "0.6";
+      process.env.ROOMY_SUMMARY_MODEL_CONTEXT_WINDOW = "1000";
+      process.env.ROOMY_SUMMARY_TRIGGER_FRACTION = "0.6";
 
       const mgr = createRunManager({ pool, execRunFn: async () => ({ exitCode: 0 }) });
       await clearChatTranscript();
@@ -1407,16 +1403,16 @@ describe("scheduleSummary", () => {
       // certainly not 30 min in the future.
       expect(executeAt - before).toBeLessThan(60 * 1000);
 
-      delete process.env.DESK_SUMMARY_MODEL_CONTEXT_WINDOW;
-      delete process.env.DESK_SUMMARY_TRIGGER_FRACTION;
+      delete process.env.ROOMY_SUMMARY_MODEL_CONTEXT_WINDOW;
+      delete process.env.ROOMY_SUMMARY_TRIGGER_FRACTION;
     });
 
     it("adapts the token budget to the active model context window", async () => {
-      delete process.env.DESK_SUMMARY_MODEL_CONTEXT_WINDOW;
-      delete process.env.DESK_SUMMARY_TRIGGER_FRACTION;
-      delete process.env.DESK_SUMMARY_TRIGGER_TOKENS;
-      delete process.env.DESK_SUMMARY_TRIGGER_MIN_TOKENS;
-      delete process.env.DESK_SUMMARY_TRIGGER_MAX_TOKENS;
+      delete process.env.ROOMY_SUMMARY_MODEL_CONTEXT_WINDOW;
+      delete process.env.ROOMY_SUMMARY_TRIGGER_FRACTION;
+      delete process.env.ROOMY_SUMMARY_TRIGGER_TOKENS;
+      delete process.env.ROOMY_SUMMARY_TRIGGER_MIN_TOKENS;
+      delete process.env.ROOMY_SUMMARY_TRIGGER_MAX_TOKENS;
 
       // ~28k chars / 4 = ~7k tokens: above a small 8k input window's safe
       // budget (~4.8k after the 60% safety ceiling), but below a frontier
@@ -1487,7 +1483,7 @@ describe("preemptChatRun", () => {
     //   2. insert a fresh agent_turn trigger
     //   3. fireMessage(newTrigger) — fire-and-forget
     //
-    // Each cancelled fire's execRunFn still resolves cleanly (opencode
+    // Each cancelled fire's execRunFn still resolves cleanly (pi
     // preserves session state on abort and exits 0). The success path
     // at the bottom of fireMessageImpl then reads the log and inserts a
     // child message — even though the row is already in 'cancelled'
@@ -1502,7 +1498,7 @@ describe("preemptChatRun", () => {
         onLog({ runId: id, seq: 0, kind: "stdout", payload: JSON.stringify({ type: "step_start", sessionID: "s1" }) });
         onLog({ runId: id, seq: 1, kind: "stdout", payload: JSON.stringify({ type: "text", part: { text: "duplicate reply" } }) });
         // Hold until the test has preempted the row, then exit cleanly —
-        // mirroring opencode returning Cancelled with exitCode=0 after
+        // mirroring pi returning Cancelled with exitCode=0 after
         // session.abort.
         await released;
         onLog({ runId: id, seq: 2, kind: "stdout", payload: JSON.stringify({ type: "step_finish" }) });

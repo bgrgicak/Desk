@@ -1,13 +1,13 @@
 import { getJson } from "../client.js";
 import { output } from "../index.js";
 
-export const usage = "desk-agent secret list";
+export const usage = "roomy-agent secret list";
 
 export const help = `\
-desk-agent secret list — list the user's secrets vault entries.
+roomy-agent secret list — list the user's secrets vault entries.
 
 Returns metadata only (titles, usernames, urls). To read a secret's
-plaintext password use \`desk-agent secret get <title>\`.
+plaintext password use \`roomy-agent secret get <title>\`.
 
 If the vault is locked, the command exits with code VAULT_LOCKED. Ask
 the user to unlock the vault before trying again.

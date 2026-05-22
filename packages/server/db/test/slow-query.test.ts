@@ -7,7 +7,7 @@ let prevEnv: string | undefined;
 let captured: string[];
 
 beforeEach(() => {
-  prevEnv = process.env.DESK_SLOW_QUERY_MS;
+  prevEnv = process.env.ROOMY_SLOW_QUERY_MS;
   captured = [];
   // Re-target the slow-query logger to an in-memory stream so the test
   // doesn't depend on pino's stdout wiring (sonic-boom bypasses
@@ -23,8 +23,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (prevEnv === undefined) delete process.env.DESK_SLOW_QUERY_MS;
-  else process.env.DESK_SLOW_QUERY_MS = prevEnv;
+  if (prevEnv === undefined) delete process.env.ROOMY_SLOW_QUERY_MS;
+  else process.env.ROOMY_SLOW_QUERY_MS = prevEnv;
   resetSlowQueryThresholdCache();
   _setSlowQueryLoggerForTest(null);
   vi.restoreAllMocks();
@@ -36,10 +36,10 @@ function slowMessages(): string[] {
 
 describe("slow-query log", () => {
   it("emits a warn for queries above the configured threshold", async () => {
-    process.env.DESK_SLOW_QUERY_MS = "1"; // trigger on anything but trivial
+    process.env.ROOMY_SLOW_QUERY_MS = "1"; // trigger on anything but trivial
     resetSlowQueryThresholdCache();
     // Explicit :memory: so the test stays isolated even when CI sets
-    // DESK_DB_PATH (the default fallback) — without this, two
+    // ROOMY_DB_PATH (the default fallback) — without this, two
     // tests-in-the-same-process share a single SQLite file and the
     // second CREATE TABLE trips a "table already exists" error.
     const pool = new Pool({ path: ":memory:" });
@@ -59,7 +59,7 @@ describe("slow-query log", () => {
   });
 
   it("never emits when the threshold is 0", async () => {
-    process.env.DESK_SLOW_QUERY_MS = "0";
+    process.env.ROOMY_SLOW_QUERY_MS = "0";
     resetSlowQueryThresholdCache();
     const pool = new Pool({ path: ":memory:" });
     pool.exec("CREATE TABLE t (id INTEGER PRIMARY KEY)");
@@ -69,7 +69,7 @@ describe("slow-query log", () => {
   });
 
   it("never emits when the env var is unset and the query is fast", async () => {
-    delete process.env.DESK_SLOW_QUERY_MS;
+    delete process.env.ROOMY_SLOW_QUERY_MS;
     resetSlowQueryThresholdCache();
     const pool = new Pool({ path: ":memory:" });
     pool.exec("CREATE TABLE t (id INTEGER PRIMARY KEY)");
@@ -79,7 +79,7 @@ describe("slow-query log", () => {
   });
 
   it("sanitizes the logged SQL — collapses whitespace, truncates", async () => {
-    process.env.DESK_SLOW_QUERY_MS = "1";
+    process.env.ROOMY_SLOW_QUERY_MS = "1";
     resetSlowQueryThresholdCache();
     const pool = new Pool({ path: ":memory:" });
     // Same deterministic heavy query, parameterised so the bind-value

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { X, FileText, Zap, ImageIcon, Table, Globe } from 'lucide-react'
-import { Sheet, SheetContent, Button, Input } from '@agent-desk/ui'
+import { Sheet, SheetContent, Button, Input } from '@roomy-ai/ui'
 import { ComposerPickers } from '@/components/compose/ComposerPickers'
 import { attachmentChipIcon, type ComposerAttachment } from '@/components/compose/composer-pickers-utils'
 import type { ArtifactType } from '@/data/ui-types'

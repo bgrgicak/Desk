@@ -4,7 +4,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuTrigger,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { ChatMenuItems } from '@/components/chats/ChatMenuItems'
 import { TopBarActions } from '@/components/layout/TopBar'
 import { TaskPanelActionsMenu } from '@/components/tasks/TaskPanelActionsMenu'

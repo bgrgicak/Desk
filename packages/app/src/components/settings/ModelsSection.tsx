@@ -1,9 +1,10 @@
-import { useMemo, useState, type DragEvent } from 'react'
+import { useMemo, useRef, useState, type DragEvent } from 'react'
 import { motion } from 'framer-motion'
 import { toast } from 'sonner'
 import {
   ArrowDown,
   ArrowUp,
+  Check,
   ChevronDown,
   GripVertical,
   MoreHorizontal,
@@ -14,12 +15,6 @@ import {
 } from 'lucide-react'
 import {
   Button,
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -30,7 +25,7 @@ import {
   PopoverTrigger,
   Switch,
   cn,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import {
   useCreateAgentMutation,
   useDeleteAgentMutation,
@@ -39,6 +34,7 @@ import {
   useGetModelsQuery,
   useGetProviderKeysQuery,
   usePatchAgentMutation,
+  usePreviewModelsMutation,
   usePutLocalSourceMutation,
   usePutProviderKeysMutation,
   useReorderAgentsMutation,
@@ -90,19 +86,12 @@ type ModelProviderOption = {
 }
 
 const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
-  opencode: 'opencode/big-pickle',
   codex: 'codex/gpt-5.5',
   anthropic: 'anthropic/claude-sonnet-4-6',
   openai: 'openai/gpt-5.4',
 }
 
 const MODEL_PROVIDER_OPTIONS: ModelProviderOption[] = [
-  {
-    provider: 'opencode',
-    label: 'OpenCode',
-    description: 'Free models',
-    placeholder: DEFAULT_MODEL_BY_PROVIDER.opencode,
-  },
   {
     provider: 'codex',
     label: 'Codex',
@@ -200,7 +189,6 @@ function providerLabel(provider: string): string {
   if (provider === 'anthropic') return 'Claude'
   if (provider === 'openai')    return 'ChatGPT'
   if (provider === 'codex')     return 'Codex'
-  if (provider === 'opencode')  return 'OpenCode'
   return provider
 }
 
@@ -458,7 +446,7 @@ function ModelsList({
         const showDropAfter = dropTarget?.id === a.id && dropTarget?.position === 'after'
         const handleDrop = (event: DragEvent<HTMLDivElement>) => {
           event.preventDefault()
-          const activeId = draggingId ?? event.dataTransfer.getData('application/x-desk-model-id')
+          const activeId = draggingId ?? event.dataTransfer.getData('application/x-roomy-model-id')
           const position = dropPositionFromEvent(event)
           setDraggingId(null)
           setDropTarget(null)
@@ -494,7 +482,7 @@ function ModelsList({
               onDragStart={(event) => {
                 setDraggingId(a.id)
                 event.dataTransfer.effectAllowed = 'move'
-                event.dataTransfer.setData('application/x-desk-model-id', a.id)
+                event.dataTransfer.setData('application/x-roomy-model-id', a.id)
               }}
               onDragEnd={() => {
                 setDraggingId(null)
@@ -572,6 +560,75 @@ function ModelsList({
   )
 }
 
+function InlineModelPicker({
+  models, selected, providerLabel, open, onOpenChange, query, onQueryChange, onSelect,
+}: {
+  models: ModelRef[]
+  selected: string
+  providerLabel: string
+  open: boolean
+  onOpenChange: (next: boolean) => void
+  query: string
+  onQueryChange: (next: string) => void
+  onSelect: (id: string) => void
+}) {
+  const q = query.trim().toLowerCase()
+  const filtered = q
+    ? models.filter(m => (m.label ?? m.id).toLowerCase().includes(q) || m.id.toLowerCase().includes(q))
+    : models
+  return (
+    <div className="mt-2 rounded-md border overflow-hidden">
+      <button
+        type="button"
+        onClick={() => onOpenChange(!open)}
+        className="flex w-full items-center justify-between px-3 py-2 text-xs text-muted-foreground hover:bg-muted/40"
+        aria-expanded={open}
+      >
+        <span>
+          {models.length} available {providerLabel} {models.length === 1 ? 'model' : 'models'}
+        </span>
+        <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <div className="border-t">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <Input
+              value={query}
+              onChange={e => onQueryChange(e.target.value)}
+              placeholder="Search models..."
+              className="h-9 rounded-none border-0 border-b pl-8 text-sm focus-visible:ring-0 focus-visible:ring-offset-0"
+            />
+          </div>
+          <div className="max-h-56 overflow-y-auto overscroll-contain">
+            {filtered.length === 0 ? (
+              <p className="px-3 py-3 text-center text-xs text-muted-foreground">No models found.</p>
+            ) : (
+              filtered.map(m => {
+                const isSelected = selected === m.id
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => onSelect(m.id)}
+                    className={cn(
+                      'flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-muted/50',
+                      isSelected && 'bg-muted/70',
+                    )}
+                  >
+                    <span className="truncate">{m.label ?? m.id}</span>
+                    {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+                  </button>
+                )
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ModelDetail({
   agents, modelIndex, localSources, providerKeys, focus, busy, onSave, onCancel, onDelete,
 }: {
@@ -585,25 +642,48 @@ function ModelDetail({
   onCancel: () => void
   onDelete: (id: string) => void
 }) {
+  const [previewModels, { isLoading: previewingModels }] = usePreviewModelsMutation()
   const existing = focus.mode === 'edit' ? agents.find(a => a.id === focus.id) : undefined
   const flatModels = useMemo(() => allModels(modelIndex), [modelIndex])
   const initialProvider = existing
     ? modelProviderFromModelId(existing.model)
-    : (modelIndex.has('opencode') ? 'opencode' : (flatModels[0]?.provider ?? 'opencode'))
+    : (flatModels[0]?.provider ?? MODEL_PROVIDER_OPTIONS[0].provider)
   const initialModel = existing?.model ?? defaultModelForProvider(modelIndex, initialProvider)
 
   const [name, setName] = useState(existing?.name ?? '')
   const [model, setModel] = useState(initialModel)
   const [provider, setProvider] = useState(initialProvider)
   const [credentialSecret, setCredentialSecret] = useState('')
-  const [modelPickerOpen, setModelPickerOpen] = useState(false)
-  const [modelPickerPortalContainer, setModelPickerPortalContainer] = useState<HTMLElement | null>(null)
+  // The picker is inline (not a popover) because the form is rendered
+  // inside small constrained surfaces (signup card, account modal); a
+  // floating popover got clipped by their overflow containers.
+  const [modelPickerOpen, setModelPickerOpen] = useState(true)
+  const [modelQuery, setModelQuery] = useState('')
   const [deleteOpen, setDeleteOpen] = useState(false)
+  // Cache preview results per-provider for the lifetime of this form so
+  // switching providers and back doesn't drop the dynamically-fetched
+  // catalog. Key is the provider id, value is the model list.
+  const [previewByProvider, setPreviewByProvider] = useState<Record<string, ModelRef[]>>({})
+  // Tracks the last (provider, secret) pair we've issued a preview for,
+  // so repeated blurs without a change don't re-fire the request.
+  const lastPreviewRef = useRef<string>('')
   const { ref: scrollRef, scrolledUnder } = useScrolledUnder()
 
   const providerOption = modelProviderOption(provider)
   const providerOptions = providerOptionsWithCurrent(provider)
-  const providerModels = modelsForProvider(modelIndex, provider)
+  const providerModels = useMemo<ModelRef[]>(() => {
+    const fetched = modelsForProvider(modelIndex, provider)
+    const previewed = previewByProvider[provider] ?? []
+    if (previewed.length === 0) return fetched
+    const seen = new Set(fetched.map(m => m.id))
+    const merged = [...fetched]
+    for (const m of previewed) {
+      if (seen.has(m.id)) continue
+      seen.add(m.id)
+      merged.push(m)
+    }
+    return merged
+  }, [modelIndex, previewByProvider, provider])
   const connectionEnvKey = modelProviderConnectionEnvKey(provider)
   const connectionKind = modelProviderConnectionKind(provider)
   const connectionDefinition = connectionKind ? managedConnectionDefinitionForKind(connectionKind) : undefined
@@ -614,6 +694,18 @@ function ModelDetail({
   const localSourceUnavailable = providerOption?.localSourceKind !== undefined && localSource?.available === false
   const normalizedModel = normalizeModelIdForProvider(provider, model)
   const needsCredential = modelProviderCredentialRequired(provider, focus.mode, hasSavedCredential)
+  // The Model ID field is only meaningful once we know how the agent will
+  // authenticate — otherwise we'd be asking the user to pick a model we
+  // can't list yet (the listing endpoint requires saved keys / opted-in
+  // local sources). For credential providers, "ready" means a key is
+  // saved OR being entered now; for local-source providers (Codex),
+  // "ready" means the sign-in is detected on this host; for unknown /
+  // custom providers we don't gate.
+  const credentialReady = connectionEnvKey
+    ? hasSavedCredential || credentialSecret.trim().length > 0
+    : providerOption?.localSourceKind
+      ? !localSourceUnavailable
+      : true
   const canSave = name.trim().length > 0
     && normalizedModel.length > 0
     && (!needsCredential || credentialSecret.trim().length > 0)
@@ -623,6 +715,26 @@ function ModelDetail({
     setProvider(next)
     setModel(defaultModelForProvider(modelIndex, next))
     setCredentialSecret('')
+  }
+
+  const runPreview = async (forProvider: string, secret: string) => {
+    const envKey = modelProviderConnectionEnvKey(forProvider)
+    if (!envKey) return
+    const trimmed = secret.trim()
+    if (trimmed.length < 10) return  // skip until the user has typed a plausible key
+    const fingerprint = `${forProvider}:${trimmed}`
+    if (lastPreviewRef.current === fingerprint) return
+    lastPreviewRef.current = fingerprint
+    try {
+      const list = await previewModels({
+        provider: forProvider,
+        providerKeys: { [envKey]: trimmed },
+      }).unwrap()
+      setPreviewByProvider(prev => ({ ...prev, [forProvider]: list }))
+    } catch {
+      // Bad key (sandbox rejects), network error, etc. — leave the picker
+      // empty and let the user proceed with the placeholder default.
+    }
   }
 
   const handleSave = () => {
@@ -637,7 +749,7 @@ function ModelDetail({
   }
 
   return (
-    <div ref={setModelPickerPortalContainer} className="flex-1 flex min-w-0 flex-col min-h-0 overflow-hidden">
+    <div className="flex-1 flex min-w-0 flex-col min-h-0 overflow-hidden">
       <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4 space-y-4">
         <Field label="Name">
           <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Daily driver" />
@@ -659,57 +771,6 @@ function ModelDetail({
           <p className="text-xs text-muted-foreground/80 break-words">
             {providerOption?.description ?? providerLabel(provider)}
           </p>
-        </Field>
-
-        <Field label="Model ID">
-          <div className="flex min-w-0 gap-2">
-            <Input
-              value={model}
-              onChange={e => setModel(e.target.value)}
-              placeholder={providerOption?.placeholder ?? `${provider}/model-name`}
-              className="min-w-0 flex-1"
-            />
-            <Popover open={modelPickerOpen} onOpenChange={setModelPickerOpen}>
-              <PopoverTrigger asChild disabled={providerModels.length === 0}>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  disabled={providerModels.length === 0}
-                  aria-label="Pick available model"
-                  title="Pick available model"
-                  className="shrink-0"
-                >
-                  <ChevronDown className="h-4 w-4 opacity-70" />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent
-                container={modelPickerPortalContainer ?? undefined}
-                className="p-0 w-72 overflow-hidden"
-                align="end"
-                onEscapeKeyDown={() => setModelPickerOpen(false)}
-              >
-                <Command>
-                  <CommandInput placeholder="Search models..." />
-                  <CommandList className="overscroll-contain">
-                    <CommandEmpty>No models found.</CommandEmpty>
-                    <CommandGroup heading={providerLabel(provider)}>
-                      {providerModels.map(m => (
-                        <CommandItem
-                          key={m.id}
-                          value={m.id}
-                          keywords={[m.label ?? m.id, provider]}
-                          onSelect={() => { setModel(m.id); setModelPickerOpen(false) }}
-                        >
-                          {m.label ?? m.id}
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
-                  </CommandList>
-                </Command>
-              </PopoverContent>
-            </Popover>
-          </div>
         </Field>
 
         {connectionEnvKey && (
@@ -740,6 +801,7 @@ function ModelDetail({
                 type="password"
                 value={credentialSecret}
                 onChange={e => setCredentialSecret(e.target.value)}
+                onBlur={() => { void runPreview(provider, credentialSecret) }}
                 placeholder={savedCredentialMask ?? connectionDefinition?.secretPlaceholder ?? 'API key'}
                 autoComplete="off"
                 data-testid={connectionEnvKey ? `model-provider-credential-${connectionEnvKey}` : undefined}
@@ -756,6 +818,32 @@ function ModelDetail({
             )}>
               {localSourceStatusText(provider, localSource)}
             </div>
+          </Field>
+        )}
+
+        {credentialReady && (
+          <Field
+            label="Model ID"
+            help={previewingModels ? 'Fetching available models…' : undefined}
+          >
+            <Input
+              value={model}
+              onChange={e => setModel(e.target.value)}
+              placeholder={providerOption?.placeholder ?? `${provider}/model-name`}
+              className="w-full"
+            />
+            {providerModels.length > 0 && (
+              <InlineModelPicker
+                models={providerModels}
+                selected={model}
+                providerLabel={providerLabel(provider)}
+                open={modelPickerOpen}
+                onOpenChange={setModelPickerOpen}
+                query={modelQuery}
+                onQueryChange={setModelQuery}
+                onSelect={(id) => setModel(id)}
+              />
+            )}
           </Field>
         )}
       </div>
@@ -808,7 +896,14 @@ function ModelDetail({
   )
 }
 
-export function ModelsSection() {
+interface ModelsSectionProps {
+  /** Controlled focus state (new / edit / null). Lives in the URL so
+   * deep-linking + reload preserves the open detail page. */
+  focus: ModelsFocus
+  onChangeFocus: (next: ModelsFocus) => void
+}
+
+export function ModelsSection({ focus, onChangeFocus }: ModelsSectionProps) {
   const dispatch = useAppDispatch()
   const { data: serverAgents } = useGetAgentsQuery()
   const { data: models } = useGetModelsQuery()
@@ -827,7 +922,7 @@ export function ModelsSection() {
     for (const source of localSourcesData?.sources ?? []) out[source.kind] = source
     return out
   }, [localSourcesData])
-  const [focus, setFocus] = useState<ModelsFocus>(null)
+  const setFocus = onChangeFocus
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
 

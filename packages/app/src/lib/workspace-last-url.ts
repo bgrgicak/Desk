@@ -1,4 +1,4 @@
-const STORAGE_KEY_PREFIX = 'desk:last-workspace-url:'
+const STORAGE_KEY_PREFIX = 'roomy:last-workspace-url:'
 
 function storageKey(workspaceId: string): string {
   return `${STORAGE_KEY_PREFIX}${workspaceId}`
@@ -20,8 +20,8 @@ function getStorage(): Storage | null {
 export function isWorkspaceUrl(workspaceId: string, url: string): boolean {
   if (!workspaceId || !url.startsWith('/')) return false
   try {
-    const parsed = new URL(url, 'http://desk.local')
-    return parsed.origin === 'http://desk.local' && parsed.pathname.startsWith(`/w/${workspaceId}/`)
+    const parsed = new URL(url, 'http://roomy.local')
+    return parsed.origin === 'http://roomy.local' && parsed.pathname.startsWith(`/w/${workspaceId}/`)
   } catch {
     return false
   }

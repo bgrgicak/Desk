@@ -1,5 +1,5 @@
-import { type Pool } from "@agent-desk/db";
-import { queries } from "@agent-desk/db";
+import { type Pool } from "@roomy-ai/db";
+import { queries } from "@roomy-ai/db";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -9,9 +9,9 @@ import {
   NotFoundError,
   ValidationError,
   VaultLockedError,
-} from "@agent-desk/shared";
-import { workspaceRootPath } from "@agent-desk/storage";
-import type { LocalFilesystemConnectionMetadata, LocalFilesystemDirectoryConfig } from "@agent-desk/shared";
+} from "@roomy-ai/shared";
+import { workspaceRootPath } from "@roomy-ai/storage";
+import type { LocalFilesystemConnectionMetadata, LocalFilesystemDirectoryConfig } from "@roomy-ai/shared";
 import type { VaultStore } from "../vault/store.js";
 import { deleteCredentials, readCredentials, writeCredentials } from "../connectors/credentialStore.js";
 import { enforcePasswordPolicy } from "../auth/passwordPolicy.js";
@@ -245,7 +245,7 @@ async function cleanupLocalFilesystemMountPlaceholders(pool: Pool, userId: strin
         await removeLocalFilesystemMountPlaceholder(target);
       } else if (marker?.mountId) {
         // Directory ids were not stable in early local-filesystem UI drafts.
-        // If this target is just a Desk-created mount placeholder, remove it
+        // If this target is just a Roomy-created mount placeholder, remove it
         // even when the stored marker id no longer matches this connection row.
         await removeLocalFilesystemMountPlaceholder(target);
       }
@@ -396,7 +396,7 @@ export async function setProviders(
     // off in Settings. Without this, a user who had disabled the provider
     // and then re-entered a key would have the key saved as an "active"
     // connection but `resolveProviderKeys.isDisabled()` would still filter
-    // it out — opencode never sees the credential and reports the provider
+    // it out — pi never sees the credential and reports the provider
     // as unconfigured. Entering a fresh value into Settings implies the
     // user wants the key live; explicit disable still goes through the
     // separate `setProvidersMeta` toggle.

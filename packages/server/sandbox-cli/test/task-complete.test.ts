@@ -16,7 +16,7 @@ beforeEach(() => {
   postJsonMock.mockResolvedValue({ task: { id: "msg_x", state: "succeeded" } });
 });
 
-describe("desk-agent task complete", () => {
+describe("roomy-agent task complete", () => {
   it("posts the thread chat id alone when no --message is given", async () => {
     await run(["--chat", "ch_thread_xyz"]);
     expect(postJsonMock).toHaveBeenCalledWith("/sandbox/messages/complete", {

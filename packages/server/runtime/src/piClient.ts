@@ -3,7 +3,7 @@
  * container for a single turn and streams its JSON event output back to
  * the host driver.
  *
- * Architecture vs. the old opencode-serve daemon:
+ * Architecture vs. the old pi runtime:
  *
  *   - No long-lived daemon, no HTTP server, no SSE multiplexer, no port
  *     allocation, no MCP write lock, no env-digest restart, no auth wipe.
@@ -35,7 +35,7 @@ import {
   type TerminalAssistantMessage,
   type TranslateContext,
 } from "./piEvents.js";
-import { withModule } from "@agent-desk/shared/logger";
+import { withModule } from "@roomy-ai/shared/logger";
 const log = withModule("runtime/piClient");
 const PI_CLI_PATH = "/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js";
 
@@ -55,7 +55,7 @@ export interface PiRunOptions {
    * Host path to the bind-mounted pi session directory. Pi sometimes
    * persists the terminal assistant message there without echoing the
    * terminal event on stdout, leaving the CLI wrapper alive with MCP
-   * children. Watching this path lets Desk finish the run as soon as the
+   * children. Watching this path lets Roomy finish the run as soon as the
    * authoritative session record says the turn is done.
    */
   hostSessionDir?: string;
@@ -71,7 +71,7 @@ export interface PiRunOptions {
   models?: string[];
   /**
    * Env forwarded to pi. Provider keys (ANTHROPIC_API_KEY, …) land here.
-   * Per-run env (sandbox token, DESK_API_URL) are also forwarded.
+   * Per-run env (sandbox token, ROOMY_API_URL) are also forwarded.
    */
   env: Record<string, string>;
   /** The single user prompt for this turn (already includes any attachment text parts). */
@@ -81,7 +81,7 @@ export interface PiRunOptions {
   /** Called once per stderr log line from pi (raw, not JSON-parsed). */
   onStderr: (line: string) => void | Promise<void>;
   /**
-   * Context threaded into every translated event. Mirrors the opencode
+   * Context threaded into every translated event. Mirrors the pi
    * surfacing of sessionID + model annotation on each event so the chat
    * log can answer "what model produced this step?" without an extra
    * DB lookup.
@@ -186,7 +186,7 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
     // Pi auto-discovers extensions in $PI_CODING_AGENT_DIR/extensions/<name>/
     // index.ts. Because we override PI_CODING_AGENT_DIR to a fresh tmpfs
     // dir per invocation (for lockfile-contention reasons above), we need
-    // to seed the bundled extensions too — otherwise the desk-mcp-bridge
+    // to seed the bundled extensions too — otherwise the roomy-mcp-bridge
     // (and any future bundled extension) is invisible to pi, MCP servers
     // never spawn, and tools like playwright never reach the agent.
     //
@@ -238,12 +238,34 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
     }, 100).unref();
   };
 
+  // The `done` promise resolves on whichever comes first:
+  //   1. pi's terminal event (canonical "the agent turn is finished" signal),
+  //      surfaced via stdout JSONL drain or the session-file watcher.
+  //   2. The wrapper child exiting (pi crashed or died before emitting a
+  //      terminal — fall back to the exit code).
+  // Wrapper-exit used to gate completion on its own, which left chats stuck
+  // forever when a stale MCP child or hung cleanup step kept the wrapper
+  // alive past the actual end of the turn. The terminal event is the work-
+  // product signal; the wrapper is just the transport.
+  let resolveDone!: (result: PiRunResult) => void;
+  let resolved = false;
+  const resolveOnce = (result: PiRunResult): void => {
+    if (resolved) return;
+    resolved = true;
+    resolveDone(result);
+  };
+
   const handleTerminal = (terminal: TerminalAssistantMessage) => {
     terminalExitCode ??= terminal.exitCode;
     if (terminal.model) {
       terminalModel = `${terminal.model.providerID}/${terminal.model.modelID}`;
     }
     scheduleTerminalCleanupKill();
+    resolveOnce({
+      exitCode: terminal.exitCode,
+      aborted,
+      ...(terminalModel ? { model: terminalModel } : {}),
+    });
   };
   const sessionWatcher = opts.hostSessionDir
     ? watchPiSessionTerminal(opts.hostSessionDir, (evt) => {
@@ -254,6 +276,7 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
   const stdoutPromise = drainStdoutEvents(child.stdout, opts, drainState, handleTerminal);
 
   const done = new Promise<PiRunResult>((resolve) => {
+    resolveDone = resolve;
     child.on("exit", async (code, signal) => {
       sessionWatcher?.stop();
       try {
@@ -270,7 +293,7 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
         log.warn({ err: (err as Error)?.message }, "piClient: cleanup failed");
       });
       const exitCode = terminalExitCode ?? (typeof code === "number" ? code : signal ? 130 : 1);
-      resolve({ exitCode, aborted, ...(terminalModel ? { model: terminalModel } : {}) });
+      resolveOnce({ exitCode, aborted, ...(terminalModel ? { model: terminalModel } : {}) });
     });
     child.on("error", async (err) => {
       sessionWatcher?.stop();
@@ -283,7 +306,7 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
         ]);
       } catch {/* noop */}
       await opts.onStderr(`pi spawn failed: ${err.message}`);
-      resolve({ exitCode: 1, aborted, ...(terminalModel ? { model: terminalModel } : {}) });
+      resolveOnce({ exitCode: 1, aborted, ...(terminalModel ? { model: terminalModel } : {}) });
     });
   });
 
@@ -439,7 +462,7 @@ export function watchPiSessionTerminal(
   const pollMs = opts.pollMs ?? 250;
   const successGraceMs = opts.successGraceMs ?? 250;
   const errorGraceMs = opts.errorGraceMs
-    ?? parseInt(process.env.DESK_PI_TERMINAL_ERROR_GRACE_MS ?? "12000", 10);
+    ?? parseInt(process.env.ROOMY_PI_TERMINAL_ERROR_GRACE_MS ?? "12000", 10);
   const offsets = new Map<string, number>();
   let stopped = false;
   let timer: NodeJS.Timeout | null = null;

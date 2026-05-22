@@ -1,0 +1,640 @@
+{
+  "info": {
+    "_postman_id": "e3a0d5b2-2f5a-4a4e-9b57-roomy-api-v1",
+    "name": "Roomy API",
+    "description": "HTTP + WS gateway for the Roomy personal AI assistant. Covers every route exposed by packages/server/api/src/app.ts. Login response auto-stores {{token}}. Set {{baseUrl}} to the host roomy-server (default dev instance: http://localhost:35138). WebSocket upgrades live at {{baseUrl}}/ws?token={{token}}.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:35138", "type": "string" },
+    { "key": "token", "value": "", "type": "string" },
+    { "key": "username", "value": "roomy", "type": "string" },
+    { "key": "email", "value": "roomy@roomy.local", "type": "string" },
+    { "key": "password", "value": "change-me-before-first-boot", "type": "string" },
+    { "key": "workspaceId", "value": "", "type": "string" },
+    { "key": "agentId", "value": "", "type": "string" },
+    { "key": "chatId", "value": "", "type": "string" },
+    { "key": "messageId", "value": "", "type": "string" },
+    { "key": "libraryPath", "value": "readme.txt", "type": "string" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "POST /auth/login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.token) {",
+                  "  pm.collectionVariables.set('token', body.token);",
+                  "  console.log('token stored');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] }
+          }
+        },
+        {
+          "name": "POST /auth/logout",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{baseUrl}}/auth/logout", "host": ["{{baseUrl}}"], "path": ["auth", "logout"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Account (/me)",
+      "item": [
+        {
+          "name": "GET /me",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/me", "host": ["{{baseUrl}}"], "path": ["me"] }
+          }
+        },
+        {
+          "name": "PATCH /me",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"roomy\",\n  \"email\": \"me@example.com\",\n  \"avatarPath\": \"avatars/me.png\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/me", "host": ["{{baseUrl}}"], "path": ["me"] }
+          }
+        },
+        {
+          "name": "DELETE /me",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{baseUrl}}/me", "host": ["{{baseUrl}}"], "path": ["me"] }
+          }
+        },
+        {
+          "name": "POST /me/password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"testpass\",\n  \"newPassword\": \"new-password\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/me/password", "host": ["{{baseUrl}}"], "path": ["me", "password"] }
+          }
+        },
+        {
+          "name": "GET /me/providers",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/me/providers", "host": ["{{baseUrl}}"], "path": ["me", "providers"] }
+          }
+        },
+        {
+          "name": "PUT /me/providers",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providers\": {\n    \"OPENAI_API_KEY\": \"sk-...\"\n  }\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/me/providers", "host": ["{{baseUrl}}"], "path": ["me", "providers"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Workspaces",
+      "item": [
+        {
+          "name": "GET /workspaces",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/workspaces", "host": ["{{baseUrl}}"], "path": ["workspaces"] }
+          }
+        },
+        {
+          "name": "GET /workspaces/:id",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/workspaces/{{workspaceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["workspaces", "{{workspaceId}}"]
+            }
+          }
+        },
+        {
+          "name": "PATCH /workspaces/:id",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"My workspace\",\n  \"description\": \"Updated\",\n  \"icon\": \"📒\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/workspaces/{{workspaceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["workspaces", "{{workspaceId}}"]
+            }
+          }
+        },
+        {
+          "name": "DELETE /workspaces/:id",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/workspaces/{{workspaceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["workspaces", "{{workspaceId}}"]
+            }
+          }
+        },
+        {
+          "name": "GET /workspaces/:id/agents",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/workspaces/{{workspaceId}}/agents",
+              "host": ["{{baseUrl}}"],
+              "path": ["workspaces", "{{workspaceId}}", "agents"]
+            }
+          }
+        },
+        {
+          "name": "POST /workspaces/:id/agents",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"agentId\": \"{{agentId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/workspaces/{{workspaceId}}/agents",
+              "host": ["{{baseUrl}}"],
+              "path": ["workspaces", "{{workspaceId}}", "agents"]
+            }
+          }
+        },
+        {
+          "name": "DELETE /workspaces/:id/agents/:agentId",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/workspaces/{{workspaceId}}/agents/{{agentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["workspaces", "{{workspaceId}}", "agents", "{{agentId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Agents",
+      "item": [
+        {
+          "name": "GET /agents",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/agents", "host": ["{{baseUrl}}"], "path": ["agents"] }
+          }
+        },
+        {
+          "name": "POST /agents",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Sidekick\",\n  \"instructions\": \"Assist\",\n  \"model\": \"opencode/big-pickle\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/agents", "host": ["{{baseUrl}}"], "path": ["agents"] }
+          }
+        },
+        {
+          "name": "GET /agents/:id",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/agents/{{agentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "{{agentId}}"]
+            }
+          }
+        },
+        {
+          "name": "PATCH /agents/:id",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"My agent\",\n  \"model\": \"claude-opus-4-7\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/agents/{{agentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "{{agentId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Chats",
+      "item": [
+        {
+          "name": "GET /chats",
+          "request": {
+            "method": "GET",
+            "description": "Lists chats filtered by workspaceId. Omit the param to fall back to the caller's first workspace.",
+            "url": {
+              "raw": "{{baseUrl}}/chats?workspaceId={{workspaceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats"],
+              "query": [
+                { "key": "workspaceId", "value": "{{workspaceId}}", "description": "wks_* id of a workspace the caller owns. Omit for the first-workspace default.", "disabled": false }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /chats",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.id) pm.collectionVariables.set('chatId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"workspaceId\": \"{{workspaceId}}\",\n  \"agentId\": \"{{agentId}}\",\n  \"title\": \"My chat\",\n  \"goal\": \"Explore the API\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/chats", "host": ["{{baseUrl}}"], "path": ["chats"] }
+          }
+        },
+        {
+          "name": "GET /chats/:id",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}"]
+            }
+          }
+        },
+        {
+          "name": "PATCH /chats/:id",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Renamed chat\",\n  \"goal\": \"Revised goal\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}"]
+            }
+          }
+        },
+        {
+          "name": "DELETE /chats/:id",
+          "request": {
+            "method": "DELETE",
+            "description": "Soft-deletes a chat: cascades messages, cancels scheduler refs, moves .chats/{chatId}/ + chats/{chatId}/ to ~/Roomy/.trash/, and broadcasts chat.deleted over WS.",
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}"]
+            }
+          }
+        },
+        {
+          "name": "GET /chats/:id/messages",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}/messages?cursor=",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}", "messages"],
+              "query": [{ "key": "cursor", "value": "", "description": "Opaque pagination cursor" }]
+            }
+          }
+        },
+        {
+          "name": "POST /chats/:id/messages",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Hello agent\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}", "messages"]
+            }
+          }
+        },
+        {
+          "name": "PATCH /chats/:id/messages/:messageId",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": { \"type\": \"summary\", \"body\": \"Edited summary\" }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}/messages/{{messageId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}", "messages", "{{messageId}}"]
+            }
+          }
+        },
+        {
+          "name": "DELETE /chats/:id/messages/:messageId",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}/messages/{{messageId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}", "messages", "{{messageId}}"]
+            }
+          }
+        },
+        {
+          "name": "GET /chats/:id/messages/:messageId/logs",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}/messages/{{messageId}}/logs",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}", "messages", "{{messageId}}", "logs"]
+            }
+          }
+        },
+        {
+          "name": "GET /chats/:id/messages/:messageId/summary-history",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}/messages/{{messageId}}/summary-history",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}", "messages", "{{messageId}}", "summary-history"]
+            }
+          }
+        },
+        {
+          "name": "GET /chats/:id/artifacts",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}/artifacts",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}", "artifacts"]
+            }
+          }
+        },
+        {
+          "name": "POST /chats/:id/artifacts",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": [] }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/chats/{{chatId}}/artifacts",
+              "host": ["{{baseUrl}}"],
+              "path": ["chats", "{{chatId}}", "artifacts"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Library",
+      "item": [
+        {
+          "name": "GET /library",
+          "request": {
+            "method": "GET",
+            "description": "List library files in the given workspace. Omit workspaceId to fall back to the caller's first workspace. Files live under library/{workspaceId}/… on disk.",
+            "url": {
+              "raw": "{{baseUrl}}/library?workspaceId={{workspaceId}}&cursor=&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["library"],
+              "query": [
+                { "key": "workspaceId", "value": "{{workspaceId}}", "description": "wks_* id of a workspace the caller owns. Omit for first-workspace default." },
+                { "key": "cursor", "value": "" },
+                { "key": "limit", "value": "50" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /library",
+          "request": {
+            "method": "POST",
+            "description": "Upload a file into the given workspace's library. Lands at library/{workspaceId}/{filename}; auto-suffixes on collision.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": [] }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/library?workspaceId={{workspaceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["library"],
+              "query": [
+                { "key": "workspaceId", "value": "{{workspaceId}}", "description": "wks_* id of destination workspace. Omit for first-workspace default." }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /library/meta",
+          "request": {
+            "method": "GET",
+            "description": "Stat a library file by workspace-relative path inside the given workspace. Returns 404 if the path escapes the workspace subtree.",
+            "url": {
+              "raw": "{{baseUrl}}/library/meta?path={{libraryPath}}&workspaceId={{workspaceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["library", "meta"],
+              "query": [
+                { "key": "path", "value": "{{libraryPath}}" },
+                { "key": "workspaceId", "value": "{{workspaceId}}", "description": "wks_* id. Omit for first-workspace default." }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /library/download",
+          "request": {
+            "method": "GET",
+            "description": "Stream a library file's bytes from the given workspace.",
+            "url": {
+              "raw": "{{baseUrl}}/library/download?path={{libraryPath}}&workspaceId={{workspaceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["library", "download"],
+              "query": [
+                { "key": "path", "value": "{{libraryPath}}" },
+                { "key": "workspaceId", "value": "{{workspaceId}}", "description": "wks_* id. Omit for first-workspace default." }
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE /library",
+          "request": {
+            "method": "DELETE",
+            "description": "Moves the file at ?path= (inside the given workspace) to ~/Roomy/.trash/.",
+            "url": {
+              "raw": "{{baseUrl}}/library?path={{libraryPath}}&workspaceId={{workspaceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["library"],
+              "query": [
+                { "key": "path", "value": "{{libraryPath}}" },
+                { "key": "workspaceId", "value": "{{workspaceId}}", "description": "wks_* id. Omit for first-workspace default." }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Messages (cross-chat)",
+      "item": [
+        {
+          "name": "GET /messages",
+          "request": {
+            "method": "GET",
+            "description": "Read-only cross-chat message list. All filters AND-combined. Ownership enforced by SQL join on chats → workspaces.user_id. Ordered createdAt DESC, id DESC. Use to drive Runs (scheduled=true&state=pending, state=running, etc.) and Today/Inbox (unread=true) without fan-out.",
+            "url": {
+              "raw": "{{baseUrl}}/messages?workspaceId={{workspaceId}}&chatId=&state=&scheduled=&unread=&contentKind=&since=&cursor=&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["messages"],
+              "query": [
+                { "key": "workspaceId", "value": "{{workspaceId}}", "description": "wks_* id. Omit to span all of the caller's workspaces." },
+                { "key": "chatId", "value": "", "description": "chat_* id. Omit to span all chats." },
+                { "key": "state", "value": "", "description": "pending|running|succeeded|failed|cancelled. Comma-separated list accepted." },
+                { "key": "scheduled", "value": "", "description": "true = only rows with executeAt or cron; false = only unscheduled; omit for both." },
+                { "key": "unread", "value": "", "description": "true = the latest succeeded agent message in each chat whose unread flag is set (chat has agent activity the user hasn't opened yet)." },
+                { "key": "contentKind", "value": "", "description": "text|toolCall|toolResult|artifactRef|events|summary|summary_request|agent_turn. Comma-separated list accepted." },
+                { "key": "since", "value": "", "description": "ISO-8601 timestamp. Returns rows with createdAt > since (reconnect catchup)." },
+                { "key": "cursor", "value": "", "description": "Opaque pagination cursor from a previous response's nextCursor." },
+                { "key": "limit", "value": "50", "description": "Page size, max 200." }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tools",
+      "item": [
+        {
+          "name": "GET /tools/models",
+          "request": {
+            "method": "GET",
+            "description": "Lists AI models that are ready to use — every entry is a provider opencode has authenticated inside the sandbox via a host-forwarded API key. Server-wide, not agent-scoped. Foundation of host-initiated sandboxed tool calling (ARCHITECTURE.md §7).",
+            "url": {
+              "raw": "{{baseUrl}}/tools/models?provider=opencode",
+              "host": ["{{baseUrl}}"],
+              "path": ["tools", "models"],
+              "query": [
+                { "key": "provider", "value": "opencode", "description": "Restrict to a single provider id, e.g. opencode." }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Search",
+      "item": [
+        {
+          "name": "GET /search",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/search?q=hello&scope=all",
+              "host": ["{{baseUrl}}"],
+              "path": ["search"],
+              "query": [
+                { "key": "q", "value": "hello" },
+                { "key": "scope", "value": "all", "description": "all | artifacts | chats | library" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Meta",
+      "item": [
+        {
+          "name": "GET /openapi.json",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/openapi.json", "host": ["{{baseUrl}}"], "path": ["openapi.json"] }
+          }
+        },
+        {
+          "name": "WS /ws (reference only)",
+          "request": {
+            "method": "GET",
+            "description": "WebSocket upgrade endpoint. Postman can connect via File → New → WebSocket Request with URL ws://localhost:35138/ws?token={{token}}. Not reachable via a regular HTTP send.",
+            "url": {
+              "raw": "{{baseUrl}}/ws?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["ws"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

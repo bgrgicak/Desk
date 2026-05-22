@@ -65,9 +65,9 @@ test.describe.serial("PWA update flow", () => {
     });
     expect(state.active).toContain("/sw.js");
     expect(state.waiting).toBeNull();
-    const appCaches = state.caches.filter((k) => k.startsWith("desk-app-"));
+    const appCaches = state.caches.filter((k) => k.startsWith("roomy-app-"));
     expect(appCaches).toHaveLength(1);
-    expect(appCaches[0]).toBe(`desk-app-${originalVersion}`);
+    expect(appCaches[0]).toBe(`roomy-app-${originalVersion}`);
 
     // The prompt MUST NOT appear on a cold install — that's how we
     // distinguish "this is your first visit" from "an update arrived
@@ -75,7 +75,7 @@ test.describe.serial("PWA update flow", () => {
     // `navigator.serviceWorker.controller` being truthy at install
     // time, which is only the case for updates.
     await expect(
-      page.getByText("A new version of Desk is available"),
+      page.getByText("A new version of Roomy is available"),
     ).toBeHidden({ timeout: 1500 });
   });
 
@@ -107,7 +107,7 @@ test.describe.serial("PWA update flow", () => {
       await reg.update();
     });
 
-    await expect(page.getByText("A new version of Desk is available")).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText("A new version of Roomy is available")).toBeVisible({ timeout: 5000 });
     await expect(
       page.getByText(`Reload to update from ${originalVersion} to ${newVersion}.`),
     ).toBeVisible();
@@ -121,12 +121,12 @@ test.describe.serial("PWA update flow", () => {
     });
     expect(beforeApply.waiting).toContain("/sw.js");
     expect(beforeApply.caches.sort()).toEqual(
-      [`desk-app-${originalVersion}`, `desk-app-${newVersion}`].sort(),
+      [`roomy-app-${originalVersion}`, `roomy-app-${newVersion}`].sort(),
     );
 
     // Clicking Reload posts SKIP_WAITING → activate → controllerchange,
     // and the page reloads itself. The new SW drops the old cache during
-    // activate, so afterwards only `desk-app-${newVersion}` remains.
+    // activate, so afterwards only `roomy-app-${newVersion}` remains.
     await page.getByRole("button", { name: "Reload" }).click();
 
     await expect.poll(
@@ -152,7 +152,7 @@ test.describe.serial("PWA update flow", () => {
       { timeout: 8000, message: "waiting for new SW to activate and old cache to be dropped" },
     ).toEqual({
       waiting: null,
-      caches: [`desk-app-${newVersion}`],
+      caches: [`roomy-app-${newVersion}`],
     });
   });
 });

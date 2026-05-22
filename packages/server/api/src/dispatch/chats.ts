@@ -1,7 +1,7 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
-import { ValidationError } from "@agent-desk/shared";
-import { ReplaceLibraryAppConflictError } from "@agent-desk/storage";
-import { withModule } from "@agent-desk/shared/logger";
+import { ValidationError } from "@roomy-ai/shared";
+import { ReplaceLibraryAppConflictError } from "@roomy-ai/storage";
+import { withModule } from "@roomy-ai/shared/logger";
 import * as chatRoutes from "../routes/chats.js";
 import {
   requireOwnedAgent,
@@ -121,7 +121,7 @@ export async function dispatchChats(
       : await parseBody(req);
 
     // Preempt any in-flight chat agent_turn before firing the new one.
-    // opencode itself silently DROPS the new message's `parts` if you
+    // pi itself silently DROPS the new message's `parts` if you
     // POST to a busy session (Runner.ensureRunning attaches to the
     // existing run and ignores `work`), so its own clients always
     // abort-before-send. We mirror that here: every user message gets

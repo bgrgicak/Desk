@@ -55,7 +55,7 @@ async function uploadLibraryFile(
   name: string,
   body: string,
 ): Promise<void> {
-  const boundary = `----desk-e2e-${Math.random().toString(16).slice(2)}`;
+  const boundary = `----roomy-e2e-${Math.random().toString(16).slice(2)}`;
   const bodyBuf = Buffer.concat([
     Buffer.from(
       `--${boundary}\r\n` +
@@ -137,10 +137,10 @@ test("Hidden filter survives a hard refresh when developer mode is on", async ({
   const userId = await getMyUserId(serverUrl, token);
   await loggedInPage.evaluate(({ uid }: { uid: string }) => {
     localStorage.setItem(
-      `desk.prefs.${uid}`,
+      `roomy.prefs.${uid}`,
       JSON.stringify({ developerMode: true }),
     );
-    localStorage.setItem("desk.context.typeFilter", JSON.stringify("hidden"));
+    localStorage.setItem("roomy.context.typeFilter", JSON.stringify("hidden"));
   }, { uid: userId });
 
   await loggedInPage.reload();
@@ -182,7 +182,7 @@ test("Hidden filter includes normal and hidden library files", async ({
 
   await loggedInPage.evaluate(({ uid }: { uid: string }) => {
     localStorage.setItem(
-      `desk.prefs.${uid}`,
+      `roomy.prefs.${uid}`,
       JSON.stringify({ developerMode: true }),
     );
   }, { uid: userId });

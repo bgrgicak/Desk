@@ -5,7 +5,7 @@
  *
  * Regression: listLibrary projected the connected host directory into the
  * listing under its `homeName` prefix, but downloadFile/statFile resolved
- * the same path against `~/Desk/<slug>/`, so the file 404'd as soon as the
+ * the same path against `~/Roomy/<slug>/`, so the file 404'd as soon as the
  * user clicked it.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -14,11 +14,11 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, queries } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
-import { LOCAL_FILESYSTEM_PROVIDER_ID } from "@agent-desk/shared";
+import { Pool, queries } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { LOCAL_FILESYSTEM_PROVIDER_ID } from "@roomy-ai/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -31,23 +31,21 @@ let dbPath: string;
 let mountSourceDir: string;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-vmount-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-vmount-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "testuser";
-  process.env.DESK_SEED_PASSWORD = "test-pass-1234";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "test-pass-1234" });
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-vmount-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-vmount-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   // Host directory that will be exposed via a local-filesystem connection.
-  // Sits outside the Desk home so the test verifies the projection — not a
+  // Sits outside the Roomy home so the test verifies the projection — not a
   // path that happens to resolve under the workspace by accident.
-  mountSourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-vmount-src-"));
+  mountSourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-vmount-src-"));
   await fs.writeFile(
     path.join(mountSourceDir, "pr-review.md"),
     "# PR Review\n\nfrom host directory\n",
@@ -143,7 +141,7 @@ function getRaw(
 
 async function login(): Promise<string> {
   const loginRes = await request("POST", "/auth/login", undefined, {
-    username: "testuser",
+    email: "testuser@roomy.local",
     password: "test-pass-1234",
   });
   return (loginRes.body as { token: string }).token;

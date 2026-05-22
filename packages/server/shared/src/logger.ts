@@ -4,7 +4,7 @@
  * `no-console` lint rule has a place to point disciplined callers at.
  *
  * The wrapper is deliberately small — no transports, no rotation, no
- * formatters. desk-server writes JSON-per-line to stdout/stderr; an
+ * formatters. roomy-server writes JSON-per-line to stdout/stderr; an
  * operator running it under systemd / launchd captures the stream into
  * a journal / log file of their choice. Pretty-printing for human
  * readers stays out of the binary (no `pino-pretty` dependency); use
@@ -20,7 +20,7 @@
  *   request-scoped pattern.
  *
  * Levels: `debug`, `info`, `warn`, `error`, `fatal`. `info` is the
- * default at runtime; set `DESK_LOG_LEVEL` to override.
+ * default at runtime; set `ROOMY_LOG_LEVEL` to override.
  */
 
 import { pino, type Logger as PinoLogger } from "pino";
@@ -47,15 +47,18 @@ const ALWAYS_REDACT_KEYS = new Set([
   // (to avoid redacting workspace_id, request_id, etc.). List the
   // exact name here so AWS auth pairs don't half-leak.
   "aws_access_key_id",
+  // Pi's per-invocation OAuth blob (base64-encoded JSON containing OpenAI
+  // OAuth tokens for Codex). Ends in `_base64`, which isn't a generic
+  // secret suffix, so list it explicitly.
+  "pi_auth_json_base64",
 ]);
 
 // Universal secret-name pattern: matches keys whose name ENDS in a
 // secret-shaped token. Case-insensitive. Covers every `*_API_KEY`,
 // `*_TOKEN`, `*_SECRET`, `*_PASSWORD` we've added or will add
 // (ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, GITHUB_TOKEN,
-// SLACK_BOT_TOKEN, AWS_SECRET_ACCESS_KEY, OPENCODE_SERVER_PASSWORD,
-// OPENCODE_AUTH_CONTENT, REFRESH_TOKEN, ACCESS_TOKEN, …) without an
-// explicit allowlist.
+// SLACK_BOT_TOKEN, AWS_SECRET_ACCESS_KEY, PI_AUTH_JSON_BASE64,
+// REFRESH_TOKEN, ACCESS_TOKEN, …) without an explicit allowlist.
 //
 // Why suffix-only (not prefix): `password_strength_score` and
 // `tokens_used` are counters / scores, not secrets. Anchoring to the
@@ -128,7 +131,7 @@ const REDACT_PATHS = [
 ];
 
 const root: PinoLogger = pino({
-  level: process.env.DESK_LOG_LEVEL ?? "info",
+  level: process.env.ROOMY_LOG_LEVEL ?? "info",
   redact: {
     paths: REDACT_PATHS,
     censor: REDACT_PLACEHOLDER,
@@ -161,7 +164,7 @@ export const log: Logger = root;
 /**
  * Module-scoped child logger. Use at the top of a server module:
  *
- *     import { withModule } from "@agent-desk/shared/logger";
+ *     import { withModule } from "@roomy-ai/shared/logger";
  *     const log = withModule("scheduler.runs");
  *
  * The resulting child carries `{ module: "scheduler.runs" }` on every

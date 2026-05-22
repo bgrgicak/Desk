@@ -13,7 +13,7 @@ async function writeLog(c: OrphanCandidate, contents: string): Promise<void> {
 }
 
 beforeEach(async () => {
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-orphan-recovery-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-orphan-recovery-"));
 });
 
 afterEach(async () => {

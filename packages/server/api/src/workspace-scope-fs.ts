@@ -1,13 +1,13 @@
 import { realpath as fsRealpath } from "node:fs/promises";
 import { sep as pathSep } from "node:path";
-import { type Pool } from "@agent-desk/db";
-import { NotFoundError } from "@agent-desk/shared";
+import { type Pool } from "@roomy-ai/db";
+import { NotFoundError } from "@roomy-ai/shared";
 import {
   chatArtifactsDir,
   resolveHostPath,
   workspaceRootPath,
   type StorageContext,
-} from "@agent-desk/storage";
+} from "@roomy-ai/storage";
 import {
   parseReadableChatArtifactPath,
   requireReadablePathInWorkspace,

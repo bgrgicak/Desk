@@ -5,10 +5,10 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, queries, runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
-import { chatArtifactsDir, ensureLayout, ensureWorkspaceLayout } from "@agent-desk/storage";
+import { Pool, queries, runMigrations, insertSeedFixture } from "@roomy-ai/db";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
+import { chatArtifactsDir, ensureLayout, ensureWorkspaceLayout } from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -26,18 +26,16 @@ let chatId: string;
 let authToken: string;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-sandbox-artifacts-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-sandbox-artifacts-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "artifact-user";
-  process.env.DESK_SEED_PASSWORD = "pw";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "artifact-user", password: "pw" });
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-sandbox-artifacts-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-sandbox-artifacts-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const { rows: wsRows } = await pool.query<{ id: string; path: string }>(
     "SELECT id, path FROM workspaces LIMIT 1",
@@ -68,7 +66,7 @@ beforeAll(async () => {
   port = (server.address() as net.AddressInfo).port;
 
   const login = await httpJson("POST", "/auth/login", undefined, {
-    username: "artifact-user",
+    email: "artifact-user@roomy.local",
     password: "pw",
   });
   authToken = (login.body as { token: string }).token;
@@ -81,7 +79,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 function sandboxPost(
@@ -100,7 +98,7 @@ function sandboxPost(
         headers: {
           "Content-Type": "application/json",
           "Content-Length": String(Buffer.byteLength(payload)),
-          "X-Desk-Sandbox-Token": token,
+          "X-Roomy-Sandbox-Token": token,
         },
       },
       (res) => {

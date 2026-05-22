@@ -21,11 +21,12 @@ import {
   Alert,
   AlertDescription,
   cn,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { useCompactViewport } from '@/hooks/use-compact-viewport'
 import { PreferenceRow } from '@/components/settings/shared'
 import { ModelsSection } from '@/components/settings/ModelsSection'
+import type { ModelsFocus } from '@/router/nav'
 import { describeApiError } from '@/components/settings/errors'
 import { initialsOf } from '@/lib/initials'
 import { useAvatarUrl, saveAvatarUrl, deleteAvatarUrl, resizeToDataUrl } from '@/hooks/use-avatar'
@@ -43,7 +44,7 @@ export type AccountSection = 'account' | 'models' | 'notifications' | 'preferenc
 
 const NAV: { id: AccountSection; label: string; icon: typeof User }[] = [
   { id: 'account',           label: 'My account',        icon: User    },
-  { id: 'models',            label: 'Models',            icon: Bot     },
+  { id: 'models',            label: 'AI providers',      icon: Bot     },
   { id: 'notifications',     label: 'Notifications',     icon: Bell    },
   { id: 'preferences',       label: 'Preferences',       icon: Sliders },
 ]
@@ -65,7 +66,7 @@ const USER_PREFS_DEFAULTS: UserPrefsShape = {
 }
 
 function userPrefsKey(userId: string): string {
-  return `desk.userprefs.${userId}`
+  return `roomy.userprefs.${userId}`
 }
 
 function loadUserPrefs(userId: string | undefined): UserPrefsShape {
@@ -100,7 +101,7 @@ const LANGUAGE_OPTIONS: { value: string; label: string }[] = [
 ]
 
 function accountPrefsKey(userId: string): string {
-  return `desk.account.${userId}`
+  return `roomy.account.${userId}`
 }
 
 function loadLanguage(userId: string | undefined): string {
@@ -532,22 +533,26 @@ function PreferencesSection() {
 interface MyAccountModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  initialSection?: AccountSection
+  /** Active account section. Controlled so the URL is the source of truth. */
+  activeSection: AccountSection
+  onChangeSection: (next: AccountSection) => void
+  /** Models sub-state (new / edit). Forwarded to ModelsSection. */
+  modelsFocus: ModelsFocus
+  onChangeModelsFocus: (next: ModelsFocus) => void
 }
 
 export function MyAccountModal({
   open,
   onOpenChange,
-  initialSection,
+  activeSection,
+  onChangeSection,
+  modelsFocus,
+  onChangeModelsFocus,
 }: MyAccountModalProps) {
   const { data: me } = useGetMeQuery()
-  const [activeSection, setActiveSection] = useState<AccountSection>(initialSection ?? 'account')
+  const setActiveSection = onChangeSection
   const avatarUrl = useAvatarUrl(me?.id)
   const isCompactViewport = useCompactViewport()
-
-  useEffect(() => {
-    if (open && initialSection) setActiveSection(initialSection)
-  }, [open, initialSection])
 
   const account = me
     ? { name: me.username, email: me.email, initials: initialsOf(me.username) }
@@ -642,7 +647,9 @@ export function MyAccountModal({
               className="flex-1 flex w-full min-w-0 max-w-full flex-col min-h-0 overflow-hidden"
             >
               {activeSection === 'account'           && <AccountSection_ />}
-              {activeSection === 'models'            && <ModelsSection />}
+              {activeSection === 'models'            && (
+                <ModelsSection focus={modelsFocus} onChangeFocus={onChangeModelsFocus} />
+              )}
               {activeSection === 'notifications'     && <NotificationsSection />}
               {activeSection === 'preferences'       && <PreferencesSection />}
             </motion.div>

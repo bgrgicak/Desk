@@ -31,7 +31,7 @@ const fakeEngineState = {
   expectedBinds: [] as string[],
   expectedUser: "0:0",
   agentUserLabel: "0:0",
-  resourceProfile: "runtime=opencode-serve-v1,user=root+sudo",
+  resourceProfile: "runtime=pi-v1,user=root+sudo",
 };
 
 function buildFakeEngine(): Engine {
@@ -71,14 +71,14 @@ function buildFakeEngine(): Engine {
         imageId: fakeEngineState.imageId,
         user: spec.user ?? fakeEngineState.expectedUser,
         labels: spec.labels ?? {
-          "agent-desk.sandbox-resource-profile": fakeEngineState.resourceProfile,
-          "agent-desk.sandbox-agent-user": fakeEngineState.agentUserLabel,
+          "roomy-ai.sandbox-resource-profile": fakeEngineState.resourceProfile,
+          "roomy-ai.sandbox-agent-user": fakeEngineState.agentUserLabel,
         },
         binds: bindStrings,
         running: true,
         // Carry a published-ports map so the createOrReuse drift check
         // doesn't classify the reused container as
-        // "opencode-serve-port-unbound" and recreate it. Mirrors the
+        // "pi-port-unbound" and recreate it. Mirrors the
         // shape `engine.inspect` returns for a healthy live container.
         publishedPorts: {
           "9105/tcp": [{ hostIp: "127.0.0.1", hostPort: 34123 }],
@@ -97,7 +97,7 @@ function buildFakeEngine(): Engine {
     exec: async (spec: ExecSpec) => {
       const stdout = new PassThrough();
       const stderr = new PassThrough();
-      // The entrypoint-ready check runs `test -f /tmp/desk-entrypoint-ready`.
+      // The entrypoint-ready check runs `test -f /tmp/roomy-entrypoint-ready`.
       // We return success so `waitForEntrypointReady` doesn't loop.
       setImmediate(() => {
         stdout.end();
@@ -161,7 +161,7 @@ describe("createOrReuse mutex", () => {
     expect(settled[0].workspaceId).toBe("wks_race");
     expect(settled[1].workspaceId).toBe("wks_race");
 
-    const containerName = "desk-sandbox-wks_race";
+    const containerName = "roomy-sandbox-wks_race";
 
     // The second concurrent call must wait — at no point are both
     // inspect calls in-flight against the same container name.
@@ -196,8 +196,8 @@ describe("createOrReuse mutex", () => {
     // ~100 ms serialized). 80 ms gives the CI scheduler some slack.
     expect(elapsed).toBeLessThan(80);
 
-    expect(fakeEngineState.createCountByName.get("desk-sandbox-wks_a")).toBe(1);
-    expect(fakeEngineState.createCountByName.get("desk-sandbox-wks_b")).toBe(1);
+    expect(fakeEngineState.createCountByName.get("roomy-sandbox-wks_a")).toBe(1);
+    expect(fakeEngineState.createCountByName.get("roomy-sandbox-wks_b")).toBe(1);
   });
 
   it("releases the lock after a failing call so the next caller can proceed", async () => {

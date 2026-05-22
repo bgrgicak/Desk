@@ -1,5 +1,5 @@
 -- 0020_library_file_authors.sql — Track which agent last created or modified
--- each library file so the Desk UI can show real agent names on artifact cards.
+-- each library file so the Roomy UI can show real agent names on artifact cards.
 -- Populated by the run manager after each agent execution by comparing file
 -- mtimes against the run start time.
 --

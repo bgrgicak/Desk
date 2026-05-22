@@ -28,7 +28,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
   cn,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import {
   useGetProviderKeysQuery,
   usePutProviderKeysMutation,
@@ -60,8 +60,8 @@ import {
   type ConnectionKind,
 } from '@/data/connections'
 import { useCompactViewport } from '@/hooks/use-compact-viewport'
-import type { ManagedConnectionDefinition } from '@agent-desk/shared'
-import { LOCAL_FILESYSTEM_CONNECTION_KIND } from '@agent-desk/shared'
+import type { ManagedConnectionDefinition } from '@roomy-ai/shared'
+import { LOCAL_FILESYSTEM_CONNECTION_KIND } from '@roomy-ai/shared'
 
 interface LocalSourceState {
   kind: string
@@ -129,6 +129,7 @@ import { roomColor } from '@/components/rooms/roomColor'
 import { isVaultLockedError } from '@/lib/api-error'
 import { useAppDispatch } from '@/store/hooks'
 import { openVaultDialog } from '@/store/slices/uiSlice'
+import type { ConnectionsFocus as RouterConnectionsFocus } from '@/router/nav'
 
 // ── Brand marks ─────────────────────────────────────────────────────────────
 
@@ -160,7 +161,7 @@ function OpenAILogo({ className }: { className?: string }) {
 export type WorkspaceSettingsSection = 'workspace' | 'connections' | 'preferences'
 
 const NAV: { id: WorkspaceSettingsSection; label: string; icon: typeof Settings2 }[] = [
-  { id: 'workspace',   label: 'Workspace',   icon: Settings2 },
+  { id: 'workspace',   label: 'Details',     icon: Settings2 },
   { id: 'connections', label: 'Connections', icon: Plug      },
   { id: 'preferences', label: 'Preferences', icon: Sliders   },
 ]
@@ -305,19 +306,19 @@ function GitHubTokenGuide() {
       className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground space-y-2"
       data-testid="github-token-guide"
     >
-      <p className="font-medium text-foreground">Create a GitHub classic token for Desk</p>
+      <p className="font-medium text-foreground">Create a GitHub classic token for Roomy</p>
       <ol className="list-decimal space-y-1 pl-4">
         <li>
           Open{' '}
           <a
             className="font-medium text-foreground underline underline-offset-2 hover:text-primary"
-            href="https://github.com/settings/tokens/new?description=Desk&scopes=repo,workflow"
+            href="https://github.com/settings/tokens/new?description=Roomy&scopes=repo,workflow"
             target="_blank"
             rel="noreferrer"
           >
             GitHub → Tokens (classic)
           </a>
-          {' '}and create a token named “Desk”.
+          {' '}and create a token named “Roomy”.
         </li>
         <li>Set an expiration you are comfortable with.</li>
         <li>
@@ -878,7 +879,7 @@ function ConnectionDetail({
 
           <Field
             label="Status"
-            help={`Desk detects this source on the host at run time and forwards it to the sandbox — no API key required.`}
+            help={`Roomy detects this source on the host at run time and forwards it to the sandbox — no API key required.`}
           >
             {localSource?.available ? (
               <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1">
@@ -900,7 +901,7 @@ function ConnectionDetail({
 
           <Field
             label="Use in sandboxes"
-            help="When enabled, Desk forwards this source's auth/credentials to OpenCode so it can call its models from inside the sandbox."
+            help="When enabled, Roomy forwards this source's auth/credentials into the sandbox so pi can call its models from there."
           >
             <div className="flex items-center gap-3">
               <Switch
@@ -952,7 +953,7 @@ function ConnectionDetail({
         {isLocalFilesystem && (
           <Field
             label="Mounted directories"
-            help="Add the server-local folders this workspace can use. Desk mounts each one into the sandbox automatically."
+            help="Add the server-local folders this workspace can use. Roomy mounts each one into the sandbox automatically."
           >
             <div className="space-y-3">
               {localDirectories.map((directory, index) => (
@@ -972,7 +973,7 @@ function ConnectionDetail({
                     )}
                   </div>
                   <div className="grid gap-3">
-                    <Field label="Server path" help="Absolute path on the Desk server.">
+                    <Field label="Server path" help="Absolute path on the Roomy server.">
                       <Input
                         value={directory.hostPath}
                         onChange={e => setLocalDirectories((dirs) => dirs.map(d => d.id === directory.id ? { ...d, hostPath: e.target.value } : d))}
@@ -1124,7 +1125,7 @@ const PREFS_DEFAULTS: PrefsShape = {
 }
 
 function prefsKey(userId: string): string {
-  return `desk.prefs.${userId}`
+  return `roomy.prefs.${userId}`
 }
 
 const VALID_VIEWS: readonly DefaultView[] = ['new-chat', 'pinned', 'desk', 'tasks', 'context']
@@ -1136,7 +1137,7 @@ export function loadPrefs(userId: string | undefined): PrefsShape {
     if (!raw) return PREFS_DEFAULTS
     const parsed = JSON.parse(raw) as Partial<PrefsShape>
     const merged = { ...PREFS_DEFAULTS, ...parsed }
-    // Migrate stored 'desk' → 'pinned' (Desk was renamed to Pinned).
+    // Migrate stored 'desk' → 'pinned' (legacy enum value; the view label changed in product UI).
     if ((merged.defaultView as string) === 'desk') merged.defaultView = 'pinned'
     if (!VALID_VIEWS.includes(merged.defaultView)) {
       merged.defaultView = PREFS_DEFAULTS.defaultView
@@ -1152,7 +1153,7 @@ function savePrefs(userId: string | undefined, prefs: PrefsShape): void {
   try {
     localStorage.setItem(prefsKey(userId), JSON.stringify(prefs))
     // Notify subscribers in the same tab — `storage` events only cross tabs.
-    window.dispatchEvent(new CustomEvent('desk:prefs-changed'))
+    window.dispatchEvent(new CustomEvent('roomy:prefs-changed'))
   } catch {
     /* ignore */
   }
@@ -1238,9 +1239,13 @@ interface SettingsModalProps {
   canDeleteWorkspace: boolean
   onUpdateWorkspace: (ws: WorkspaceInfo) => void
   onDeleteWorkspace: () => void
-  /** Optional section to focus when the modal opens. Re-applied on every
-   * open so deep-links from the global palette land on the right page. */
-  initialSection?: WorkspaceSettingsSection
+  /** Active settings section. Controlled — the parent owns this so the URL
+   * can be the source of truth for the open page. */
+  activeSection: WorkspaceSettingsSection
+  onChangeSection: (next: WorkspaceSettingsSection) => void
+  /** Connections sub-state (picker / new / edit). Null means the list view. */
+  connectionsFocus: RouterConnectionsFocus
+  onChangeConnectionsFocus: (next: RouterConnectionsFocus) => void
 }
 
 export function SettingsModal({
@@ -1250,16 +1255,15 @@ export function SettingsModal({
   canDeleteWorkspace,
   onUpdateWorkspace,
   onDeleteWorkspace,
-  initialSection,
+  activeSection,
+  onChangeSection,
+  connectionsFocus: connectionsFocusProp,
+  onChangeConnectionsFocus,
 }: SettingsModalProps) {
-  const [activeSection, setActiveSection] = useState<WorkspaceSettingsSection>(initialSection ?? 'workspace')
+  const setActiveSection = onChangeSection
   const isCompactViewport = useCompactViewport()
   const dispatch = useAppDispatch()
   const workspaceIconUrl = useWorkspaceIconUrl(workspace.id)
-
-  useEffect(() => {
-    if (open && initialSection) setActiveSection(initialSection)
-  }, [open, initialSection])
 
   // ── Connections state ─────────────────────────────────────────────────────
   // The connection list merges legacy API-key providers, generic
@@ -1323,7 +1327,20 @@ export function SettingsModal({
   // workspace without disabling the user's global model providers.
   const connectionsView = workspaceConnections
 
-  const [connectionsFocus, setConnectionsFocus]               = useState<ConnectionsFocus>(null)
+  // Validate the URL-derived focus against the known connection
+  // catalog. An unrecognised kind (e.g. someone hand-edited the URL or
+  // a kind that has since been removed) falls back to the list view
+  // instead of throwing on `CONNECTION_CATALOG[kind].name`.
+  const connectionsFocus: ConnectionsFocus = useMemo(() => {
+    const focus = connectionsFocusProp
+    if (!focus) return null
+    if (focus.mode === 'new') {
+      if (!(focus.kind in CONNECTION_CATALOG)) return null
+      return { mode: 'new', kind: focus.kind as ConnectionKind }
+    }
+    return focus
+  }, [connectionsFocusProp])
+  const setConnectionsFocus = onChangeConnectionsFocus
   const [connectionsSearch, setConnectionsSearch]             = useState('')
   const [connectionsStatusFilter, setConnectionsStatusFilter] = useState<StatusFilter>('all')
 
@@ -1639,7 +1656,7 @@ export function SettingsModal({
         showCloseButton={false}
         style={{ height: 'min(620px, calc(100dvh - 1rem))' }}
       >
-        <DialogTitle className="sr-only">Workspace settings</DialogTitle>
+        <DialogTitle className="sr-only">Room settings</DialogTitle>
         <Button
           variant="ghost"
           size="icon"

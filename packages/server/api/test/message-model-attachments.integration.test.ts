@@ -21,11 +21,11 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture, queries } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -44,18 +44,16 @@ let dbPath: string;
 const promptsSeen: { prompt: string; attachments?: string[] }[] = [];
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-msg-attach-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-msg-attach-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "attach-user";
-  process.env.DESK_SEED_PASSWORD = "pw";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "attach-user", password: "pw" });
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-msg-attach-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-msg-attach-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   runManager = createRunManager({
     pool,
@@ -94,7 +92,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 function request(method: string, urlPath: string, body?: unknown, bearer?: string | null): Promise<{ status: number; body: unknown }> {
@@ -120,7 +118,7 @@ function request(method: string, urlPath: string, body?: unknown, bearer?: strin
 }
 
 async function login(): Promise<string> {
-  const res = await request("POST", "/auth/login", { username: "attach-user", password: "pw" });
+  const res = await request("POST", "/auth/login", { email: "attach-user@roomy.local", password: "pw" });
   return (res.body as { token: string }).token;
 }
 
@@ -159,7 +157,7 @@ describe("POST /chats/{id}/messages with attachments", () => {
     ]);
   });
 
-  it("forwards attachment paths to the runtime so opencode receives them as --file flags", async () => {
+  it("forwards attachment paths to the runtime so pi receives them as --file flags", async () => {
     promptsSeen.length = 0;
     const res = await request(
       "POST",
@@ -184,12 +182,12 @@ describe("POST /chats/{id}/messages with attachments", () => {
     // The prompt is just the user's text — paths are no longer inlined.
     expect(seen!.prompt).not.toContain("attachments/notes.txt");
     // The workspace-relative path is forwarded as-is; the runtime translates
-    // it to a sandbox-absolute path when building the opencode command.
+    // it to a sandbox-absolute path when building the pi command.
     expect(seen!.attachments).toEqual([`.chats/${chatId}/attachments/notes.txt`]);
   });
 
-  it("forwards a directory attachment as a workspace-relative path so opencode receives it via --file", async () => {
-    // Folders ride the same AttachmentRef wire as files; opencode's `--file`
+  it("forwards a directory attachment as a workspace-relative path so pi receives it via --file", async () => {
+    // Folders ride the same AttachmentRef wire as files; pi's `--file`
     // flag accepts directory paths and lists contents to the model. The path
     // has no extension and points at a folder under the workspace root.
     promptsSeen.length = 0;
@@ -254,7 +252,7 @@ describe("GET /library/content for chat attachments", () => {
 
   beforeAll(async () => {
     attachmentPath = `.chats/${chatId}/attachments/${filename}`;
-    const dir = path.join(home, "desk", ".chats", chatId, "attachments");
+    const dir = path.join(home, "roomy", ".chats", chatId, "attachments");
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, filename), fileBody);
   });
@@ -286,7 +284,7 @@ describe("GET /library/content for chat attachments", () => {
   it("serves a chat-owned summary via /library/meta with a 'Chat summary' label", async () => {
     const summaryFilename = "msg_open_me.md";
     const summaryPath = `.chats/${chatId}/notes/${summaryFilename}`;
-    const summaryDir = path.join(home, "desk", ".chats", chatId, "notes");
+    const summaryDir = path.join(home, "roomy", ".chats", chatId, "notes");
     await fs.mkdir(summaryDir, { recursive: true });
     await fs.writeFile(path.join(summaryDir, summaryFilename), "# Running summary\n");
 
@@ -381,7 +379,7 @@ describe("notes/{id}.md is materialized when summary_request fires", () => {
     const { childIds } = await runManager.fireMessage(requestId);
     expect(childIds.length).toBe(1);
 
-    const summaryPath = path.join(home, "desk", ".chats", chatId, "notes", `${childIds[0]}.md`);
+    const summaryPath = path.join(home, "roomy", ".chats", chatId, "notes", `${childIds[0]}.md`);
     const content = await fs.readFile(summaryPath, "utf-8");
     expect(content).toContain("Summary");
     expect(content).toContain("attached file");
@@ -406,7 +404,7 @@ describe("notes/{id}.md is materialized when summary_request fires", () => {
     );
     expect(patched.status).toBe(200);
 
-    const summaryPath = path.join(home, "desk", ".chats", chatId, "notes", `${summaryId}.md`);
+    const summaryPath = path.join(home, "roomy", ".chats", chatId, "notes", `${summaryId}.md`);
     const content = await fs.readFile(summaryPath, "utf-8");
     expect(content).toBe("User-edited summary of the chat.");
   });
@@ -420,7 +418,7 @@ describe("notes/{id}.md is materialized when summary_request fires", () => {
     );
     const { childIds } = await runManager.fireMessage(reqId);
     const summaryId = childIds[0];
-    const summaryPath = path.join(home, "desk", ".chats", chatId, "notes", `${summaryId}.md`);
+    const summaryPath = path.join(home, "roomy", ".chats", chatId, "notes", `${summaryId}.md`);
     await expect(fs.stat(summaryPath)).resolves.toBeTruthy();
 
     const deleted = await request("DELETE", `/chats/${chatId}/messages/${summaryId}`, undefined, userToken);

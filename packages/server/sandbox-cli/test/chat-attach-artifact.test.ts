@@ -16,7 +16,7 @@ beforeEach(() => {
   postJsonMock.mockResolvedValue({ id: "msg_artifact" });
 });
 
-describe("desk-agent chat attach-artifact", () => {
+describe("roomy-agent chat attach-artifact", () => {
   it("posts the chat and workspace-relative artifact path", async () => {
     await run(["--chat", "cht_a", ".chats/cht_a/artifacts/report.md"]);
 

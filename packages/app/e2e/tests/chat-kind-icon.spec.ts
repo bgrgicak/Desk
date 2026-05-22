@@ -13,7 +13,7 @@
  * type the user typed about.
  */
 import { test, expect } from "../fixtures";
-import type { MessageKind } from "@agent-desk/shared";
+import type { MessageKind } from "@roomy-ai/shared";
 
 interface Ctx {
   workspaceId: string;

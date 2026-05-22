@@ -5,8 +5,8 @@ import { useEffect, useState } from 'react'
 // cross-tab/in-tab change event so every avatar updates live. When set,
 // this image is shown instead of the colour + initials fallback.
 
-const ICON_KEY = (wsId: string) => `desk.workspace-icon.${wsId}`
-const CHANGE_EVENT = 'desk:workspace-icon-changed'
+const ICON_KEY = (wsId: string) => `roomy.workspace-icon.${wsId}`
+const CHANGE_EVENT = 'roomy:workspace-icon-changed'
 
 export function useWorkspaceIconUrl(wsId: string | undefined): string | null {
   const [url, setUrl] = useState<string | null>(() =>

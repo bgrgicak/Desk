@@ -11,13 +11,13 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
-import { createRunManager } from "@agent-desk/scheduler";
+import { createRunManager } from "@roomy-ai/scheduler";
 
 let pool: Pool;
 let server: http.Server;
@@ -26,18 +26,16 @@ let home: string;
 let dbPath: string;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-providers-del-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-providers-del-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "prov-test";
-  process.env.DESK_SEED_PASSWORD = "prov-pass";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "prov-test", password: "prov-pass" });
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-providers-del-home-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-providers-del-home-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
   const storage = { pool, home };
   const runManager = createRunManager({
     pool,
@@ -98,7 +96,7 @@ describe("PUT /me/providers — remove connection", () => {
 
   beforeAll(async () => {
     const res = await request("POST", "/auth/login", undefined, {
-      username: "prov-test",
+      email: "prov-test@roomy.local",
       password: "prov-pass",
     });
     token = (res.body as { token: string }).token;
@@ -156,7 +154,7 @@ describe("PUT /me/providers — remove connection", () => {
     //   3. User re-enters / rotates the key.
     // Before the fix, step 3 left the disable flag intact, so the new key
     // was filtered out of every agent run's env even though the connection
-    // showed as active. Result: opencode reported "no openai models" and
+    // showed as active. Result: pi reported "no openai models" and
     // the agent returned silence.
     await request("PUT", "/me/providers", token, {
       providers: { ANTHROPIC_API_KEY: "sk-ant-original" },

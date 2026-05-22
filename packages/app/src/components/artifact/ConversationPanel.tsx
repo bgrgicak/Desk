@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { PanelRightClose, ChevronDown, ChevronRight, User } from 'lucide-react'
-import { Button } from '@agent-desk/ui'
+import { Button } from '@roomy-ai/ui'
 import { ChatThread } from '@/components/compose/ChatThread'
 import { ChatInput } from '@/components/compose/ChatInput'
 import { useLibraryItemChat } from '@/hooks/use-library-item-chat'
@@ -39,7 +39,7 @@ export function ConversationPanel({
   transitionFrom,
 }: ConversationPanelProps) {
   const { developerMode } = usePrefs()
-  const tabKey = artifact ? `desk.artifact.${artifact.id}.tab` : item ? `library.item.${item.id}.tab` : null
+  const tabKey = artifact ? `roomy.artifact.${artifact.id}.tab` : item ? `library.item.${item.id}.tab` : null
   const [activeTab, setActiveTab] = usePersistedState<PanelTab>(tabKey, 'chat')
   const [detailsSectionOpen, setDetailsSectionOpen] = useState(true)
   const [notesSectionOpen, setNotesSectionOpen] = useState(true)

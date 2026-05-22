@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 
 export type Theme = 'light' | 'dark' | 'system'
 
-const STORAGE_KEY = 'desk.theme'
-const CHANGE_EVENT = 'desk:theme-changed'
+const STORAGE_KEY = 'roomy.theme'
+const CHANGE_EVENT = 'roomy:theme-changed'
 
 function loadTheme(): Theme {
   try {

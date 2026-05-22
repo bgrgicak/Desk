@@ -1,14 +1,15 @@
 import { createServer as httpCreateServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { mkdir as fsMkdir, stat as fsStat } from "node:fs/promises";
 import { dirname as pathDirname, join as pathJoin } from "node:path";
-import { type Pool, queries } from "@agent-desk/db";
-import { DeskError, type WsEvent } from "@agent-desk/shared";
-import { type StorageContext } from "@agent-desk/storage";
-import type { createRunManager } from "@agent-desk/scheduler";
+import { type Pool, queries } from "@roomy-ai/db";
+import { RoomyError, type WsEvent } from "@roomy-ai/shared";
+import { type StorageContext } from "@roomy-ai/storage";
+import type { createRunManager } from "@roomy-ai/scheduler";
 import { enforceMustChangePassword, recordClientTimezone, requireAuth } from "./auth/middleware.js";
 import { requireInternal } from "./auth/internal.js";
 import { errorToStatus } from "./errors.js";
 import { broadcast } from "./ws/registry.js";
+import { resolveRecipientUserId } from "./ws/recipient.js";
 import { installWsUpgradeHandler } from "./ws/upgrade.js";
 import { generateOpenApiSpec } from "./openapi.js";
 import { isStaticPath, resolveAppDist, serveStaticOrIndex } from "./static-app.js";
@@ -17,7 +18,7 @@ import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
 import { recordClientPerf } from "./routes/client-perf.js";
 import { VaultStore } from "./vault/store.js";
-import { withModule } from "@agent-desk/shared/logger";
+import { withModule } from "@roomy-ai/shared/logger";
 import { defaultBackupPath, parseBody, sendJson } from "./http/io.js";
 import { parseSearchKinds, parseSearchScope } from "./routes/search-params.js";
 import type { DispatchContext } from "./dispatch/context.js";
@@ -42,7 +43,13 @@ export interface AppOptions {
    * (tests, embedded usage) a fresh store is created from storage.home.
    */
   vault?: VaultStore;
-  /** The userId to broadcast events to (v1: single user). */
+  /**
+   * Deprecated. The legacy "broadcast to the single v1 user" hook — kept
+   * in the type so existing tests (and the published d.ts) still compile
+   * while we migrate them off. The implementation ignores it: every
+   * event now resolves its recipient from the payload via
+   * `resolveRecipientUserId`. A future cleanup can drop the field.
+   */
   broadcastUserId?: string;
   /**
    * Hot-refreshes the user's sandbox daemons after a connector / local
@@ -77,7 +84,7 @@ interface RouteParams {
 
 export function createApp(opts: AppOptions): Server {
   const { pool, storage, runManager } = opts;
-  const vault = opts.vault ?? new VaultStore(pathJoin(storage.home, "vaults"));
+  const vault = opts.vault ?? new VaultStore(pathJoin(storage.home, ".vaults"));
 
   /**
    * Central WS emitter. Two responsibilities beyond just forwarding to
@@ -103,10 +110,29 @@ export function createApp(opts: AppOptions): Server {
    *      running child flips the parent to Active. We re-broadcast
    *      the affected parent task.
    */
-  function emitEvent(event: WsEvent): void {
-    const userId = opts.broadcastUserId;
-    if (!userId) return;
+  function emitEvent(event: WsEvent, recipientUserId?: string): void {
+    // Resolve the recipient asynchronously (workspace/chat lookups are
+    // cached in `ws/recipient.ts` after the first hit, so streaming-heavy
+    // events don't pay a DB round-trip per frame). When a caller already
+    // knows the recipient — typically global connector changes whose
+    // payload carries no workspaceId — they pass `recipientUserId`
+    // directly and we skip the resolver entirely.
+    const resolved = recipientUserId
+      ? Promise.resolve(recipientUserId)
+      : resolveRecipientUserId(pool, event);
 
+    void resolved
+      .catch((err: Error) => {
+        log.warn({ err: err.message, type: event.type }, "recipient resolution failed");
+        return null;
+      })
+      .then((userId) => {
+        if (!userId) return;
+        emitToUser(userId, event);
+      });
+  }
+
+  function emitToUser(userId: string, event: WsEvent): void {
     if (event.type === "message.appended" || event.type === "message.updated") {
       const payload = event.payload;
       if (payload.kind === "task") {
@@ -166,7 +192,7 @@ export function createApp(opts: AppOptions): Server {
    * fast synchronous phase (awaited) and a slow background phase
    * (fire-and-forget):
    *
-   *   - **Synchronous**: clear persisted opencode-serve session ids for
+   *   - **Synchronous**: clear persisted pi session ids for
    *     the affected chats. This is a single DB UPDATE — completes in
    *     well under a millisecond — and is the only piece that *has* to
    *     finish before the route returns. Without it, a chat message
@@ -181,7 +207,7 @@ export function createApp(opts: AppOptions): Server {
    *     provider-key change automatically reaches the next turn.
    *
    *     Skipping the await is safe: the only durable state we touch is
-   *     the chats.opencode_session_id column, and clearing that takes
+   *     the chats.pi_session_id column, and clearing that takes
    *     milliseconds.
    *
    *   Failures in either phase are swallowed and logged — a flaky engine
@@ -193,15 +219,15 @@ export function createApp(opts: AppOptions): Server {
     workspaceId?: string,
   ): Promise<void> {
     try {
-      await queries.chats.clearOpencodeSessionsForUser(pool, userId, workspaceId);
+      await queries.chats.clearPiSessionsForUser(pool, userId, workspaceId);
     } catch (err) {
       log.warn(
         { userId, workspaceId: workspaceId ?? "*", err: (err as Error).message ?? String(err) },
-        "clearOpencodeSessionsForUser failed",
+        "clearPiSessionsForUser failed",
       );
     }
     // Fire-and-forget. refreshSandboxConnections also calls
-    // clearOpencodeSessionsForUser internally; on the second pass it
+    // clearPiSessionsForUser internally; on the second pass it
     // finds nothing to clear and short-circuits. Cheap to do twice;
     // unsafe to skip on either path.
     if (opts.refreshSandboxConnections) {
@@ -212,7 +238,9 @@ export function createApp(opts: AppOptions): Server {
         );
       });
     }
-    emitEvent(payload);
+    // Pass userId explicitly: global connector changes carry no
+    // workspaceId, so the resolver would have nothing to bind against.
+    emitEvent(payload, userId);
   }
 
   // Closure bundle handed to extracted dispatch sub-modules (dispatch/*).
@@ -231,11 +259,11 @@ export function createApp(opts: AppOptions): Server {
   // Pre-generate the OpenAPI spec
   const openApiSpec = generateOpenApiSpec();
 
-  // SPA static-serve is opt-in via DESK_SERVE_APP=1 — the CLI flips this
+  // SPA static-serve is opt-in via ROOMY_SERVE_APP=1 — the CLI flips this
   // for published installs, dev never does (Vite serves the SPA on :5173
   // and proxies /api/* here). When off, the request handler skips the
   // static branch entirely and behaves identically to the pre-§3 server.
-  const serveApp = process.env.DESK_SERVE_APP === "1";
+  const serveApp = process.env.ROOMY_SERVE_APP === "1";
   const appDist = serveApp ? resolveAppDist() : null;
 
   const server = httpCreateServer(async (req, res) => {
@@ -310,7 +338,7 @@ export function createApp(opts: AppOptions): Server {
         // We accept the token from:
         //   1. The Authorization header (normal API calls)
         //   2. The ?token= query param (initial iframe navigation)
-        //   3. The `desk-app-token` cookie set when index.html was served
+        //   3. The `roomy-app-token` cookie set when index.html was served
         let appsTokenHeader = req.headers.authorization;
         if (!appsTokenHeader && path.startsWith("/apps/")) {
           const queryToken = url.searchParams.get("token");
@@ -322,8 +350,8 @@ export function createApp(opts: AppOptions): Server {
             const cookieToken = cookieHeader
               .split(";")
               .map((c) => c.trim())
-              .find((c) => c.startsWith("desk-app-token="))
-              ?.slice("desk-app-token=".length);
+              .find((c) => c.startsWith("roomy-app-token="))
+              ?.slice("roomy-app-token=".length);
             if (cookieToken) appsTokenHeader = `Bearer ${decodeURIComponent(cookieToken)}`;
           }
         }
@@ -337,7 +365,7 @@ export function createApp(opts: AppOptions): Server {
         // the public default.
         await enforceMustChangePassword(pool, userId, method, path);
       } catch (err) {
-        if (err instanceof DeskError) {
+        if (err instanceof RoomyError) {
           sendJson(res, errorToStatus(err), { code: err.code, message: err.message });
         } else {
           sendJson(res, 500, { code: "INTERNAL", message: "Internal error" });
@@ -368,7 +396,7 @@ export function createApp(opts: AppOptions): Server {
           message: err.message,
           retryAfterSeconds: err.retryAfterSeconds,
         });
-      } else if (err instanceof DeskError) {
+      } else if (err instanceof RoomyError) {
         sendJson(res, errorToStatus(err), { code: err.code, message: err.message });
       } else {
         log.error({ err }, "Unhandled error");
@@ -402,7 +430,7 @@ export function createApp(opts: AppOptions): Server {
     // on the existing connection, produces a checkpointed snapshot,
     // and works while the server is up — exactly what BACKUP.md needs.
     //
-    // Path defaults to ${DESK_HOME}/Desk/backups/desk-<ISO date>.sqlite3
+    // Path defaults to ${ROOMY_HOME}/Roomy/backups/roomy-<ISO date>.sqlite3
     // (alongside the live DB, on the host mount). Request body may
     // override with `{ "path": "..." }`; the path must not already
     // exist (VACUUM INTO refuses to overwrite).
@@ -431,7 +459,7 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
-    // Sandbox routes — all /sandbox/* paths share the X-Desk-Sandbox-Token
+    // Sandbox routes — all /sandbox/* paths share the X-Roomy-Sandbox-Token
     // auth scheme and bypass requireAuth. dispatchSandbox returns true when
     // it handled the request; false means the path isn't a sandbox route
     // and we fall through to the next branch.
@@ -508,6 +536,28 @@ export function createApp(opts: AppOptions): Server {
     if (path === "/tools/models" && method === "GET") {
       const result = await toolRoutes.listModels(pool, vault, {
         provider: query.get("provider") ?? undefined,
+        userId,
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
+    // Preview-list using a candidate API key the user is typing in the
+    // add-model form — no vault write. Lets the model picker populate
+    // dynamically once the user enters their key, before they commit by
+    // saving the model.
+    if (path === "/tools/models/preview" && method === "POST") {
+      const body = await parseBody(req) as {
+        provider?: string;
+        providerKeys?: Record<string, unknown>;
+      };
+      const providerKeys: Record<string, string> = {};
+      for (const [name, value] of Object.entries(body.providerKeys ?? {})) {
+        if (typeof value === "string") providerKeys[name] = value;
+      }
+      const result = await toolRoutes.previewModels(pool, {
+        provider: body.provider,
+        providerKeys,
         userId,
       });
       sendJson(res, 200, result);

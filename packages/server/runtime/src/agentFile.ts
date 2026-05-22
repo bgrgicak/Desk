@@ -11,8 +11,8 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { workspaceRootPath } from "@agent-desk/storage";
-import { type GoalKey, type WorkspaceKind } from "@agent-desk/shared";
+import { workspaceRootPath } from "@roomy-ai/storage";
+import { type GoalKey, type WorkspaceKind } from "@roomy-ai/shared";
 import { renderPromptBody } from "./prompt.js";
 
 export interface AgentFileInput {
@@ -60,7 +60,7 @@ export function renderAgentFile(input: AgentFileInput): string {
  * Writes the AGENTS.md file to the workspace root. Idempotent —
  * overwrites existing file contents.
  *
- * The `home` argument is the DESK_HOME root (contains `workspaces/desk/`).
+ * The `home` argument is the ROOMY_HOME root (contains `workspaces/roomy/`).
  */
 export async function writeAgentFile(
   home: string,
@@ -76,7 +76,7 @@ export async function writeAgentFile(
 /**
  * Goals where the agent will likely need to drive a browser. Only chats
  * tagged with one of these get playwright-mcp wired up via the
- * desk-mcp-bridge extension; everything else starts the sandbox without
+ * roomy-mcp-bridge extension; everything else starts the sandbox without
  * firefox/Xvfb in memory, which is the single largest baseline-resource
  * saving on the sandbox.
  *
@@ -96,13 +96,13 @@ export function chatNeedsBrowser(goal: GoalKey | null | undefined): boolean {
 
 /**
  * Writes the per-workspace `.agents/mcp.json` consumed by the
- * desk-mcp-bridge pi extension. Merges with any existing file so users
- * (or future Desk surfaces) can add their own MCP servers without
- * getting wiped on the next chat boot — Desk owns the `playwright`
+ * roomy-mcp-bridge pi extension. Merges with any existing file so users
+ * (or future Roomy surfaces) can add their own MCP servers without
+ * getting wiped on the next chat boot — Roomy owns the `playwright`
  * entry, everything else is preserved as-is.
  *
  * The shape mirrors the standard MCP `mcpServers` map (Claude Desktop /
- * opencode compatible) so user-added servers slot in without bespoke
+ * pi compatible) so user-added servers slot in without bespoke
  * config. `enabled: false` is emitted explicitly when playwright isn't
  * needed so the extension can DELETE its tools on the next session
  * boot, rather than relying on absence.
@@ -143,7 +143,7 @@ export async function writeWorkspaceMcpConfig(
       : {};
 
   // User override: if the user has hand-edited a playwright entry with
-  // `enabled: true`, Desk steps out of the way — keep whatever they
+  // `enabled: true`, Roomy steps out of the way — keep whatever they
   // wrote and skip the goal-gated managed write. The bridge respects
   // their argv/env. This is the "Lets you opt-in per workspace by
   // hand-editing" path. Side-effect: once playwright has ever been

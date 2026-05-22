@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { ID_PREFIXES, ValidationError } from "@agent-desk/shared";
+import { ID_PREFIXES, ValidationError } from "@roomy-ai/shared";
 import { workspaceRootPath } from "./layout.js";
 
 /**
@@ -13,7 +13,7 @@ import { workspaceRootPath } from "./layout.js";
  * sequence is atomic from the caller's perspective.
  *
  * In-process only (single Node process). Multiple processes touching
- * the same chat directory would still race, but Desk runs as a single
+ * the same chat directory would still race, but Roomy runs as a single
  * process today.
  */
 const chatLocks = new Map<string, Promise<unknown>>();

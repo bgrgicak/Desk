@@ -1,13 +1,13 @@
 import { afterEach, describe, it, expect } from "vitest";
 import { listModels, parseModelsOutput } from "../src/models.js";
 
-const originalSandboxDriver = process.env.DESK_SANDBOX_DRIVER;
+const originalSandboxDriver = process.env.ROOMY_SANDBOX_DRIVER;
 
 afterEach(() => {
   if (originalSandboxDriver === undefined) {
-    delete process.env.DESK_SANDBOX_DRIVER;
+    delete process.env.ROOMY_SANDBOX_DRIVER;
   } else {
-    process.env.DESK_SANDBOX_DRIVER = originalSandboxDriver;
+    process.env.ROOMY_SANDBOX_DRIVER = originalSandboxDriver;
   }
 });
 
@@ -56,20 +56,17 @@ describe("parseModelsOutput", () => {
 });
 
 describe("listModels", () => {
-  it("returns the fake-driver model set without a sandbox when DESK_SANDBOX_DRIVER=fake", async () => {
-    process.env.DESK_SANDBOX_DRIVER = "fake";
+  it("returns the fake-driver model set without a sandbox when ROOMY_SANDBOX_DRIVER=fake", async () => {
+    process.env.ROOMY_SANDBOX_DRIVER = "fake";
 
-    // Unfiltered: every fake model surfaces (free `opencode/big-pickle`
-    // + a claude entry so consumers can exercise auth-required paths).
-    const all = await listModels("wks_test", "desk");
-    expect(all.some((m) => m.id === "opencode/big-pickle")).toBe(true);
+    const all = await listModels("wks_test", "roomy");
     expect(all.some((m) => m.id === "anthropic/claude-haiku-4-5")).toBe(true);
 
-    // Filtered to anthropic — only the claude entry remains.
-    await expect(listModels("wks_test", "desk", { provider: "anthropic" })).resolves.toEqual([
+    // Filtered to anthropic — the claude entry remains.
+    await expect(listModels("wks_test", "roomy", { provider: "anthropic" })).resolves.toEqual([
       { id: "anthropic/claude-haiku-4-5", provider: "anthropic", contextWindow: 200_000, outputLimit: 64_000 },
     ]);
     // openai isn't seeded in the fake driver.
-    await expect(listModels("wks_test", "desk", { provider: "openai" })).resolves.toEqual([]);
+    await expect(listModels("wks_test", "roomy", { provider: "openai" })).resolves.toEqual([]);
   });
 });

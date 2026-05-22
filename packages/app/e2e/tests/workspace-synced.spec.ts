@@ -25,7 +25,7 @@ async function uploadText(
   name: string,
   body: string,
 ): Promise<string> {
-  const boundary = `----desk-e2e-${Math.random().toString(16).slice(2)}`;
+  const boundary = `----roomy-e2e-${Math.random().toString(16).slice(2)}`;
   const buf = Buffer.concat([
     Buffer.from(
       `--${boundary}\r\n` +

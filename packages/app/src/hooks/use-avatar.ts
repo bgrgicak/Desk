@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
-const AVATAR_KEY = (userId: string) => `desk.avatar.${userId}`
-const CHANGE_EVENT = 'desk:avatar-changed'
+const AVATAR_KEY = (userId: string) => `roomy.avatar.${userId}`
+const CHANGE_EVENT = 'roomy:avatar-changed'
 
 export function useAvatarUrl(userId: string | undefined): string | null {
   const [url, setUrl] = useState<string | null>(() =>

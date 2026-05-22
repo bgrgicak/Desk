@@ -97,28 +97,28 @@ describe("listLibrary", () => {
 
   it("projects connected local filesystem mounts as a top-level entry; drilling in lists the mount", async () => {
     const source = path.join(ctx.home, ".tmp", "connected-projects-source");
-    await fs.mkdir(path.join(source, "Desk", "packages"), { recursive: true });
-    await fs.writeFile(path.join(source, "Desk", "package.json"), "{}");
+    await fs.mkdir(path.join(source, "Roomy", "packages"), { recursive: true });
+    await fs.writeFile(path.join(source, "Roomy", "package.json"), "{}");
 
     const mounts = [{ homeName: "Projects", sourcePath: source }];
     const root = await listLibrary(ctx, ctx.workspaceSlug, { virtualMounts: mounts });
     expect(root.folders.map((f) => f.path)).toContain("Projects");
     // Sub-paths under the mount aren't included at the root level — they
     // load on navigation, same as on-disk subfolders.
-    expect(root.folders.map((f) => f.path)).not.toContain("Projects/Desk");
+    expect(root.folders.map((f) => f.path)).not.toContain("Projects/Roomy");
 
     const inside = await listLibrary(ctx, ctx.workspaceSlug, {
       path: "Projects",
       virtualMounts: mounts,
     });
-    expect(inside.folders.map((f) => f.path)).toContain("Projects/Desk");
+    expect(inside.folders.map((f) => f.path)).toContain("Projects/Roomy");
 
     const deep = await listLibrary(ctx, ctx.workspaceSlug, {
-      path: "Projects/Desk",
+      path: "Projects/Roomy",
       virtualMounts: mounts,
     });
-    expect(deep.folders.map((f) => f.path)).toContain("Projects/Desk/packages");
-    expect(deep.items.map((i) => i.path)).toContain("Projects/Desk/package.json");
+    expect(deep.folders.map((f) => f.path)).toContain("Projects/Roomy/packages");
+    expect(deep.items.map((i) => i.path)).toContain("Projects/Roomy/package.json");
   });
 
   it("does not pull a node_modules-sized subtree into the root listing", async () => {
@@ -191,7 +191,7 @@ describe("listLibrary", () => {
     expect(appItems).toHaveLength(1);
     expect(appItems[0]).toMatchObject({
       name: "single-entry.app",
-      mime: "application/vnd.desk.app+directory",
+      mime: "application/vnd.roomy.app+directory",
       isDir: true,
     });
     expect(items.map((i) => i.path)).not.toContain("single-entry.app/dist/index.html");

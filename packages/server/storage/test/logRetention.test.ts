@@ -7,7 +7,7 @@ import { ensureLayout, enforceLogRetention, trashDir } from "../src/index.js";
 let home: string;
 
 beforeEach(async () => {
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-log-retention-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-log-retention-"));
   await ensureLayout(home);
 });
 
@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 async function seedLogs(chatId: string, count: number): Promise<string[]> {
-  const dir = path.join(home, "desk", ".chats", chatId, "logs");
+  const dir = path.join(home, "roomy", ".chats", chatId, "logs");
   await fs.mkdir(dir, { recursive: true });
   const names: string[] = [];
   for (let i = 0; i < count; i++) {
@@ -46,7 +46,7 @@ describe("enforceLogRetention", () => {
     expect(res.evicted).toBe(6);
 
     const remaining = await fs.readdir(
-      path.join(home, "desk", ".chats", chatId, "logs"),
+      path.join(home, "roomy", ".chats", chatId, "logs"),
     );
     expect(remaining.length).toBe(4);
     // Survivors are the 6 newest (indices 4..9).
@@ -66,7 +66,7 @@ describe("enforceLogRetention", () => {
 
   it("returns zero when the chats directory does not exist", async () => {
     // Fresh tmpdir without ensureLayout.
-    const other = await fs.mkdtemp(path.join(os.tmpdir(), "desk-log-retention-empty-"));
+    const other = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-log-retention-empty-"));
     try {
       const res = await enforceLogRetention(other, 100);
       expect(res).toEqual({ scanned: 0, evicted: 0 });

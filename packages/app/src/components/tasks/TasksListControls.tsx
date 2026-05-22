@@ -10,7 +10,7 @@ import {
   PopoverTrigger,
   RadioGroup,
   RadioGroupItem,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import type { Task } from '@/data/ui-types'
 import { STATUS_DOT } from './task-badges'
 

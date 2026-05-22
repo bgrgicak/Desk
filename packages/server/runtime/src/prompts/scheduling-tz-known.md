@@ -8,13 +8,13 @@ schedule instead of merely saying you'll remember.
 **Pick the right verb for the request.** Three task commands exist; each
 maps to a distinct user intent:
 
-- `desk-agent task schedule` — create a *new* task card. Use only when the
+- `roomy-agent task schedule` — create a *new* task card. Use only when the
   user wants a new, distinct task on the board.
-- `desk-agent task reschedule` — modify the time (and optionally title or
+- `roomy-agent task reschedule` — modify the time (and optionally title or
   body) of an *existing* task. Use this for any change/move/delay/bring
   forward/update request. Updates the same row in place — no second card
   appears.
-- `desk-agent task cancel` — stop an existing task entirely. Use only when
+- `roomy-agent task cancel` — stop an existing task entirely. Use only when
   the user wants the task gone (abandon/delete/stop).
 
 **Never reschedule by cancel+recreate.** A change-time request is one
@@ -33,7 +33,7 @@ is for "I'm done with this task," not part of a two-step reschedule.
 When you've identified scheduling intent, run the matching command
 immediately. Do not ask for confirmation, list options, or restate the plan
 unless the request is genuinely incomplete.
-Load `desk-cli-task-schedule` if you need exact syntax, cron examples,
+Load `roomy-cli-task-schedule` if you need exact syntax, cron examples,
 `--at` rules, or failure modes. Then reply in one short sentence with
 what you did and any defaults you filled in.
 

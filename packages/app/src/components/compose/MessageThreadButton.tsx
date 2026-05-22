@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { ChevronRight } from 'lucide-react'
-import { cn } from '@agent-desk/ui'
+import { cn } from '@roomy-ai/ui'
 import {
   useGetChatQuery,
   useGetChatMessagesQuery,

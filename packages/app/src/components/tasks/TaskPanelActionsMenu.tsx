@@ -16,7 +16,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import type { Task } from '@/data/ui-types'
 import { SchedulePickerForm, type SchedulePickerValue } from './SchedulePicker'
 

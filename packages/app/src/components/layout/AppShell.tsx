@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { FileText, MessageSquare } from 'lucide-react'
 import {
@@ -14,7 +14,7 @@ import {
   CommandList,
   CommandSeparator,
   useIsMobile,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { BackgroundBlobs } from '@/components/layout/BackgroundBlobs'
 import { TopBar } from '@/components/layout/TopBar'
 import { RoomSidebar, type PinnedSidebarEntry } from '@/components/layout/RoomSidebar'
@@ -22,8 +22,8 @@ import { RoomAvatarStack } from '@/components/layout/RoomAvatarStack'
 import { SplitResizeHandle } from '@/components/shared/SplitResizeHandle'
 import { useSplitResize } from '@/components/shared/splitPane'
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
-import { SettingsModal, type WorkspaceSettingsSection } from '@/components/settings/SettingsModal'
-import { MyAccountModal, type AccountSection } from '@/components/account/MyAccountModal'
+import { SettingsModal } from '@/components/settings/SettingsModal'
+import { MyAccountModal } from '@/components/account/MyAccountModal'
 import type { Chat, Artifact } from '@/data/ui-types'
 import { useChatHierarchy } from '@/store/selectors/threads'
 import { getArtifactIcon } from '@/data/ui-types'
@@ -51,7 +51,21 @@ import {
   setSplitRatio,
 } from '@/store/slices/previewPanelSlice'
 import { PreviewPanel } from '@/components/chats/PreviewPanel'
-import { buildPath, type RouteView } from '@/router/nav'
+import {
+  buildPath,
+  encodeAccountSettings,
+  encodeWorkspaceSettings,
+  mergeSearch,
+  parseAccountSettings,
+  parseWorkspaceSettings,
+  type AccountSettingsSectionId,
+  type AccountSettingsState,
+  type ConnectionsFocus,
+  type ModelsFocus,
+  type RouteView,
+  type WorkspaceSettingsSectionId,
+  type WorkspaceSettingsState,
+} from '@/router/nav'
 import type { TopBarCrumb } from '@/components/layout/TopBar'
 
 export type View = 'pinned' | 'tasks' | 'chats' | 'context' | 'compose'
@@ -226,31 +240,77 @@ export function AppShell({
   const [isInsetDropOver, setIsInsetDropOver] = useState(false)
   const insetDropCounter = useRef(0)
 
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsInitialSection, setSettingsInitialSection] = useState<WorkspaceSettingsSection | undefined>(undefined)
-  const [myAccountOpen, setMyAccountOpen] = useState(false)
-  const [myAccountInitialSection, setMyAccountInitialSection] = useState<AccountSection | undefined>(undefined)
+  // Settings modal state lives in the URL query string so reloads
+  // preserve the open section + focus, and the global palette can deep-
+  // link by pushing `?settings=…` / `?account=…` instead of touching
+  // component state.
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams] = useSearchParams()
+  const settingsState = parseWorkspaceSettings(searchParams.get('settings'))
+  const accountState = parseAccountSettings(searchParams.get('account'))
+  const settingsOpen = settingsState !== null
+  const accountOpen = accountState !== null
 
+  // Stable callback that patches the current URL's query string. Used
+  // for every settings/account state transition so back/forward works
+  // and reload restores the open page.
+  const replaceQuery = useCallback(
+    (patch: Record<string, string | null>, replace = false) => {
+      const next = `${location.pathname}${mergeSearch(location.search, patch)}${location.hash}`
+      navigate(next, { replace })
+    },
+    [navigate, location.pathname, location.search, location.hash],
+  )
+
+  const setWorkspaceSettings = useCallback(
+    (state: WorkspaceSettingsState | null) => {
+      replaceQuery({ settings: state ? encodeWorkspaceSettings(state) : null })
+    },
+    [replaceQuery],
+  )
+  const setAccountSettings = useCallback(
+    (state: AccountSettingsState | null) => {
+      replaceQuery({ account: state ? encodeAccountSettings(state) : null })
+    },
+    [replaceQuery],
+  )
+
+  // Bridge: the redux `pendingSettingsSection` / `pendingMyAccountOpen`
+  // actions still exist for callers that don't have easy access to
+  // `navigate` (e.g. the global palette wires them through dispatch).
+  // Translate them into URL pushes and clear immediately.
   const appDispatch = useAppDispatch()
   const pendingSettingsSection = useAppSelector(s => s.ui.pendingSettingsSection)
   useEffect(() => {
     if (!pendingSettingsSection) return
-    if (pendingSettingsSection === 'workspace' || pendingSettingsSection === 'connections') {
-      setSettingsInitialSection(pendingSettingsSection)
-      setSettingsOpen(true)
+    if (
+      pendingSettingsSection === 'workspace'
+      || pendingSettingsSection === 'connections'
+    ) {
+      setWorkspaceSettings({
+        section: pendingSettingsSection,
+        connectionsFocus: null,
+      })
+    } else if (pendingSettingsSection === 'preferences') {
+      // Ambiguous between workspace + account. Match the historical
+      // global-palette mapping (Customize → workspace preferences).
+      setWorkspaceSettings({ section: 'preferences', connectionsFocus: null })
     } else {
-      setMyAccountInitialSection(pendingSettingsSection as AccountSection)
-      setMyAccountOpen(true)
+      setAccountSettings({
+        section: pendingSettingsSection as AccountSettingsSectionId,
+        modelsFocus: null,
+      })
     }
     appDispatch(setPendingSettingsSection(null))
-  }, [pendingSettingsSection, appDispatch])
+  }, [pendingSettingsSection, appDispatch, setWorkspaceSettings, setAccountSettings])
 
   const pendingMyAccountOpen = useAppSelector(s => s.ui.pendingMyAccountOpen)
   useEffect(() => {
     if (!pendingMyAccountOpen) return
-    setMyAccountOpen(true)
+    setAccountSettings({ section: 'account', modelsFocus: null })
     appDispatch(setPendingMyAccountOpen(false))
-  }, [pendingMyAccountOpen, appDispatch])
+  }, [pendingMyAccountOpen, appDispatch, setAccountSettings])
 
   const handleInsetDragEnter = (e: React.DragEvent) => {
     if (!e.dataTransfer.types.includes(DRAG_TYPE_PINNED_ITEM)) return
@@ -296,7 +356,6 @@ export function AppShell({
   // parent path provides the segments), and finally the truncated
   // file name as the leaf when a file is open. Other routes get
   // nothing (workspace-only breadcrumb).
-  const [searchParams] = useSearchParams()
   const chatHierarchy = useChatHierarchy(chats, activeWorkspaceId)
   const trailingCrumbs: TopBarCrumb[] = (() => {
     // A chat can be opened from the Library list without the route's
@@ -326,6 +385,29 @@ export function AppShell({
         label: chatTitle.length > 24 ? `${chatTitle.slice(0, 24)}…` : chatTitle,
       })
       return crumbs
+    }
+    // Library detail opened on a chat-scoped file (e.g. a file's "Open"
+    // action or the preview panel's title link). These live under
+    // `.chats/{chatId}/…`, which isn't a real Library location — showing
+    // that raw path would leak an internal directory. Trace the file to
+    // its chat instead: Home / Room / {chat title} / {filename}.
+    if (activeView === 'context' && isDetailOpen) {
+      const itemPath = searchParams.get('item') ?? ''
+      const chatScopedMatch = /^\.chats\/([^/]+)\//.exec(itemPath)
+      if (chatScopedMatch) {
+        const chatId = chatScopedMatch[1]
+        const crumbs: TopBarCrumb[] = []
+        const chatTitle = chats.find(c => c.id === chatId)?.title?.trim()
+        if (chatTitle) {
+          crumbs.push({
+            label: chatTitle.length > 24 ? `${chatTitle.slice(0, 24)}…` : chatTitle,
+            to: activeWorkspaceId ? buildPath(activeWorkspaceId, activeView, { chat: chatId }) : undefined,
+          })
+        }
+        const leafName = libraryFileName ?? itemPath.split('/').filter(Boolean).pop() ?? itemPath
+        crumbs.push({ label: truncateFileName(leafName) })
+        return crumbs
+      }
     }
     const sectionLabel = VIEW_LABELS[activeView]
     if (!sectionLabel) return []
@@ -491,14 +573,15 @@ export function AppShell({
                 onPinItem={onPinItem}
                 onPinChat={onPinChat}
                 onUnpinEntry={onUnpinEntry}
-                onOpenSettings={() => setSettingsOpen(true)}
+                onOpenSettings={() =>
+                  setWorkspaceSettings({ section: 'workspace', connectionsFocus: null })
+                }
                 username={me?.username}
                 email={me?.email}
                 userAvatarUrl={userAvatarUrl}
-                onOpenMyAccount={() => {
-                  setMyAccountInitialSection('account')
-                  setMyAccountOpen(true)
-                }}
+                onOpenMyAccount={() =>
+                  setAccountSettings({ section: 'account', modelsFocus: null })
+                }
                 onSignOut={onSignOut}
               />
             </RoomSidebarSlot>
@@ -582,10 +665,19 @@ export function AppShell({
       {/* ── Room settings modal ── */}
       <SettingsModal
         open={settingsOpen}
-        onOpenChange={setSettingsOpen}
+        onOpenChange={(open) => {
+          if (!open) setWorkspaceSettings(null)
+        }}
         workspace={activeWorkspace}
         canDeleteWorkspace={workspaces.length > 1}
-        initialSection={settingsInitialSection}
+        activeSection={settingsState?.section ?? 'workspace'}
+        onChangeSection={(section: WorkspaceSettingsSectionId) =>
+          setWorkspaceSettings({ section, connectionsFocus: null })
+        }
+        connectionsFocus={settingsState?.connectionsFocus ?? null}
+        onChangeConnectionsFocus={(focus: ConnectionsFocus) =>
+          setWorkspaceSettings({ section: 'connections', connectionsFocus: focus })
+        }
         onUpdateWorkspace={updated => {
           void patchWorkspaceMutation({
             id: updated.id,
@@ -606,9 +698,18 @@ export function AppShell({
       />
 
       <MyAccountModal
-        open={myAccountOpen}
-        onOpenChange={setMyAccountOpen}
-        initialSection={myAccountInitialSection}
+        open={accountOpen}
+        onOpenChange={(open) => {
+          if (!open) setAccountSettings(null)
+        }}
+        activeSection={accountState?.section ?? 'account'}
+        onChangeSection={(section: AccountSettingsSectionId) =>
+          setAccountSettings({ section, modelsFocus: null })
+        }
+        modelsFocus={accountState?.modelsFocus ?? null}
+        onChangeModelsFocus={(focus: ModelsFocus) =>
+          setAccountSettings({ section: 'models', modelsFocus: focus })
+        }
       />
 
       {/* ── Chat search command palette ── */}

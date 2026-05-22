@@ -6,28 +6,28 @@ import { createPool, transact } from "../src/pool.js";
 import { runMigrations } from "../src/migrate.js";
 
 let tmpDir: string;
-const savedEnv = process.env.DESK_DB_PATH;
+const savedEnv = process.env.ROOMY_DB_PATH;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "desk-pool-cfg-"));
+  tmpDir = mkdtempSync(join(tmpdir(), "roomy-pool-cfg-"));
 });
 
 afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
-  if (savedEnv === undefined) delete process.env.DESK_DB_PATH;
-  else process.env.DESK_DB_PATH = savedEnv;
+  if (savedEnv === undefined) delete process.env.ROOMY_DB_PATH;
+  else process.env.ROOMY_DB_PATH = savedEnv;
 });
 
 describe("pool path resolution", () => {
-  it("opens the file at DESK_DB_PATH when no explicit path is passed", async () => {
+  it("opens the file at ROOMY_DB_PATH when no explicit path is passed", async () => {
     // Pre-fix regression: production main.ts called createPool with a
     // hardcoded postgres connection string, which routed to a tmp-file
     // via a now-deleted test compat shim and silently bypassed
-    // DESK_DB_PATH. The DB ended up on tmpfs and was wiped between
+    // ROOMY_DB_PATH. The DB ended up on tmpfs and was wiped between
     // restarts. We keep this test as a guardrail against regressions
     // in the resolution order.
-    const dbPath = join(tmpDir, "desk.db");
-    process.env.DESK_DB_PATH = dbPath;
+    const dbPath = join(tmpDir, "roomy.db");
+    process.env.ROOMY_DB_PATH = dbPath;
 
     const pool = createPool();
     await runMigrations(pool);
@@ -37,10 +37,10 @@ describe("pool path resolution", () => {
     expect(statSync(dbPath).size).toBeGreaterThan(0);
   });
 
-  it("explicit path wins over DESK_DB_PATH (test isolation)", async () => {
+  it("explicit path wins over ROOMY_DB_PATH (test isolation)", async () => {
     const envPath = join(tmpDir, "env.db");
     const explicitPath = join(tmpDir, "explicit.db");
-    process.env.DESK_DB_PATH = envPath;
+    process.env.ROOMY_DB_PATH = envPath;
 
     const pool = createPool({ path: explicitPath });
     await runMigrations(pool);

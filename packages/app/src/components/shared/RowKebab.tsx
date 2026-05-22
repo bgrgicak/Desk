@@ -5,7 +5,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuTrigger,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 
 type Align = NonNullable<ComponentProps<typeof DropdownMenuContent>['align']>
 type Side = NonNullable<ComponentProps<typeof DropdownMenuContent>['side']>

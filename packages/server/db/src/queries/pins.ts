@@ -1,5 +1,5 @@
 import { type Pool } from "../pool.js";
-import { PinSchema, type Pin, type PinKind } from "@agent-desk/shared";
+import { PinSchema, type Pin, type PinKind } from "@roomy-ai/shared";
 
 function rowToPin(row: Record<string, unknown>): Pin {
   return PinSchema.parse({

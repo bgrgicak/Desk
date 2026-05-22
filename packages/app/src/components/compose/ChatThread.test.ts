@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { isDeveloperOnlyMessageVisible, isMessageVisible, isRegularMessageVisible } from './messageVisibility'
-import { currentChatMessagesData, failureDetailForAgentTurn, findActiveAgentTurn, findFailedAgentTurn, findFailedOrDiagnosticAgentTurn, isFailedRunDiagnosticMessage, liveAssistantTextMessage, liveDeveloperProgressMessage, progressTextFromLog, shouldShowNewAssistantBadge, shouldShowToolOnlyRunFallback } from './ChatThread'
+import { currentChatMessagesData, failureDetailForAgentTurn, findActiveAgentTurn, findFailedAgentTurn, findFailedOrDiagnosticAgentTurn, isFailedRunDiagnosticMessage, liveAssistantTextMessage, liveDeveloperProgressMessage, progressTextFromLog, sameMessageGroup, shouldShowNewAssistantBadge, shouldShowToolOnlyRunFallback } from './ChatThread'
 import type { ListMessagesResponse, ServerMessage } from '@/store/types'
 
 function message(content: ServerMessage['content'], overrides: Partial<ServerMessage> = {}): ServerMessage {
@@ -88,7 +88,7 @@ describe('isMessageVisible', () => {
   it('keeps structured skill/read payloads with error words developer-only', () => {
     const skillPayload = message({
       type: 'events',
-      log: [{ kind: 'stderr', line: '<path>/home/agent/.config/opencode/skills/desk-goal-app/SKILL.md</path> <type>file</type> <content>error handling notes</content>' }],
+      log: [{ kind: 'stderr', line: '<path>/home/agent/.config/pi/skills/roomy-goal-app/SKILL.md</path> <type>file</type> <content>error handling notes</content>' }],
     })
 
     expect(isMessageVisible(skillPayload, false)).toBe(false)
@@ -99,7 +99,7 @@ describe('isMessageVisible', () => {
   it('keeps escaped structured skill payloads with error words developer-only', () => {
     const skillPayload = message({
       type: 'events',
-      log: [{ kind: 'stderr', line: '&lt;skill_content name="desk-cli-task-schedule"&gt;failure modes and error handling&lt;/skill_content&gt;' }],
+      log: [{ kind: 'stderr', line: '&lt;skill_content name="roomy-cli-task-schedule"&gt;failure modes and error handling&lt;/skill_content&gt;' }],
     })
 
     expect(isMessageVisible(skillPayload, false)).toBe(false)
@@ -390,7 +390,7 @@ describe('findFailedOrDiagnosticAgentTurn', () => {
             type: 'tool',
             part: {
               tool: 'skill',
-              content: '<skill_content name="desk-cli-task-schedule">failure modes and error handling</skill_content>',
+              content: '<skill_content name="roomy-cli-task-schedule">failure modes and error handling</skill_content>',
             },
           },
         }],
@@ -410,7 +410,7 @@ describe('findFailedOrDiagnosticAgentTurn', () => {
         type: 'events',
         log: [
           { kind: 'event', event: { type: 'tool', part: { tool: 'skill' } } },
-          { kind: 'unparsed', line: '<skill_content name="desk-goal-app">reference text</skill_content>' },
+          { kind: 'unparsed', line: '<skill_content name="roomy-goal-app">reference text</skill_content>' },
         ],
       }, { role: 'agent', id: '3' }),
     ]
@@ -427,7 +427,7 @@ describe('findFailedOrDiagnosticAgentTurn', () => {
       message({
         type: 'events',
         log: [
-          { kind: 'stderr', line: '<path>/home/agent/.config/opencode/skills/desk-goal-app/SKILL.md</path> <type>file</type> <content>failure modes and error handling</content>' },
+          { kind: 'stderr', line: '<path>/home/agent/.config/pi/skills/roomy-goal-app/SKILL.md</path> <type>file</type> <content>failure modes and error handling</content>' },
         ],
       }, { role: 'agent', id: '3' }),
     ]
@@ -444,7 +444,7 @@ describe('findFailedOrDiagnosticAgentTurn', () => {
       message({
         type: 'events',
         log: [
-          { kind: 'stderr', line: '&lt;skill_content name="desk-goal-app"&gt;failure modes and error handling&lt;/skill_content&gt;' },
+          { kind: 'stderr', line: '&lt;skill_content name="roomy-goal-app"&gt;failure modes and error handling&lt;/skill_content&gt;' },
         ],
       }, { role: 'agent', id: '3' }),
     ]
@@ -486,7 +486,7 @@ describe('progressTextFromLog', () => {
     ])).toBe('Running')
   })
 
-  it('surfaces generic OpenCode tool events by tool name', () => {
+  it('surfaces generic pi tool events by tool name', () => {
     expect(progressTextFromLog([
       { kind: 'event', event: { type: 'tool', part: { name: 'read' } } },
     ])).toBe('Reading')
@@ -664,5 +664,28 @@ describe('shouldShowToolOnlyRunFallback', () => {
     ]
 
     expect(shouldShowToolOnlyRunFallback(items, false)).toBe(false)
+  })
+})
+
+describe('sameMessageGroup', () => {
+  const at = (iso: string, overrides: Partial<ServerMessage> = {}) =>
+    message({ type: 'text', text: 'x' }, { role: 'agent', createdAt: iso, ...overrides })
+
+  it('groups same-role messages within the 3s window', () => {
+    expect(sameMessageGroup(at('2026-05-22T10:00:00.000Z'), at('2026-05-22T10:00:02.500Z'))).toBe(true)
+  })
+
+  it('does not group messages more than 3s apart', () => {
+    expect(sameMessageGroup(at('2026-05-22T10:00:00.000Z'), at('2026-05-22T10:00:03.001Z'))).toBe(false)
+  })
+
+  it('never groups messages from different roles', () => {
+    const user = at('2026-05-22T10:00:00.000Z', { role: 'user' })
+    const agent = at('2026-05-22T10:00:00.500Z', { role: 'agent' })
+    expect(sameMessageGroup(user, agent)).toBe(false)
+  })
+
+  it('treats a missing neighbour as a group boundary', () => {
+    expect(sameMessageGroup(undefined, at('2026-05-22T10:00:00.000Z'))).toBe(false)
   })
 })

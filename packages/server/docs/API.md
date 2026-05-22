@@ -125,7 +125,7 @@ Soft-deletes a chat. In order:
 
 1. Cancels any scheduler refs on pending/recurring messages in the chat (same helper used by `DELETE /chats/{id}/messages/{messageId}`).
 2. Drops the chat row from SQLite; `ON DELETE CASCADE` removes its messages.
-3. Moves the chat's on-disk subtree `~/Desk/desk/.chats/{chatId}/` to `~/Desk/.trash/{chatId}-{timestamp}/` (not `rm -rf`).
+3. Moves the chat's on-disk subtree `~/Roomy/roomy/.chats/{chatId}/` to `~/Roomy/.trash/{chatId}-{timestamp}/` (not `rm -rf`).
 4. Broadcasts `chat.deleted` with `{chatId, workspaceId}` over WS to the chat's workspace room.
 
 Returns `{ ok: true }`. Subsequent DELETE returns 404. Cross-tenant DELETE returns 404, never 403.
@@ -153,7 +153,7 @@ Messages carry one of:
 
 - `{ type: "text", text }` — plain conversation
 - `{ type: "toolCall", toolName, args }` / `{ type: "toolResult", ... }` — sandbox tool use
-- `{ type: "events", events: [...] }` — captured opencode event stream
+- `{ type: "events", events: [...] }` — captured pi event stream
 - `{ type: "artifactRef", path, name?, mime? }` — workspace-relative file reference
 - `{ type: "summary", body }` — a running AI-generated summary of the chat; hidden unless developer mode is enabled, editable via PATCH
 - `{ type: "summary_request" }` — a scheduled system message that triggers a summary refresh when fired
@@ -172,7 +172,7 @@ Messages grow optional execution fields (added M6a):
 | `agentId` | agent outputs | which agent produced it |
 | `schedulerRef` | scheduled messages | `{ kind: 'at'|'cron', id }` — the at/cron entry this message owns |
 | `startedAt` / `endedAt` | running/completed | execution timing |
-| `attachments` | user messages with uploads | array of `{ path, name, mime?, size? }` — files or directories the user attached to *this* message; paths are workspace-root-relative (chat-owned uploads land under `.chats/{chatId}/attachments/`, library mentions point straight at the library item or folder) and are forwarded to opencode as `--file` flags when the trigger fires |
+| `attachments` | user messages with uploads | array of `{ path, name, mime?, size? }` — files or directories the user attached to *this* message; paths are workspace-root-relative (chat-owned uploads land under `.chats/{chatId}/attachments/`, library mentions point straight at the library item or folder) and are forwarded to pi as `--file` flags when the trigger fires |
 | `model` | agent outputs | model id that produced the row, stamped at insert time; historical rows keep their original model even if the agent is later reconfigured |
 
 ### POST /chats/{id}/messages
@@ -182,7 +182,7 @@ Body: `{ content: string, attachments?: AttachmentRef[], goal?: string | null }`
 file or a directory — chat uploads (`POST /chats/{id}/attachments`),
 library files, and library folders all share the same wire shape. The
 server persists them on the user message envelope and `fireMessage`
-forwards each path to opencode via a `--file` flag (opencode accepts
+forwards each path to pi via a `--file` flag (pi accepts
 both files and directories), so the agent sees the contents of every
 attached path when the trigger fires.
 
@@ -228,13 +228,13 @@ pagination direction.
 ### DELETE /chats/{id}/messages/{messageId}
 
 Deletes the message and, if a `schedulerRef` is set, cancels the at/cron
-entry. Moves the execution log file to `~/Desk/.trash/` if present.
+entry. Moves the execution log file to `~/Roomy/.trash/` if present.
 
 ### GET /chats/{id}/messages/{messageId}/logs
 
 Streams the execution log file (stdout/stderr) for a running or completed
 message. Served directly from
-`~/Desk/desk/.chats/{chatId}/logs/{messageId}.log`. Returns
+`~/Roomy/roomy/.chats/{chatId}/logs/{messageId}.log`. Returns
 404 when no log has been produced.
 
 ### GET /chats/{id}/messages/{messageId}/summary-history
@@ -243,7 +243,7 @@ Returns every archived version of a `summary`-content message, newest first.
 Response shape: `{ versions: [{ timestamp, body }, ...] }`. Snapshots are
 written automatically when a summary is PATCH-edited or when `fireMessage`
 replaces it during an AI rewrite; files live under
-`~/Desk/desk/.chats/{chatId}/notes/.history/`. The endpoint also
+`~/Roomy/roomy/.chats/{chatId}/notes/.history/`. The endpoint also
 reads legacy `.chats/{chatId}/note-history/` and
 `.chats/{chatId}/summary-history/` snapshots for compatibility. Empty array
 when nothing has been snapshotted yet.
@@ -256,8 +256,8 @@ clients.
 
 ### Sandbox: POST /sandbox/artifacts
 
-Sandbox-token only (`X-Desk-Sandbox-Token`). Called by
-`desk-agent chat attach-artifact` from inside an agent run after the agent
+Sandbox-token only (`X-Roomy-Sandbox-Token`). Called by
+`roomy-agent chat attach-artifact` from inside an agent run after the agent
 writes a file. Body is `{ chatId, path, name?, mime? }`, where `path` is a
 workspace-relative path to an existing file, usually
 `.chats/{chatId}/artifacts/{file}`. Inserts an agent message with
@@ -283,21 +283,21 @@ Partial update. Body is `{ providers: { NAME: VALUE | null, ... } }`. A
 `null` value deletes the named key; any string value sets it. Names not
 present in the body are left untouched. Unknown names return 400.
 
-The set of known names is `CONNECTION_ENV_VARS` in `@agent-desk/shared`. In
+The set of known names is `CONNECTION_ENV_VARS` in `@roomy-ai/shared`. In
 dev, model-provider values seed from the repo's `.env` once per user (gated by
-`DESK_DEV=1`); in prod, the UI is the only way to populate them. Model
+`ROOMY_DEV=1`); in prod, the UI is the only way to populate them. Model
 provider keys are global user settings. Non-model sandbox credentials such as
 `GITHUB_TOKEN` are only forwarded to a workspace when that workspace has a
 `workspace_connector_grants` row for the saved connection. A granted
 `GITHUB_TOKEN` is forwarded into sandboxes as `GITHUB_TOKEN`/`GH_TOKEN`, and
-OpenCode runs prepare non-interactive HTTPS git auth via `GIT_ASKPASS`.
+pi runs prepare non-interactive HTTPS git auth via `GIT_ASKPASS`.
 For GitHub, Workspace Settings → Connections currently guides users to create a
 classic personal access token with the `repo` scope, plus `workflow` when agents
 should edit GitHub Actions workflow files.
 
 ### GET /me/providers/local
 
-Lists every host-detected local model source — providers Desk auto-detects
+Lists every host-detected local model source — providers Roomy auto-detects
 on the user's host machine and bridges into the sandbox via env vars rather
 than API keys. The first such source is **Codex** (the ChatGPT-subscription
 auth blob the Codex CLI stores at `~/.codex/auth.json`); LM Studio and
@@ -317,7 +317,7 @@ Response: `{ sources: Array<{ kind, available, enabled, reason?, detail? }> }`.
 Body `{ enabled: boolean }`. Toggles the user's opt-in for the given
 local source. When opted in, the runtime calls each source's `loadEnv()`
 on every sandbox spawn / exec and forwards the resulting env vars (e.g.
-`OPENCODE_AUTH_CONTENT` for Codex). Returns the updated source state.
+`PI_AUTH_JSON_BASE64` for Codex). Returns the updated source state.
 
 `404` for unknown kinds; `400` for missing/non-boolean `enabled`.
 
@@ -332,13 +332,13 @@ on every sandbox spawn / exec and forwards the resulting env vars (e.g.
 | POST   | /library?workspaceId=          | Upload to library (multipart/form-data)         |
 | PUT    | /library/content?path=&workspaceId=  | Save content to a file (upsert — creates if missing) |
 | POST   | /library/link?workspaceId=     | Save a URL as a host-native shortcut file       |
-| DELETE | /library?path=&workspaceId=    | Move a library file to `~/Desk/.trash/`         |
+| DELETE | /library?path=&workspaceId=    | Move a library file to `~/Roomy/.trash/`         |
 | GET    | /library/meta?path=&workspaceId=     | Stat a library file                       |
 | GET    | /library/content?path=&workspaceId=  | Stream a library file inline (for preview)      |
 | GET    | /library/download?path=&workspaceId= | Stream a library file (for download)            |
 
 Library files live flat at the workspace root on disk
-(`~/Desk/desk/`). There is no DB index; the list endpoint reads one
+(`~/Roomy/roomy/`). There is no DB index; the list endpoint reads one
 directory at a time (no recursion) and skips dot-prefixed entries
 (`.chats/`, `.memory/`, etc.) unless `showHidden=true` is set. Use
 `/library/folders` when you need the full folder tree (move-picker,
@@ -426,7 +426,7 @@ Removed in M6. Execution state and scheduling both live on the
   and a `schedulerRef` pointing at the at/cron entry. See PATCH on
   `/chats/{id}/messages/{messageId}` to reschedule or cancel.
 - Logs are a file at
-  `~/Desk/desk/.chats/{chatId}/logs/{messageId}.log`, served
+  `~/Roomy/roomy/.chats/{chatId}/logs/{messageId}.log`, served
   by `GET /chats/{id}/messages/{messageId}/logs`.
 
 ## Tools
@@ -437,28 +437,28 @@ Removed in M6. Execution state and scheduling both live on the
 
 ### GET /tools/models
 
-Returns AI models that are ready to use — every entry is a provider opencode
+Returns AI models that are ready to use — every entry is a provider pi
 has authenticated inside the sandbox via a host-forwarded API key. Models are
-server-wide (governed by the keys in `/etc/desk-server/env`), not agent-scoped.
+server-wide (governed by the keys in `/etc/roomy-server/env`), not agent-scoped.
 
 Foundation of host-initiated sandboxed tool calling described in
-[ARCHITECTURE.md §7](./ARCHITECTURE.md). Internally this execs `opencode models`
-in a warm sandbox because opencode is the source of truth for what's
+[ARCHITECTURE.md §7](./ARCHITECTURE.md). Internally this execs `pi --list-models`
+in a warm sandbox because pi is the source of truth for what's
 authenticated.
 
 **Query parameters:**
 
-- `provider` (optional) — restrict to a single provider, e.g. `opencode`
+- `provider` (optional) — restrict to a single provider, e.g. `anthropic`
 
 **Response:** bare array, matching `/workspaces`, `/agents`, `/runs`.
 
 ```json
 [
-  { "id": "opencode/big-pickle", "provider": "opencode" }
+  { "id": "anthropic/claude-haiku-4-5", "provider": "anthropic" }
 ]
 ```
 
-`id` is opencode's canonical model id — pass it straight to `opencode run --model`.
+`id` is pi's canonical model id — pass it straight to `pi --model`.
 `provider` is denormalised so UIs can group or filter without splitting the id.
 
 If no container runtime is reachable, the endpoint returns `503` with

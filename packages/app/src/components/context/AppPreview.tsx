@@ -1,5 +1,5 @@
 /**
- * Live preview for a chat-artifact app's `desk.app.json` manifest.
+ * Live preview for a chat-artifact app's `roomy.app.json` manifest.
  *
  * On mount the parent SPA calls `POST /apps/chat/:chatId/:appName/issue`
  * with its bearer token; the server mints a per-app session and returns
@@ -231,19 +231,19 @@ export function AppPreview(props: AppPreviewProps) {
 export function parseChatAppManifestPath(
   p: string,
 ): { chatId: string; appName: string } | null {
-  const m = /^\.chats\/([^/]+)\/artifacts\/([a-z][a-z0-9-]{0,62})\.app\/desk\.app\.json$/.exec(p)
+  const m = /^\.chats\/([^/]+)\/artifacts\/([a-z][a-z0-9-]{0,62})\.app\/roomy\.app\.json$/.exec(p)
   if (!m) return null
   return { chatId: m[1], appName: m[2] }
 }
 
 /**
- * Parses a workspace-relative path of the form `<name>.app/desk.app.json`
+ * Parses a workspace-relative path of the form `<name>.app/roomy.app.json`
  * (a library app's manifest). Returns null when the path doesn't match.
  * `subpath/<name>.app/...` library apps under a subfolder also match —
  * the appName is the basename of the directory chain's leaf.
  */
 export function parseLibraryAppManifestPath(p: string): { appName: string } | null {
-  const m = /(?:^|\/)([a-z][a-z0-9-]{0,62})\.app\/desk\.app\.json$/.exec(p)
+  const m = /(?:^|\/)([a-z][a-z0-9-]{0,62})\.app\/roomy\.app\.json$/.exec(p)
   if (!m) return null
   // Reject the chat-artifact form so callers can pick the right scope
   // unambiguously.
@@ -252,14 +252,14 @@ export function parseLibraryAppManifestPath(p: string): { appName: string } | nu
 }
 
 function libraryAppPathFromManifestPath(p: string): string {
-  return p.slice(0, -'/desk.app.json'.length)
+  return p.slice(0, -'/roomy.app.json'.length)
 }
 
 /**
  * Parses a workspace-relative path that points at a `<name>.app/`
- * directory itself (no `desk.app.json` suffix). Used when the user
+ * directory itself (no `roomy.app.json` suffix). Used when the user
  * clicks the directory entry in the library list — ContextDetail then
- * resolves `<dir>/desk.app.json` for the manifest.
+ * resolves `<dir>/roomy.app.json` for the manifest.
  */
 export function parseLibraryAppDirPath(p: string): { appName: string } | null {
   const m = /(?:^|\/)([a-z][a-z0-9-]{0,62})\.app$/.exec(p)
@@ -289,19 +289,19 @@ export function parseChatAppFragmentPath(
 
 /**
  * Built-in apps are attached with their in-sandbox path
- * `/opt/desk-apps/<name>.app/dist/...` (mirrors `APPS_SANDBOX_MOUNT_DIR`
- * in @agent-desk/runtime). This parser recognizes those paths so the
+ * `/opt/roomy-apps/<name>.app/dist/...` (mirrors `APPS_SANDBOX_MOUNT_DIR`
+ * in @roomy-ai/runtime). This parser recognizes those paths so the
  * chat UI can render them via the global app scope.
  */
 export function parseGlobalAppPath(
   p: string,
 ): { appName: string; fragment?: string } | null {
   const fragmentMatch =
-    /^\/opt\/desk-apps\/([a-z][a-z0-9-]{0,62})\.app\/dist\/fragments\/([a-z][a-z0-9-]{0,62})(?:\/(?:index\.html)?)?$/.exec(
+    /^\/opt\/roomy-apps\/([a-z][a-z0-9-]{0,62})\.app\/dist\/fragments\/([a-z][a-z0-9-]{0,62})(?:\/(?:index\.html)?)?$/.exec(
       p,
     )
   if (fragmentMatch) return { appName: fragmentMatch[1], fragment: fragmentMatch[2] }
-  const appMatch = /^\/opt\/desk-apps\/([a-z][a-z0-9-]{0,62})\.app(?:\/dist(?:\/(?:index\.html)?)?)?$/.exec(p)
+  const appMatch = /^\/opt\/roomy-apps\/([a-z][a-z0-9-]{0,62})\.app(?:\/dist(?:\/(?:index\.html)?)?)?$/.exec(p)
   if (appMatch) return { appName: appMatch[1] }
   return null
 }
@@ -328,7 +328,7 @@ export function appAttachmentToPreview(
   | { scope: 'global'; appName: string; fragment?: string }
   | null {
   // Global scope is checked first: built-in app paths under
-  // `/opt/desk-apps/<name>.app/...` would otherwise match the (looser)
+  // `/opt/roomy-apps/<name>.app/...` would otherwise match the (looser)
   // library parser, which accepts any `<name>.app/...` form.
   const globalApp = parseGlobalAppPath(path)
   if (globalApp) {

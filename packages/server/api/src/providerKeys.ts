@@ -1,8 +1,8 @@
-import { type Pool, queries } from "@agent-desk/db";
-import { CONNECTION_ENV_VARS, SANDBOX_CONNECTION_ENV_VARS } from "@agent-desk/shared";
+import { type Pool, queries } from "@roomy-ai/db";
+import { CONNECTION_ENV_VARS, SANDBOX_CONNECTION_ENV_VARS } from "@roomy-ai/shared";
 import type { VaultStore } from "./vault/store.js";
 import { readCredentials } from "./connectors/credentialStore.js";
-import { withModule } from "@agent-desk/shared/logger";
+import { withModule } from "@roomy-ai/shared/logger";
 const log = withModule("api/providerKeys");
 
 /**
@@ -50,19 +50,18 @@ export async function resolveProviderKeys(
   userId?: string,
   workspaceId?: string,
 ): Promise<Record<string, string>> {
-  let resolvedUserId = userId;
-  if (!resolvedUserId) {
-    const { rows } = await pool.query<{ id: string }>("SELECT id FROM users ORDER BY created_at LIMIT 1");
-    if (rows.length === 0) return {};
-    resolvedUserId = rows[0].id;
-  }
+  // No userId → no keys. Refuse to fall back to "the first user in the
+  // table" — that would silently forward one user's credentials to a
+  // caller that hasn't proven they're that user. Better to return {} and
+  // let the sandbox surface a missing-key error than to leak a key.
+  if (!userId) return {};
 
   const ctx: ResolutionContext = {
     pool,
     vault,
-    userId: resolvedUserId,
+    userId,
     workspaceId,
-    providerMeta: await queries.userSettings.getProviderMeta(pool, resolvedUserId),
+    providerMeta: await queries.userSettings.getProviderMeta(pool, userId),
     workspaceGrants: workspaceId ? await queries.connectors.listWorkspaceGrants(pool, workspaceId) : [],
   };
 
@@ -70,9 +69,9 @@ export async function resolveProviderKeys(
   // is about to return empty, and one log line per call is enough signal
   // to debug "I added a key but the sandbox can't see it" without
   // multiplying noise by the number of registered providers.
-  if (vault && vault.isLocked(resolvedUserId)) {
+  if (vault && vault.isLocked(userId)) {
     log.warn(
-      `resolveProviderKeys: vault is locked for user ${resolvedUserId} — ` +
+      `resolveProviderKeys: vault is locked for user ${userId} — ` +
         `no connector credentials will be forwarded to the sandbox until /vault/unlock`,
     );
   }
@@ -96,7 +95,7 @@ export async function resolveProviderKeys(
 /**
  * Built once per resolve call. Today the registry is fully derived from
  * `CONNECTION_ENV_VARS` — adding a new LLM key (extend `PROVIDER_KEY_VARS`
- * in `@agent-desk/shared`) or a new tool token (extend
+ * in `@roomy-ai/shared`) or a new tool token (extend
  * `SANDBOX_CONNECTION_ENV_VARS`) automatically makes it resolvable here
  * with zero changes to this file. The matching DB row is written by
  * `PUT /me/providers` with `providerId = <env-var-name>` and credentials

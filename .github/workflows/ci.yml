@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  DESK_DEV: "1"
+  ROOMY_DEV: "1"
 
 jobs:
   prepare-server-dist:
@@ -30,7 +30,7 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build @agent-desk/api (+ deps) for tests
+      - name: Build @roomy-ai/api (+ deps) for tests
         # The Playwright fixture (`packages/app/e2e/fixtures/server.ts`)
         # spawns `node packages/server/api/dist/main.js`. Build the local server
         # workspaces in dependency order so the spawned process resolves through
@@ -64,14 +64,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build desk/sandbox:v1 image (multi-arch, loaded into local docker for tests)
+      - name: Build roomy/sandbox:v1 image (multi-arch, loaded into local docker for tests)
         # The image bakes a baseline `agent` user at UID 2000. At runtime
-        # desk-server overrides this with `--user $(id -u):$(id -g)` of
+        # roomy-server overrides this with `--user $(id -u):$(id -g)` of
         # the host process (or 0:0 under rootless docker), so the build
         # arg doesn't need tuning per-runner.
         #
         # Inject commit metadata via OCI labels so `docker inspect
-        # desk/sandbox:v1` on the runtime host can identify which commit
+        # roomy/sandbox:v1` on the runtime host can identify which commit
         # produced the image. The Dockerfile sets the static labels
         # (title, description, source, license); these three are the
         # commit-specific ones CI knows.
@@ -89,9 +89,9 @@ jobs:
             --label "org.opencontainers.image.version=${{ github.ref_name }}" \
             --load \
             --platform linux/amd64 \
-            -t desk/sandbox:v1 .
+            -t roomy/sandbox:v1 .
 
-      - name: Verify desk/sandbox:v1 builds for arm64 too
+      - name: Verify roomy/sandbox:v1 builds for arm64 too
         # Multi-arch consumers (Apple Silicon contributors, arm cloud
         # hosts) need the Dockerfile to keep working under emulation.
         # This step's outputs aren't loaded into the local docker —
@@ -101,14 +101,14 @@ jobs:
           docker buildx build \
             -f packages/server/runtime/Dockerfile.sandbox \
             --platform linux/arm64 \
-            -t desk/sandbox:v1-arm64 .
+            -t roomy/sandbox:v1-arm64 .
 
-      - name: Smoke-test desk/sandbox:v1
+      - name: Smoke-test roomy/sandbox:v1
         # The image build can succeed while the entrypoint is broken
-        # (missing binary, bad PATH, busted /opt/desk-template/). Run
-        # the desk-agent binary that the sandbox is supposed to ship
+        # (missing binary, bad PATH, busted /opt/roomy-template/). Run
+        # the roomy-agent binary that the sandbox is supposed to ship
         # — if exit is non-zero the image isn't usable.
-        run: docker run --rm desk/sandbox:v1 desk-agent --help > /dev/null
+        run: docker run --rm roomy/sandbox:v1 roomy-agent --help > /dev/null
 
       - name: Reproducible-build sanity check
         # Build the same Dockerfile a second time against the same
@@ -127,9 +127,9 @@ jobs:
             -f packages/server/runtime/Dockerfile.sandbox \
             --build-arg SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH \
             --load --platform linux/amd64 \
-            -t desk/sandbox:v1-repro .
-          ORIGINAL=$(docker image inspect desk/sandbox:v1 --format '{{.Id}}')
-          REBUILT=$(docker image inspect desk/sandbox:v1-repro --format '{{.Id}}')
+            -t roomy/sandbox:v1-repro .
+          ORIGINAL=$(docker image inspect roomy/sandbox:v1 --format '{{.Id}}')
+          REBUILT=$(docker image inspect roomy/sandbox:v1-repro --format '{{.Id}}')
           echo "first build:  $ORIGINAL"
           echo "second build: $REBUILT"
           if [ "$ORIGINAL" != "$REBUILT" ]; then
@@ -140,14 +140,14 @@ jobs:
             # made reproducible (Phase 6.18 second pass).
           fi
 
-      - name: Export desk/sandbox:v1 image
-        run: docker save desk/sandbox:v1 | gzip > "$RUNNER_TEMP/desk-sandbox-v1.tar.gz"
+      - name: Export roomy/sandbox:v1 image
+        run: docker save roomy/sandbox:v1 | gzip > "$RUNNER_TEMP/roomy-sandbox-v1.tar.gz"
 
       - name: Upload sandbox image
         uses: actions/upload-artifact@v4
         with:
-          name: desk-sandbox-v1
-          path: ${{ runner.temp }}/desk-sandbox-v1.tar.gz
+          name: roomy-sandbox-v1
+          path: ${{ runner.temp }}/roomy-sandbox-v1.tar.gz
           if-no-files-found: error
           retention-days: 1
 
@@ -164,16 +164,15 @@ jobs:
           node-version: "23"
           cache: npm
 
-      - name: Stage DESK_HOME (avoid /opt/desk fallback)
-        # The DB is a SQLite file under DESK_HOME; tests that share state
+      - name: Stage ROOMY_HOME (avoid /opt/roomy fallback)
+        # The DB is a SQLite file under ROOMY_HOME; tests that share state
         # across pools route to a per-process temp file derived from the
-        # connection string they pass, so DESK_DB_PATH only needs to be
+        # connection string they pass, so ROOMY_DB_PATH only needs to be
         # set for tests that explicitly read it.
         run: |
-          mkdir -p "$RUNNER_TEMP/desk-home"
-          echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
-          echo "DESK_VAULT_PASSWORD=ci-vault-password" >> "$GITHUB_ENV"
-          echo "DESK_DB_PATH=$RUNNER_TEMP/desk-home/.database/desk.sqlite3" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/roomy-home"
+          echo "ROOMY_HOME=$RUNNER_TEMP/roomy-home" >> "$GITHUB_ENV"
+          echo "ROOMY_DB_PATH=$RUNNER_TEMP/roomy-home/.database/roomy.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
         run: npm ci
@@ -211,16 +210,15 @@ jobs:
           node-version: "23"
           cache: npm
 
-      - name: Stage DESK_HOME (avoid /opt/desk fallback)
-        # The DB is a SQLite file under DESK_HOME; tests that share state
+      - name: Stage ROOMY_HOME (avoid /opt/roomy fallback)
+        # The DB is a SQLite file under ROOMY_HOME; tests that share state
         # across pools route to a per-process temp file derived from the
-        # connection string they pass, so DESK_DB_PATH only needs to be
+        # connection string they pass, so ROOMY_DB_PATH only needs to be
         # set for tests that explicitly read it.
         run: |
-          mkdir -p "$RUNNER_TEMP/desk-home"
-          echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
-          echo "DESK_VAULT_PASSWORD=ci-vault-password" >> "$GITHUB_ENV"
-          echo "DESK_DB_PATH=$RUNNER_TEMP/desk-home/.database/desk.sqlite3" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/roomy-home"
+          echo "ROOMY_HOME=$RUNNER_TEMP/roomy-home" >> "$GITHUB_ENV"
+          echo "ROOMY_DB_PATH=$RUNNER_TEMP/roomy-home/.database/roomy.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
         run: npm ci
@@ -249,12 +247,11 @@ jobs:
           node-version: "23"
           cache: npm
 
-      - name: Stage DESK_HOME (avoid /opt/desk fallback)
+      - name: Stage ROOMY_HOME (avoid /opt/roomy fallback)
         run: |
-          mkdir -p "$RUNNER_TEMP/desk-home"
-          echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
-          echo "DESK_VAULT_PASSWORD=ci-vault-password" >> "$GITHUB_ENV"
-          echo "DESK_DB_PATH=$RUNNER_TEMP/desk-home/.database/desk.sqlite3" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/roomy-home"
+          echo "ROOMY_HOME=$RUNNER_TEMP/roomy-home" >> "$GITHUB_ENV"
+          echo "ROOMY_DB_PATH=$RUNNER_TEMP/roomy-home/.database/roomy.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
         run: npm ci
@@ -262,11 +259,11 @@ jobs:
       - name: Download sandbox image
         uses: actions/download-artifact@v4
         with:
-          name: desk-sandbox-v1
+          name: roomy-sandbox-v1
           path: ${{ runner.temp }}
 
-      - name: Load desk/sandbox:v1 image
-        run: docker load -i "$RUNNER_TEMP/desk-sandbox-v1.tar.gz"
+      - name: Load roomy/sandbox:v1 image
+        run: docker load -i "$RUNNER_TEMP/roomy-sandbox-v1.tar.gz"
 
       - name: Run integration tests (vitest)
         # `--retry=2` tolerates known flakes around async fireMessage polling;
@@ -296,12 +293,11 @@ jobs:
           node-version: "23"
           cache: npm
 
-      - name: Stage DESK_HOME (avoid /opt/desk fallback)
+      - name: Stage ROOMY_HOME (avoid /opt/roomy fallback)
         run: |
-          mkdir -p "$RUNNER_TEMP/desk-home"
-          echo "DESK_HOME=$RUNNER_TEMP/desk-home" >> "$GITHUB_ENV"
-          echo "DESK_VAULT_PASSWORD=ci-vault-password" >> "$GITHUB_ENV"
-          echo "DESK_DB_PATH=$RUNNER_TEMP/desk-home/.database/desk.sqlite3" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/roomy-home"
+          echo "ROOMY_HOME=$RUNNER_TEMP/roomy-home" >> "$GITHUB_ENV"
+          echo "ROOMY_DB_PATH=$RUNNER_TEMP/roomy-home/.database/roomy.sqlite3" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
         run: npm ci
@@ -318,11 +314,11 @@ jobs:
       - name: Download sandbox image
         uses: actions/download-artifact@v4
         with:
-          name: desk-sandbox-v1
+          name: roomy-sandbox-v1
           path: ${{ runner.temp }}
 
-      - name: Load desk/sandbox:v1 image
-        run: docker load -i "$RUNNER_TEMP/desk-sandbox-v1.tar.gz"
+      - name: Load roomy/sandbox:v1 image
+        run: docker load -i "$RUNNER_TEMP/roomy-sandbox-v1.tar.gz"
 
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium

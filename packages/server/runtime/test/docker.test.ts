@@ -3,7 +3,6 @@ import { PassThrough } from "node:stream";
 import {
   bindsSatisfy,
   classifyResourceError,
-  killOpencodeDaemonsForOrphans,
   providerKeyEnv,
   providerKeyExecEnv,
   waitForEntrypointReady,
@@ -29,7 +28,7 @@ describe("classifyResourceError", () => {
     // fork(2) because the pids cgroup is exhausted. Matched
     // case-insensitively because Bun's wrapping varies.
     expect(
-      classifyResourceError(1, "spawn /usr/local/bin/.opencode EAGAIN"),
+      classifyResourceError(1, "spawn /usr/local/bin/.pi EAGAIN"),
     ).toBe("pids");
     expect(classifyResourceError(1, "SPAWN ... EAGAIN")).toBe("pids");
   });
@@ -60,7 +59,7 @@ describe("classifyResourceError", () => {
   });
 
   it("classifies setsid 'did not exit normally' as memory (OOM via wrapper)", () => {
-    // The setsid wrapper around opencode reports a signal-killed child as
+    // The setsid wrapper around pi reports a signal-killed child as
     // `setsid: child <pid> did not exit normally: Success` and itself
     // exits 1 — so a cgroup OOM-kill never reaches us as the canonical
     // exit 137. The auto-grow path has to recognise this stderr or it
@@ -76,8 +75,8 @@ describe("classifyResourceError", () => {
 });
 
 describe("bindsSatisfy — subset semantics for mount drift", () => {
-  const workspace = "/home/bero/Desk/proj:/home/agent:rw";
-  const skills = "/home/bero/Desk/.skills:/opt/desk-skills:ro";
+  const workspace = "/home/bero/Roomy/proj:/home/agent:rw";
+  const skills = "/home/bero/Roomy/.skills:/opt/roomy-skills:ro";
   const projectsLocal = "/home/bero/Projects:/home/agent/Projects:rw";
   const downloadsLocal = "/home/bero/Downloads:/home/agent/Downloads:ro";
 
@@ -110,7 +109,7 @@ describe("bindsSatisfy — subset semantics for mount drift", () => {
     // container is pointed at the wrong workspace dir on disk.
     expect(
       bindsSatisfy(
-        ["/home/bero/Desk/OTHER:/home/agent:rw", skills],
+        ["/home/bero/Roomy/OTHER:/home/agent:rw", skills],
         [workspace, skills],
       ),
     ).toBe(false);
@@ -180,101 +179,17 @@ describe("providerKeyExecEnv", () => {
   it("does not let extra env override managed connection credentials", () => {
     const env = providerKeyExecEnv(
       { OPENAI_API_KEY: "sk-test" },
-      { GITHUB_TOKEN: "stale", GH_TOKEN: "stale", OPENCODE_AUTH_CONTENT: "codex" },
+      { GITHUB_TOKEN: "stale", GH_TOKEN: "stale", PI_AUTH_JSON_BASE64: "codex" },
     );
 
     expect(env).not.toContain("GITHUB_TOKEN=stale");
     expect(env).not.toContain("GH_TOKEN=stale");
     expect(env).toContain("GITHUB_TOKEN=");
     expect(env).toContain("GH_TOKEN=");
-    expect(env).toContain("OPENCODE_AUTH_CONTENT=codex");
+    expect(env).toContain("PI_AUTH_JSON_BASE64=codex");
   });
 });
 
-
-describe("killOpencodeDaemonsForOrphans", () => {
-  // Under the pi runtime there is no long-lived per-container daemon
-  // to clean up after a desk-server restart — pi sessions are
-  // file-backed under the workspace bind-mount. The helper is kept as
-  // an exported no-op so api/db boot paths don't need conditionals;
-  // every workspace reports `killed: false` and no execs are issued.
-  function fakeEngine(opts: {
-    knownContainers?: ReadonlySet<string>;
-    onExec?: (containerId: string, cmd: string[]) => number;
-  }): { engine: Engine; execCalls: Array<{ container: string; cmd: string[] }> } {
-    const known = opts.knownContainers ?? new Set();
-    const execCalls: Array<{ container: string; cmd: string[] }> = [];
-    const engine: Engine = {
-      name: "docker",
-      inspect: async (name) =>
-        known.has(name)
-          ? ({
-              id: `id-${name}`,
-              imageId: "i",
-              user: "",
-              labels: {},
-              binds: [],
-              running: true,
-            } as ContainerInfo)
-          : null,
-      imageId: async () => null,
-      imagePull: async () => {},
-      create: async () => "",
-      start: async () => {},
-      stop: async () => {},
-      update: async () => true,
-      remove: async () => {},
-      list: async () => [],
-      exec: async (spec: ExecSpec) => {
-        execCalls.push({ container: spec.containerId, cmd: spec.cmd });
-        const code = opts.onExec?.(spec.containerId, spec.cmd) ?? 0;
-        const stdout = new PassThrough();
-        const stderr = new PassThrough();
-        setImmediate(() => {
-          stdout.end();
-          stderr.end();
-        });
-        return {
-          stdout,
-          stderr,
-          wait: async () => code,
-          cancel: async () => {},
-        } as ExecHandle;
-      },
-      execDetached: async () => {},
-      port: async () => null,
-      top: async () => [],
-      isRootless: async () => false,
-    };
-    return { engine, execCalls };
-  }
-
-  it("returns empty for empty input", async () => {
-    const { engine } = fakeEngine({});
-    const out = await killOpencodeDaemonsForOrphans([], engine);
-    expect(out).toEqual([]);
-  });
-
-  it("reports not-killed for a workspace whose container does not exist", async () => {
-    const { engine, execCalls } = fakeEngine({});
-    const out = await killOpencodeDaemonsForOrphans(["wks_nonexistent"], engine);
-    expect(out).toEqual([{ workspaceId: "wks_nonexistent", killed: false }]);
-    // No execs are issued against a container we don't have.
-    expect(execCalls.length).toBe(0);
-  });
-
-  it("is a no-op even for existing containers (no daemon under pi)", async () => {
-    const { engine, execCalls } = fakeEngine({
-      knownContainers: new Set(["desk-sandbox-wks_alive"]),
-    });
-    const out = await killOpencodeDaemonsForOrphans(["wks_alive"], engine);
-    expect(out).toEqual([{ workspaceId: "wks_alive", killed: false }]);
-    // Pi spawns one process per turn via `docker exec` with the
-    // current env — there is no lingering daemon for the helper to
-    // reach into the container and kill, so no execs are issued.
-    expect(execCalls.length).toBe(0);
-  });
-});
 
 describe("waitForEntrypointReady", () => {
   // Drive the container-gone fast-bail path. A live repro showed that

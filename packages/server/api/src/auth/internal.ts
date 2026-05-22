@@ -2,12 +2,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import { UnauthorizedError } from "@agent-desk/shared";
+import { UnauthorizedError } from "@roomy-ai/shared";
 
 let cachedToken: string | null = null;
 
 function tokenPath(): string {
-  return process.env.DESK_INTERNAL_TOKEN_PATH ?? "/etc/desk-server/internal-token";
+  return process.env.ROOMY_INTERNAL_TOKEN_PATH ?? "/etc/roomy-server/internal-token";
 }
 
 /**
@@ -36,7 +36,7 @@ export function ensureInternalToken(): string {
   return generated;
 }
 
-/** Test-only: reset the cached token so a new DESK_INTERNAL_TOKEN_PATH takes effect. */
+/** Test-only: reset the cached token so a new ROOMY_INTERNAL_TOKEN_PATH takes effect. */
 export function resetInternalTokenCache(): void {
   cachedToken = null;
 }

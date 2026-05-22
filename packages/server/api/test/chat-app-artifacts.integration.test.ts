@@ -1,9 +1,9 @@
 /**
  * PR-B: chat artifact listing surfaces `<name>.app/` directories.
  *
- * Real desk-server, real SQLite, real fs — no fakes. We materialize a
+ * Real roomy-server, real SQLite, real fs — no fakes. We materialize a
  * `<name>.app/` directory under `~/.chats/<chatId>/artifacts/` (the same
- * shape `desk-agent app create` produces inside the sandbox), call the
+ * shape `roomy-agent app create` produces inside the sandbox), call the
  * listing endpoint the chat UI calls, and confirm the entry surfaces with
  * `isDir: true` and `kind: "artifact"` so the client can render it as
  * `type: "app"`.
@@ -14,15 +14,15 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { Pool, runMigrations, insertSeedFixture } from "@roomy-ai/db";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 import {
   chatAttachmentsDir,
   chatArtifactsDir,
   ensureLayout,
   ensureWorkspaceLayout,
-} from "@agent-desk/storage";
+} from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -38,18 +38,16 @@ let chatId: string;
 let authToken: string;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-chat-app-art-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-chat-app-art-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "chat-app-art-user";
-  process.env.DESK_SEED_PASSWORD = "pw";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "chat-app-art-user", password: "pw" });
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-chat-app-art-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-chat-app-art-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const { rows: wsRows } = await pool.query<{ id: string; path: string }>(
     "SELECT id, path FROM workspaces LIMIT 1",
@@ -79,7 +77,7 @@ beforeAll(async () => {
   port = (server.address() as net.AddressInfo).port;
 
   const login = await httpJson("POST", "/auth/login", undefined, {
-    username: "chat-app-art-user",
+    email: "chat-app-art-user@roomy.local",
     password: "pw",
   });
   authToken = (login.body as { token: string }).token;
@@ -95,7 +93,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 function httpJson(
@@ -145,7 +143,7 @@ describe("GET /chats/:id/attachments — `<name>.app/` chat artifacts (PR-B)", (
     const appDir = path.join(artDir, "my-app.app");
     await fs.mkdir(path.join(appDir, "src"), { recursive: true });
     await fs.writeFile(
-      path.join(appDir, "desk.app.json"),
+      path.join(appDir, "roomy.app.json"),
       JSON.stringify({
         name: "my-app",
         displayName: "my-app",
@@ -178,9 +176,9 @@ describe("GET /chats/:id/attachments — `<name>.app/` chat artifacts (PR-B)", (
     expect(appEntry?.path).toBe(`.chats/${chatId}/artifacts/my-app.app`);
     // The manifest inside the directory is reachable through the same
     // listing endpoint — the chat UI's PR-B click handler navigates at
-    // `<dir>/desk.app.json`, so confirm the file is on disk where the
+    // `<dir>/roomy.app.json`, so confirm the file is on disk where the
     // client expects.
-    const manifestStat = await fs.stat(path.join(appDir, "desk.app.json"));
+    const manifestStat = await fs.stat(path.join(appDir, "roomy.app.json"));
     expect(manifestStat.isFile()).toBe(true);
   });
 

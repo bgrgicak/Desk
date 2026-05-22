@@ -1,19 +1,19 @@
 /**
  * Integration tests for the per-user hub workspace.
  *
- * The hub still exists in the DB (it backs cross-workspace pin storage
- * and per-user bookkeeping), but it's an *internal* slot — the API
- * hides it everywhere:
+ * The hub is hidden from `GET /workspaces` so the user-facing sidebar
+ * doesn't show it, but it's otherwise a regular workspace reachable by
+ * id through every standard endpoint. This is what lets the Ask AI chat
+ * — which lives in the hub — ride the same code paths as any other chat
+ * without per-route special-casing.
  *
- *   - `GET /workspaces` omits it (`listWorkspaces` filters `kind=hub`)
- *   - `GET/PATCH/DELETE /workspaces/{hub-id}` returns 404
- *   - `GET /chats?workspaceId=<hub-id>` and `GET /library?...` return 404
- *   - `/workspaces/{hub-id}/pins` returns 404 (route is gated by the
- *     same ownership helper)
- *
- * The boot-pass invariants still hold — the hub row, its on-disk
- * directory, and the auto-enrolled agent are all created. They're just
- * never reachable through the request-time API surface.
+ *   - `GET /workspaces` omits the hub (`listWorkspaces` filters `kind=hub`)
+ *   - `GET /workspaces/{hub-id}` returns the hub row (200)
+ *   - `PATCH /workspaces/{hub-id}` accepts non-rename edits; renaming is
+ *     blocked with 403 by the dedicated guard in patchWorkspace
+ *   - `DELETE /workspaces/{hub-id}` returns 403 — the hub is permanent
+ *   - `GET /chats?workspaceId=<hub-id>`, `GET /library?...`, and the
+ *     pins endpoints all return real data
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as http from "node:http";
@@ -21,11 +21,11 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, queries, hashPassword } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, queries, hashPassword } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 import { createApp } from "../src/app.js";
 import { createHub, ensureHubsForAllUsers } from "../src/routes/workspaces.js";
 import { clearSessions } from "../src/auth/sessions.js";
@@ -71,15 +71,15 @@ function request(
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-hub-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-hub-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-hub-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-hub-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
-  process.env.DESK_DAILY_REFLECTION = "off";
+  process.env.ROOMY_HOME = home;
+  process.env.ROOMY_DAILY_REFLECTION = "off";
 
   const runManager = createRunManager({
     pool,
@@ -101,7 +101,7 @@ beforeAll(async () => {
   await ensureHubsForAllUsers(pool, home);
 
   const login = await request("POST", "/auth/login", null, {
-    username: userSlug,
+    email: "hubuser@example.com",
     password: "pw",
   });
   token = (login.body as { token: string }).token;
@@ -114,8 +114,8 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
-  delete process.env.DESK_DAILY_REFLECTION;
+  delete process.env.ROOMY_HOME;
+  delete process.env.ROOMY_DAILY_REFLECTION;
 });
 
 describe("hub workspace boot pass", () => {
@@ -258,48 +258,49 @@ describe("workspace CRUD guards", () => {
     expect(rename.status).toBe(400);
   });
 
-  it("404s GET on the hub by id", async () => {
+  it("GET on the hub by id returns the hub row", async () => {
     const hub = await queries.workspaces.findHubByUser(pool, userId);
     const res = await request("GET", `/workspaces/${hub!.id}`, token);
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    expect((res.body as { id: string }).id).toBe(hub!.id);
+    expect((res.body as { kind: string }).kind).toBe("hub");
   });
 
-  it("404s PATCH on the hub by id", async () => {
+  it("rejects renaming the hub with 403", async () => {
     const hub = await queries.workspaces.findHubByUser(pool, userId);
     const res = await request("PATCH", `/workspaces/${hub!.id}`, token, {
       name: "Renamed Hub",
     });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(403);
   });
 
-  it("404s DELETE on the hub by id", async () => {
+  it("rejects deleting the hub with 403", async () => {
     const hub = await queries.workspaces.findHubByUser(pool, userId);
     const res = await request("DELETE", `/workspaces/${hub!.id}`, token);
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(403);
   });
 });
 
 describe("hub workspace — chats and library access", () => {
-  it("GET /chats?workspaceId=<hub-id> 404s (hub is API-hidden)", async () => {
+  it("GET /chats?workspaceId=<hub-id> returns the hub's chats", async () => {
     const hub = await queries.workspaces.findHubByUser(pool, userId);
     const res = await request("GET", `/chats?workspaceId=${hub!.id}`, token);
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
   });
 
-  it("GET /library?workspaceId=<hub-id> 404s (hub is API-hidden)", async () => {
+  it("GET /library?workspaceId=<hub-id> returns the hub's library", async () => {
     const hub = await queries.workspaces.findHubByUser(pool, userId);
     const res = await request("GET", `/library?workspaceId=${hub!.id}`, token);
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
   });
 });
 
-describe("pins — hub endpoints are API-hidden", () => {
-  // The pin tables and storage are still in place — they're the
-  // backing store for cross-workspace pinning. They're just no longer
-  // reachable through `/workspaces/{hub-id}/pins`, which now 404s
-  // alongside every other hub-by-id route. When the frontend wires
-  // pins back up, it'll need an endpoint that does not require the
-  // caller to know (or address) the hub's id.
+describe("pins — hub endpoints serve cross-workspace pin storage", () => {
+  // Pins live on the hub workspace by design. With the hub addressable
+  // through the regular workspace endpoints, the pin routes work the same
+  // as any other workspace-scoped route — owner-only access, standard
+  // 404/200/201 status codes.
   let hubId: string;
   let projectId: string;
 
@@ -310,21 +311,22 @@ describe("pins — hub endpoints are API-hidden", () => {
     projectId = (create.body as { id: string }).id;
   });
 
-  it("GET /workspaces/{hub-id}/pins 404s", async () => {
+  it("GET /workspaces/{hub-id}/pins returns the pin list", async () => {
     const res = await request("GET", `/workspaces/${hubId}/pins`, token);
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
   });
 
-  it("POST /workspaces/{hub-id}/pins 404s", async () => {
+  it("POST /workspaces/{hub-id}/pins creates a pin", async () => {
     const res = await request("POST", `/workspaces/${hubId}/pins`, token, {
       sourceWorkspaceId: projectId,
       kind: "chat",
       refId: "cht_fake123",
     });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(201);
   });
 
-  it("DELETE /workspaces/{hub-id}/pins/{pinId} 404s", async () => {
+  it("DELETE /workspaces/{hub-id}/pins/{pinId} 404s for an unknown pin", async () => {
     const res = await request("DELETE", `/workspaces/${hubId}/pins/pin_anything`, token);
     expect(res.status).toBe(404);
   });
@@ -497,7 +499,7 @@ describe("GET /me/ask-ai-chat", () => {
     );
 
     const login = await request("POST", "/auth/login", null, {
-      username: regUserSlug,
+      email: "askai-regression@example.com",
       password: "pw",
     });
     const regToken = (login.body as { token: string }).token;

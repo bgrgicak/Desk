@@ -14,7 +14,7 @@ need to see what's burning them. Three rollups matter:
 
 The data is already in the provider response (`usage.prompt_tokens`,
 `usage.completion_tokens`, model name), surfaced through
-opencode-serve's event stream.
+pi runtime's event stream.
 
 ## Decision
 

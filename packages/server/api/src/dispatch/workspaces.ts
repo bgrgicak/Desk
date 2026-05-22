@@ -1,6 +1,6 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
-import { ValidationError, type PinKind } from "@agent-desk/shared";
-import { withModule } from "@agent-desk/shared/logger";
+import { ValidationError, type PinKind } from "@roomy-ai/shared";
+import { withModule } from "@roomy-ai/shared/logger";
 import * as accountRoutes from "../routes/account.js";
 import * as agentRoutes from "../routes/agents.js";
 import * as chatRoutes from "../routes/chats.js";
@@ -258,7 +258,7 @@ export async function dispatchWorkspaces(
     };
     const { agent, modelChanged } = await agentRoutes.patchAgent(pool, userId, segments[1], data);
     if (modelChanged && opts.refreshSandboxConnections) {
-      // opencode-serve caches each agent file's `model:` field at
+      // pi caches each agent file's `model:` field at
       // startup and ignores rewrites. Clearing chat sessions (done
       // inside patchAgent) is necessary but not sufficient — a new
       // session in the same daemon still inherits the cached agent

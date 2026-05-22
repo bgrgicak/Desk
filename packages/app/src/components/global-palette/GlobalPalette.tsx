@@ -1,10 +1,9 @@
 import { useLayoutEffect, useRef, useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import { Dialog as DialogPrimitive } from 'radix-ui'
 import { VisuallyHidden } from 'radix-ui'
 import { useGlobalPalette } from './GlobalPaletteProvider'
 import { GlobalPaletteSearch } from './GlobalPaletteSearch'
-import { GlobalPaletteChat } from './GlobalPaletteChat'
 import type { NavTarget, SettingsTarget } from './searchTargets'
 
 export interface GlobalPaletteNavActions {
@@ -85,16 +84,9 @@ function useContentHeight(deps: unknown[]): [React.RefObject<HTMLDivElement | nu
   return [ref, h, maxHeight]
 }
 
-const slideFade = {
-  initial: { opacity: 0, x: 8 },
-  animate: { opacity: 1, x: 0 },
-  exit:    { opacity: 0, x: -8 },
-  transition: { duration: 0.15 },
-}
-
 export function GlobalPalette(props: GlobalPaletteNavActions) {
-  const { isOpen, view, query, close } = useGlobalPalette()
-  const [measureRef, contentHeight, maxHeight] = useContentHeight([isOpen, view, query])
+  const { isOpen, query, close } = useGlobalPalette()
+  const [measureRef, contentHeight, maxHeight] = useContentHeight([isOpen, query])
   const listMaxHeight = Math.max(160, maxHeight - 48)
 
   // Close palette before invoking nav actions so the route change happens
@@ -121,7 +113,7 @@ export function GlobalPalette(props: GlobalPaletteNavActions) {
           aria-describedby={undefined}
         >
           <VisuallyHidden.Root>
-            <DialogPrimitive.Title>Search and Ask AI</DialogPrimitive.Title>
+            <DialogPrimitive.Title>Search</DialogPrimitive.Title>
           </VisuallyHidden.Root>
 
           <motion.div
@@ -131,18 +123,9 @@ export function GlobalPalette(props: GlobalPaletteNavActions) {
             className="relative overflow-hidden"
           >
             <div ref={measureRef}>
-              <AnimatePresence mode="wait" initial={false}>
-                {view === 'search' && (
-                  <motion.div key="search" {...slideFade} className="flex min-h-0 flex-col" style={{ maxHeight }}>
-                    <GlobalPaletteSearch {...navProps} listMaxHeight={listMaxHeight} />
-                  </motion.div>
-                )}
-                {view === 'chat' && (
-                  <motion.div key="chat" {...slideFade} className="flex min-h-0 flex-col" style={{ height: maxHeight }}>
-                    <GlobalPaletteChat />
-                  </motion.div>
-                )}
-              </AnimatePresence>
+              <div className="flex min-h-0 flex-col" style={{ maxHeight }}>
+                <GlobalPaletteSearch {...navProps} listMaxHeight={listMaxHeight} />
+              </div>
             </div>
           </motion.div>
         </DialogPrimitive.Content>

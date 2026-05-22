@@ -37,25 +37,25 @@ describe("buildPiEnv / buildDaemonEnv (alias)", () => {
     expect(env.GH_TOKEN).toBe("ghp_abc");
   });
 
-  it("includes DESK_API_URL only when supplied", () => {
+  it("includes ROOMY_API_URL only when supplied", () => {
     const without = buildPiEnv({});
-    expect(without.DESK_API_URL).toBeUndefined();
+    expect(without.ROOMY_API_URL).toBeUndefined();
     const withUrl = buildPiEnv({ apiUrl: "http://host.docker.internal:35138" });
-    expect(withUrl.DESK_API_URL).toBe("http://host.docker.internal:35138");
+    expect(withUrl.ROOMY_API_URL).toBe("http://host.docker.internal:35138");
   });
 
-  it("emits a per-run DESK_SANDBOX_TOKEN_PATH so concurrent runs in the same workspace can't stomp each other's tokens", () => {
+  it("emits a per-run ROOMY_SANDBOX_TOKEN_PATH so concurrent runs in the same workspace can't stomp each other's tokens", () => {
     const env = buildPiEnv({ runId: "run_abc" });
-    expect(env.DESK_SANDBOX_TOKEN_PATH).toBe("/tmp/desk-sandbox-token-run_abc");
+    expect(env.ROOMY_SANDBOX_TOKEN_PATH).toBe("/tmp/roomy-sandbox-token-run_abc");
     // Distinct run ids must yield distinct paths — that's the whole
     // point. If they collided, two runs would still race on /tmp.
     const other = buildPiEnv({ runId: "run_xyz" });
-    expect(other.DESK_SANDBOX_TOKEN_PATH).toBe("/tmp/desk-sandbox-token-run_xyz");
+    expect(other.ROOMY_SANDBOX_TOKEN_PATH).toBe("/tmp/roomy-sandbox-token-run_xyz");
   });
 
-  it("omits DESK_SANDBOX_TOKEN_PATH when runId is absent (non-run callers like connection-refresh env-digest)", () => {
+  it("omits ROOMY_SANDBOX_TOKEN_PATH when runId is absent (non-run callers like connection-refresh env-digest)", () => {
     const env = buildPiEnv({});
-    expect(env).not.toHaveProperty("DESK_SANDBOX_TOKEN_PATH");
+    expect(env).not.toHaveProperty("ROOMY_SANDBOX_TOKEN_PATH");
   });
 
   it("exposes the buildDaemonEnv alias for legacy callers", () => {
@@ -71,7 +71,7 @@ describe("parseModelSpec", () => {
     });
   });
 
-  it("relabels codex/* → openai-codex (Desk's UI prefix → pi's OAuth provider id)", () => {
+  it("relabels codex/* → openai-codex (Roomy's UI prefix → pi's OAuth provider id)", () => {
     expect(parseModelSpec("codex/gpt-5.5")).toEqual({
       providerID: "openai-codex",
       modelID: "gpt-5.5",
@@ -106,7 +106,7 @@ describe("modelAttemptSpecs", () => {
 });
 
 describe("piModelReference", () => {
-  it("normalizes Desk's codex provider prefix for pi model scopes", () => {
+  it("normalizes Roomy's codex provider prefix for pi model scopes", () => {
     expect(piModelReference("codex/gpt-5.5")).toBe("openai-codex/gpt-5.5");
     expect(piModelReference("openai/gpt-5.4")).toBe("openai/gpt-5.4");
     expect(piModelReference("gpt-5.4")).toBe("gpt-5.4");
@@ -140,7 +140,7 @@ describe("toSandboxPath", () => {
 
 describe("sandboxTokenPath", () => {
   it("returns a runId-scoped /tmp path", () => {
-    expect(sandboxTokenPath("run_abc")).toBe("/tmp/desk-sandbox-token-run_abc");
+    expect(sandboxTokenPath("run_abc")).toBe("/tmp/roomy-sandbox-token-run_abc");
   });
 });
 
@@ -153,7 +153,7 @@ describe("isContainerGoneError", () => {
   });
 
   it("matches the ensure-timeout marker so the driver retries on a wedged docker socket", () => {
-    expect(isContainerGoneError("opencode-serve: ensure timed out after 30000ms (container abc)")).toBe(true);
+    expect(isContainerGoneError("pi: ensure timed out after 30000ms (container abc)")).toBe(true);
   });
 
   it("returns false for ordinary failures", () => {

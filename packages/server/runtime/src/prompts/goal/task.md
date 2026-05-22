@@ -9,7 +9,7 @@ the same task.
 Every task is a **thread of the chat it was created from**:
 
 1. You post the task message in the current chat using
-   `desk-agent task schedule --chat <chatId>` — this lands a single
+   `roomy-agent task schedule --chat <chatId>` — this lands a single
    `kind='task'` message in *this* chat as the thread anchor. That one
    message holds everything about the task: title, body, schedule.
 2. The server automatically opens a dedicated thread chat anchored at
@@ -21,7 +21,7 @@ Every task is a **thread of the chat it was created from**:
    they see the task message at the top, then any runs/replies.
 
 You don't have to create the thread yourself — posting `kind='task'`
-with `desk-agent task schedule` does it. The response includes the
+with `roomy-agent task schedule` does it. The response includes the
 thread chat info under `threadChat`.
 
 ### When the sub-task is finished
@@ -29,7 +29,7 @@ thread chat info under `threadChat`.
 Once you're done with the work in this thread, call:
 
 \`\`\`
-desk-agent task complete --chat <this-thread-chat-id> --message "<short outcome>"
+roomy-agent task complete --chat <this-thread-chat-id> --message "<short outcome>"
 \`\`\`
 
 That single call does two things:
@@ -46,7 +46,7 @@ That single call does two things:
 
 When NOT to call complete:
 - Recurring tasks (\`--cron\`). They're meant to keep firing; use
-  \`desk-agent task cancel\` to stop them entirely.
+  \`roomy-agent task cancel\` to stop them entirely.
 - A task that's already \`succeeded\` / \`cancelled\` / \`failed\` — the
   call will be rejected.
 - You haven't actually finished — partial progress isn't completion.
@@ -54,7 +54,7 @@ When NOT to call complete:
 
 Default behaviors for task work:
 - If the user describes work to remember or chase, create it via
-  `desk-agent task schedule` so it lands on the Tasks board (and spawns
+  `roomy-agent task schedule` so it lands on the Tasks board (and spawns
   its own thread). Don't promise to remember things in chat — schedule
   them.
 - **The first task message must include everything about the task.**
@@ -64,7 +64,7 @@ Default behaviors for task work:
   the task across the chat reply and the task body — put it in the
   task body.
 - **Worked example — "remind me" pattern.** User: "Remind me to call the
-  plumber tomorrow afternoon." You run: `desk-agent task schedule --chat
+  plumber tomorrow afternoon." You run: `roomy-agent task schedule --chat
   <chatId> --title "Call the plumber" --at "<utc>Z" "Call the plumber
   about the leaking kitchen tap. Their number is in the address book
   under 'Joe — plumber'."` (filling in tomorrow's afternoon as a UTC
@@ -75,7 +75,7 @@ Default behaviors for task work:
 - For one-shot reminders, pass `--at <iso>`. For recurring follow-ups, pass
   `--cron <expr>`. **Default (no `--at`/`--cron`) = run now: the server
   auto-fires the task as soon as it lands and keeps the card Active
-  until you call `desk-agent task complete`.** There is no "passive TODO"
+  until you call `roomy-agent task complete`.** There is no "passive TODO"
   flag — agents always create work that's already running. If the user
   literally wants a card to sit untouched on the kanban they create it
   from the Tasks page composer themselves; you can't.

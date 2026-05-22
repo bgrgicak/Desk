@@ -10,14 +10,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { Pool, queries } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { ensureLayout, materializeSummary } from "@agent-desk/storage";
+import { Pool, queries } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
+import { ensureLayout, materializeSummary } from "@roomy-ai/storage";
 import { createApp, type AppOptions } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 
 let pool: Pool;
 let server: http.Server;
@@ -27,20 +27,18 @@ let dbPath: string;
 
 beforeAll(async () => {
   // Per-test-file SQLite file so workers don't collide on the same DB.
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-api-e2e-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-api-e2e-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "testuser";
-  process.env.DESK_SEED_PASSWORD = "test-pass-1234";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "test-pass-1234" });
 
   // Create temp home directory with storage layout
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-api-e2e-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-api-e2e-"));
   await ensureLayout(home);
-  // fireMessage reads DESK_HOME for its log file path.
-  process.env.DESK_HOME = home;
+  // fireMessage reads ROOMY_HOME for its log file path.
+  process.env.ROOMY_HOME = home;
 
   const storage = { pool, home };
   const runManager = createRunManager({
@@ -108,7 +106,7 @@ function requestMultipart(
   parts: Array<{ name: string; filename?: string; contentType?: string; body: Buffer }>,
 ): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
-    const boundary = `----desk-test-${crypto.randomBytes(8).toString("hex")}`;
+    const boundary = `----roomy-test-${crypto.randomBytes(8).toString("hex")}`;
     const chunks: Buffer[] = [];
     for (const p of parts) {
       const header = [`--${boundary}`];
@@ -184,7 +182,7 @@ describe("API e2e (real Postgres)", () => {
 
   it("POST /auth/login authenticates against real DB", async () => {
     const res = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     expect(res.status).toBe(200);
@@ -215,7 +213,7 @@ describe("API e2e (real Postgres)", () => {
   });
 
   it("POST /chats creates a chat, GET /chats returns it", async () => {
-    // Get workspace and agent IDs. The seeded "Desk" project workspace is
+    // Get workspace and agent IDs. The seeded "Roomy" project workspace is
     // the right home for ad-hoc chats — pick it explicitly so the test
     // doesn't depend on which workspace happens to come back first.
     const wsRes = await request("GET", "/workspaces", token);
@@ -363,7 +361,7 @@ describe("API e2e (real Postgres)", () => {
   it("POST /auth/logout invalidates the session", async () => {
     // Login to get a new token to revoke
     const loginRes = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     const tempToken = (loginRes.body as { token: string }).token;
@@ -379,7 +377,7 @@ describe("API e2e (real Postgres)", () => {
   it("WebSocket upgrade with real session delivers broadcast events", async () => {
     // Login fresh
     const loginRes = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     const wsToken = (loginRes.body as { token: string }).token;
@@ -991,7 +989,7 @@ describe("API e2e (real Postgres)", () => {
 
   it("invalid login returns 401", async () => {
     const res = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "wrongpassword",
     });
     expect(res.status).toBe(401);
@@ -1006,7 +1004,7 @@ describe("API e2e (real Postgres)", () => {
 /**
  * Gap 15: Real-stack e2e — HTTP → scheduler → real container sandbox → real
  * pi CLI → model → assistant message persisted → WS event. Originally
- * pinned to `opencode/big-pickle` (pi's free tier) so it ran in CI with
+ * pinned to `anthropic/claude-haiku-4-5` (pi's free tier) so it ran in CI with
  * no API keys; that tier is gone, so the spec is paused.
  *
  * To revive: point pi inside the sandbox at an aimock server on the
@@ -1021,7 +1019,7 @@ describe("API e2e (real Postgres)", () => {
  */
 const REAL_E2E_SANDBOX_AVAILABLE = await (async () => {
   try {
-    const { detectEngine, sandboxImage } = await import("@agent-desk/runtime");
+    const { detectEngine, sandboxImage } = await import("@roomy-ai/runtime");
     const engine = await detectEngine();
     return (await engine.imageId(sandboxImage())) !== null;
   } catch {
@@ -1029,7 +1027,7 @@ const REAL_E2E_SANDBOX_AVAILABLE = await (async () => {
   }
 })();
 
-const FREE_MODEL = "opencode/big-pickle";
+const FREE_MODEL = "anthropic/claude-haiku-4-5";
 
 // Skipped pending the aimock wiring described above. Keep the
 // describe-with-skip rather than deleting so the contract stays in the
@@ -1037,7 +1035,7 @@ const FREE_MODEL = "opencode/big-pickle";
 const REAL_STACK_E2E_ENABLED = false;
 
 describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
-  "real-stack e2e (real Docker + free opencode model)",
+  "real-stack e2e (real Docker + free model)",
   () => {
   let realPool: Pool;
   let realServer: http.Server;
@@ -1079,30 +1077,28 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
   }
 
   beforeAll(async () => {
-    const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-real-e2e-db-"));
+    const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-real-e2e-db-"));
     realDbPath = path.join(dbDir, "test.sqlite3");
     realPool = new Pool({ path: realDbPath });
 
     await runMigrations(realPool);
-    process.env.DESK_SEED_USERNAME = "testuser";
-    process.env.DESK_SEED_PASSWORD = "test-pass-1234";
-    await seedIfEmpty(realPool);
+  await insertSeedFixture(realPool);
     const { rows: workspaceRows } = await realPool.query("SELECT id FROM workspaces");
     realWorkspaceIds = workspaceRows.map((row) => row.id as string);
 
-    realHome = await fs.mkdtemp(path.join(os.tmpdir(), "desk-real-e2e-"));
+    realHome = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-real-e2e-"));
     await ensureLayout(realHome);
-    // The runtime resolves its on-disk home via `resolveDeskHome()`,
-    // which falls back to process.env.DESK_HOME. Pin it so the agent
+    // The runtime resolves its on-disk home via `resolveRoomyHome()`,
+    // which falls back to process.env.ROOMY_HOME. Pin it so the agent
     // file (and any test reading it back) hit the same tree the
     // storage context above uses.
-    process.env.DESK_HOME = realHome;
+    process.env.ROOMY_HOME = realHome;
 
     const storage = { pool: realPool, home: realHome };
 
-    // No execRunFn — let the scheduler invoke the real opencode driver in a
+    // No execRunFn — let the scheduler invoke the real pi driver in a
     // real Docker sandbox. The seeded agent's model is patched to the free
-    // opencode/big-pickle below so this runs without paid provider keys.
+    // anthropic/claude-haiku-4-5 below so this runs without paid provider keys.
     const runManager = createRunManager({ pool: realPool });
 
     const { rows: userRows } = await realPool.query("SELECT id FROM users LIMIT 1");
@@ -1123,16 +1119,16 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
     if (realServer) await new Promise<void>((resolve) => realServer.close(() => resolve()));
     if (realPool) await realPool.end();
 
-    // The scheduler spawned real desk-sandbox-* containers during the run.
+    // The scheduler spawned real roomy-sandbox-* containers during the run.
     // Remove only sandboxes that bind this test's temp home so parallel suites
     // keep their own containers.
     try {
-      const { detectEngine } = await import("@agent-desk/runtime");
+      const { detectEngine } = await import("@roomy-ai/runtime");
       const engine = await detectEngine();
       for (const workspaceId of realWorkspaceIds) {
-        await engine.remove(`desk-sandbox-${workspaceId}`, true).catch(() => {});
+        await engine.remove(`roomy-sandbox-${workspaceId}`, true).catch(() => {});
       }
-      const containers = await engine.list({ all: true, namePrefix: "desk-sandbox-" });
+      const containers = await engine.list({ all: true, namePrefix: "roomy-sandbox-" });
       for (const c of containers) {
         const info = await engine.inspect(c.id).catch(() => null);
         if (info?.binds.some((bind) => bind.startsWith(`${realHome}:`) || bind.startsWith(`${realHome}/`))) {
@@ -1148,7 +1144,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
   it("sends a message through the full real stack and gets an assistant response", async () => {
     // Login
     const loginRes = await realRequest("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     expect(loginRes.status).toBe(200);
@@ -1187,27 +1183,26 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
       if (assistantMsgs.length > 0) break;
     }
     expect(assistantMsgs.length).toBeGreaterThanOrEqual(1);
-  }, 360_000); // Free opencode runs are slower than paid APIs
+  }, 360_000); // Free model runs are slower than paid APIs
 
-  // G10: User memory (~/Desk/.memory/memory.md) is injected into the
-  // system prompt the runtime ships to OpenCode. The free
-  // The free opencode model doesn't reliably honor a user-memory
-  // instruction over the always-on artifact-attach guidance, so the
-  // assertion targets the *prompt rendering pipeline* (the
-  // server-side agent file written before each run), not model
-  // compliance. The integration test in this same file covers the
-  // happy-path of an actual agent reply elsewhere.
+  // G10: User memory (~/Roomy/.memory/memory.md) is injected into the
+  // system prompt the runtime ships to pi. The cheap test-time model
+  // doesn't reliably honor a user-memory instruction over the always-on
+  // artifact-attach guidance, so the assertion targets the *prompt
+  // rendering pipeline* (the server-side agent file written before each
+  // run), not model compliance. The integration test in this same file
+  // covers the happy-path of an actual agent reply elsewhere.
   it("user memory.md is rendered into the agent file at run time", async () => {
     if (!realToken) {
       const loginRes = await realRequest("POST", "/auth/login", undefined, {
-        username: "testuser",
+        email: "testuser@roomy.local",
         password: "test-pass-1234",
       });
       realToken = (loginRes.body as { token: string }).token;
     }
 
     const sentinel = "CORSAIR_SENTINEL_USER_MEMORY";
-    // DESK_HOME is the data root — no "Desk" sub-segment since ac4ecca.
+    // ROOMY_HOME is the data root — no "Roomy" sub-segment since ac4ecca.
     const memoryDir = path.join(realHome, ".memory");
     await fs.mkdir(memoryDir, { recursive: true });
     await fs.writeFile(
@@ -1240,9 +1235,9 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
 
     // Wait until the runtime writes the agent file. Pi reads
     // <cwd>/AGENTS.md from cwd up through parent directories, so the
-    // driver now writes a single AGENTS.md at the workspace root instead
-    // of one file per agent under `.opencode/agents/`. The rendered body
-    // still contains the user-memory fragment we're asserting on.
+    // driver now writes a single AGENTS.md at the workspace root. The
+    // rendered body contains the user-memory fragment we're asserting
+    // on.
     const agentFile = path.join(realHome, workspaceSlug, "AGENTS.md");
     let body = "";
     for (let i = 0; i < 60; i++) {
@@ -1251,12 +1246,12 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
       if (body.includes(sentinel)) break;
     }
     expect(body).toContain(sentinel);
-    expect(body).toContain("<!-- Desk user memory index -->");
+    expect(body).toContain("<!-- Roomy user memory index -->");
   }, 120_000);
 
   // Full sub-task loop against the real stack: agent spawns an
   // unscheduled task via /sandbox/messages → server auto-fires it →
-  // real opencode runs in the dedicated thread chat → we call
+  // real pi runs in the dedicated thread chat → we call
   // /sandbox/messages/complete with a result message → the report
   // lands as a child of the anchor in the parent chat.
   //
@@ -1264,7 +1259,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
   // is short and the assertion is robust. The complete call posts the
   // report-back; the parent chat then carries exactly one new agent
   // message whose parentId points at the task anchor.
-  // CI tail: the sub-task loop hits a real opencode container plus the
+  // CI tail: the sub-task loop hits a real pi container plus the
   // free big-pickle model; cold-start + a model turn + the report-back
   // are routinely past the 10-min poll budget on shared GHA runners
   // (the test passes locally with warm caches). Skip on CI so the
@@ -1273,7 +1268,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
   it.skipIf(!!process.env.CI)("spawns a sub-task, auto-fires it, completes it, and delivers a report-back to the parent chat", async () => {
     if (!realToken) {
       const loginRes = await realRequest("POST", "/auth/login", undefined, {
-        username: "testuser",
+        email: "testuser@roomy.local",
         password: "test-pass-1234",
       });
       realToken = (loginRes.body as { token: string }).token;
@@ -1320,7 +1315,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
             headers: {
               "Content-Type": "application/json",
               "Content-Length": String(Buffer.byteLength(payload)),
-              "X-Desk-Sandbox-Token": rawToken,
+              "X-Roomy-Sandbox-Token": rawToken,
             },
           },
           (res) => {
@@ -1361,7 +1356,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
     // The task_run row itself is `role='agent'` (inherited from the
     // anchor) so we have to require a *second* agent-role row,
     // otherwise the assertion would pass the moment the task_run is
-    // inserted — before opencode has actually replied.
+    // inserted — before pi has actually replied.
     let threadItems: Array<{ id: string; role: string; kind?: string; state?: string; parentId?: string; content?: { type?: string; text?: string } }> = [];
     let agentReplyText: string | undefined;
     for (let i = 0; i < 180; i++) {

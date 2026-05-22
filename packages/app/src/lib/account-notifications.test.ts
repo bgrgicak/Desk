@@ -83,7 +83,7 @@ describe('chat browser notification rules', () => {
   it('uses the chat title and start of the message for notification text', () => {
     expect(chatNotificationTitle('Project updates')).toBe('Project updates')
     expect(chatNotificationTitle('   ')).toBe('Chat message')
-    expect(messagePreview(message({ content: { type: 'text', text: '  hello   from desk  ' } }))).toBe('hello from desk')
+    expect(messagePreview(message({ content: { type: 'text', text: '  hello   from roomy  ' } }))).toBe('hello from roomy')
     expect(messagePreview(message({
       content: {
         type: 'events',
@@ -128,7 +128,7 @@ describe('chat browser notification rules', () => {
 
     expect(notificationMock).toHaveBeenCalledWith('Project Room', expect.objectContaining({
       body: 'Hello from the other chat with useful context.',
-      tag: 'desk-chat-cht_1',
+      tag: 'roomy-chat-cht_1',
     }))
 
     const instance = notificationMock.mock.instances[0] as unknown as Notification

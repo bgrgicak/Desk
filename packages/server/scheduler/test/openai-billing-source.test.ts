@@ -1,11 +1,11 @@
 /**
  * Unit tests for the run-time model resolver.
  *
- * `resolveModelForRun` translates Desk-only `codex/*` ids back to pi's
+ * `resolveModelForRun` translates Roomy-only `codex/*` ids back to pi's
  * provider channels: `openai-codex/*` when the ChatGPT OAuth bridge is
  * available, or `openai/*` when only an API key is configured. Models
  * outside the codex prefix pass through unchanged. Missing-auth is
- * handled by pi itself — Desk no longer substitutes a fallback model.
+ * handled by pi itself — Roomy no longer substitutes a fallback model.
  *
  * `resolveOpenAiBillingSource` is kept as a thin compatibility shim;
  * the original test cases below still exercise it to lock the
@@ -18,10 +18,9 @@ import {
   resolveModelForRun,
 } from "../src/runs.js";
 
-// Pi consumes the OAuth blob via PI_AUTH_JSON_BASE64 — the legacy
-// OPENCODE_AUTH_CONTENT key is still emitted by localSources/codex.ts as
-// the "is OAuth available" signal the resolver reads from.
-const oauth = { OPENCODE_AUTH_CONTENT: "{\"openai-codex\":{\"type\":\"oauth\"}}" };
+// Pi consumes the Codex OAuth blob via PI_AUTH_JSON_BASE64; the resolver
+// also reads this key as the "is OAuth available" signal.
+const oauth = { PI_AUTH_JSON_BASE64: "eyJvcGVuYWktY29kZXgiOnsidHlwZSI6Im9hdXRoIn19" };
 
 describe("resolveOpenAiBillingSource", () => {
   it("passes through non-codex model ids and keys untouched", () => {
@@ -53,11 +52,11 @@ describe("resolveOpenAiBillingSource", () => {
     expect(out.providerKeys.ANTHROPIC_API_KEY).toBe("sk-ant");
   });
 
-  it("treats an empty OPENCODE_AUTH_CONTENT string as 'OAuth not available'", () => {
+  it("treats an empty PI_AUTH_JSON_BASE64 string as 'OAuth not available'", () => {
     const out = resolveOpenAiBillingSource(
       "codex/gpt-5.4",
       { OPENAI_API_KEY: "sk-xxx" },
-      { OPENCODE_AUTH_CONTENT: "" },
+      { PI_AUTH_JSON_BASE64: "" },
     );
     expect(out.runtimeModel).toBe("openai/gpt-5.4");
   });
@@ -74,9 +73,9 @@ describe("resolveOpenAiBillingSource", () => {
   });
 });
 
-describe("resolveModelForRun — auth-missing surfaces to pi (no Desk-side substitution)", () => {
+describe("resolveModelForRun — auth-missing surfaces to pi (no Roomy-side substitution)", () => {
   it("keeps codex/* on the openai-codex channel even when neither OAuth nor an API key is set, so pi raises a clear error", () => {
-    // Previously Desk substituted a FALLBACK_MODEL when no auth was
+    // Previously Roomy substituted a FALLBACK_MODEL when no auth was
     // live; that masked the real problem (missing connection). Now we
     // route to pi's expected channel and let pi report which provider
     // it can't authenticate.
@@ -97,9 +96,9 @@ describe("resolveModelForRun — auth-missing surfaces to pi (no Desk-side subst
     expect(out.reason).toBeNull();
   });
 
-  it("passes opencode/* through unchanged regardless of provider state", () => {
-    const out = resolveModelForRun("opencode/big-pickle", {}, {});
-    expect(out.runtimeModel).toBe("opencode/big-pickle");
+  it("passes anthropic/* through unchanged regardless of provider state", () => {
+    const out = resolveModelForRun("anthropic/claude-haiku-4-5", {}, {});
+    expect(out.runtimeModel).toBe("anthropic/claude-haiku-4-5");
     expect(out.reason).toBeNull();
   });
 

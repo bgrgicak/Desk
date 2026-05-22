@@ -13,17 +13,17 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
-import { createRunManager } from "@agent-desk/scheduler";
-// Route coverage keeps /tools/models on the fake driver; real Docker/opencode
+import { createRunManager } from "@roomy-ai/scheduler";
+// Route coverage keeps /tools/models on the fake driver; real Docker/pi
 // coverage lives in tools-models.integration.test.ts.
-const PRIOR_DESK_SANDBOX_DRIVER = process.env.DESK_SANDBOX_DRIVER;
-process.env.DESK_SANDBOX_DRIVER = "fake";
+const PRIOR_ROOMY_SANDBOX_DRIVER = process.env.ROOMY_SANDBOX_DRIVER;
+process.env.ROOMY_SANDBOX_DRIVER = "fake";
 const SANDBOX_AVAILABLE = true;
 
 let pool: Pool;
@@ -33,17 +33,15 @@ let home: string;
 let dbPath: string;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-routes-cov-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-routes-cov-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
 
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "testuser";
-  process.env.DESK_SEED_PASSWORD = "test-pass-1234";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "test-pass-1234" });
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-routes-cov-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-routes-cov-"));
   await ensureLayout(home);
 
   const storage = { pool, home };
@@ -68,10 +66,10 @@ afterAll(async () => {
   clearConnections();
   server?.close();
 
-  if (PRIOR_DESK_SANDBOX_DRIVER === undefined) {
-    delete process.env.DESK_SANDBOX_DRIVER;
+  if (PRIOR_ROOMY_SANDBOX_DRIVER === undefined) {
+    delete process.env.ROOMY_SANDBOX_DRIVER;
   } else {
-    process.env.DESK_SANDBOX_DRIVER = PRIOR_DESK_SANDBOX_DRIVER;
+    process.env.ROOMY_SANDBOX_DRIVER = PRIOR_ROOMY_SANDBOX_DRIVER;
   }
 
   if (pool) await pool.end();
@@ -151,7 +149,7 @@ function requestMultipart(
   parts: Array<{ name: string; filename?: string; contentType?: string; body: Buffer }>,
 ): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
-    const boundary = `----desk-rc-${Math.random().toString(16).slice(2)}`;
+    const boundary = `----roomy-rc-${Math.random().toString(16).slice(2)}`;
     const chunks: Buffer[] = [];
     for (const p of parts) {
       const header = [`--${boundary}`];
@@ -201,7 +199,7 @@ describe("Routes coverage (real Postgres)", () => {
   beforeAll(async () => {
     // Login
     const res = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     token = (res.body as { token: string }).token;
@@ -230,7 +228,7 @@ describe("Routes coverage (real Postgres)", () => {
 
     // Login with new password succeeds
     const okLogin = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "new-pass-strong-1",
     });
     expect(okLogin.status).toBe(200);
@@ -238,7 +236,7 @@ describe("Routes coverage (real Postgres)", () => {
 
     // Login with old password fails
     const failLogin = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     expect(failLogin.status).toBe(401);
@@ -259,7 +257,7 @@ describe("Routes coverage (real Postgres)", () => {
 
     // Login with original password still works
     const okLogin = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     expect(okLogin.status).toBe(200);
@@ -379,7 +377,7 @@ describe("Routes coverage (real Postgres)", () => {
   it("POST /agents + POST /workspaces/:id/agents — enrolls a new agent", async () => {
     const createRes = await request("POST", "/agents", token, {
       name: "Sidekick",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
     });
     expect(createRes.status).toBe(201);
     const created = createRes.body as { id: string };
@@ -475,7 +473,7 @@ describe("Routes coverage (real Postgres)", () => {
     expect(res.status).toBe(200);
     const ws = res.body as { id: string; name: string; description: string; icon: string };
     expect(ws.id).toBe(workspaceId);
-    expect(ws.name).toBe("Desk");
+    expect(ws.name).toBe("Roomy");
     expect(typeof ws.description).toBe("string");
     expect(typeof ws.icon).toBe("string");
   });
@@ -507,7 +505,7 @@ describe("Routes coverage (real Postgres)", () => {
 
     // Restore
     await request("PATCH", `/workspaces/${workspaceId}`, token, {
-      name: "Desk",
+      name: "Roomy",
       description: "",
       icon: "",
     });
@@ -627,7 +625,7 @@ describe("Routes coverage (real Postgres)", () => {
     // Create a second agent and enroll it in the workspace.
     const createAgent = await request("POST", "/agents", token, {
       name: "Switcher",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
     });
     const otherAgentId = (createAgent.body as { id: string }).id;
     const enroll = await request("POST", `/workspaces/${workspaceId}/agents`, token, {
@@ -806,7 +804,7 @@ describe("Routes coverage (real Postgres)", () => {
     // the invariant independently from the global active-model list.
     const createAgent = await request("POST", "/agents", token, {
       name: "Stranger",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
     });
     const strangerId = (createAgent.body as { id: string }).id;
     await request("DELETE", `/workspaces/${workspaceId}/agents/${strangerId}`, token);

@@ -2,7 +2,7 @@
  * Integration test for the connection-refresh wiring.
  *
  * After a connector / local-source mutation, the API layer must:
- *   1. Null out the user's persisted opencode-serve session ids so the
+ *   1. Null out the user's persisted pi session ids so the
  *      next chat turn binds providerID/modelID/auth fresh.
  *   2. Broadcast a `connection.changed` WS event so any open client
  *      refetches its connection list.
@@ -16,15 +16,15 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
+import { Pool, runMigrations, insertSeedFixture, queries } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
 import {
   buildDaemonEnv,
   refreshSandboxConnections,
   resolveLocalSourceEnv,
-} from "@agent-desk/runtime";
-import { generateId, type WsEvent } from "@agent-desk/shared";
+} from "@roomy-ai/runtime";
+import { generateId, type WsEvent } from "@roomy-ai/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { addConnection, clearConnections } from "../src/ws/registry.js";
@@ -47,21 +47,19 @@ let agentId: string;
 const refreshCalls: Array<{ userId: string; workspaceId: string | undefined }> = [];
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-connref-api-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-connref-api-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "connref-api";
-  process.env.DESK_SEED_PASSWORD = "connref-pass";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "connref-api", password: "connref-pass" });
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-connref-api-home-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-connref-api-home-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
   const { rows: userRows } = await pool.query<{ id: string }>("SELECT id FROM users LIMIT 1");
   userId = userRows[0].id;
-  vault = new VaultStore(path.join(home, "vaults"));
+  vault = new VaultStore(path.join(home, ".vaults"));
   await vault.setup(userId, "connref-test-vault");
 
   const runManager = createRunManager({
@@ -99,9 +97,9 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   port = (server.address() as net.AddressInfo).port;
 
-  // Login + create a workspace + chat with a stamped opencode session id.
+  // Login + create a workspace + chat with a stamped pi session id.
   const login = await request("POST", "/auth/login", undefined, {
-    username: "connref-api", password: "connref-pass",
+    email: "connref-api@roomy.local", password: "connref-pass",
   });
   token = login.body.token;
   const ws = await request("POST", "/workspaces", token, { name: "Refresh WS" });
@@ -160,7 +158,7 @@ async function makeChatWithSession(sessionId: string): Promise<string> {
     agentId,
     title: "test chat",
   });
-  await queries.chats.setOpencodeSessionId(pool, chatId, sessionId);
+  await queries.chats.setPiSessionId(pool, chatId, sessionId);
   return chatId;
 }
 
@@ -185,9 +183,9 @@ class CapturingWs {
 }
 
 describe("connection-mutation refresh wiring", () => {
-  it("clears the user's opencode sessions when a connection is created", async () => {
+  it("clears the user's pi sessions when a connection is created", async () => {
     const chatId = await makeChatWithSession("ses_create_before");
-    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBe("ses_create_before");
+    expect(await queries.chats.getPiSessionId(pool, chatId)).toBe("ses_create_before");
 
     const created = await request("POST", "/me/connections", token, {
       providerId: "github",
@@ -196,7 +194,7 @@ describe("connection-mutation refresh wiring", () => {
     });
     expect(created.status).toBe(201);
 
-    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBeNull();
+    expect(await queries.chats.getPiSessionId(pool, chatId)).toBeNull();
   });
 
   it("clears sessions when a connection is updated", async () => {
@@ -215,7 +213,7 @@ describe("connection-mutation refresh wiring", () => {
     });
     expect(patched.status).toBe(200);
 
-    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBeNull();
+    expect(await queries.chats.getPiSessionId(pool, chatId)).toBeNull();
   });
 
   it("clears sessions when a connection is deleted", async () => {
@@ -232,7 +230,7 @@ describe("connection-mutation refresh wiring", () => {
     const deleted = await request("DELETE", `/me/connections/${connId}`, token);
     expect(deleted.status).toBe(200);
 
-    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBeNull();
+    expect(await queries.chats.getPiSessionId(pool, chatId)).toBeNull();
   });
 
   it("clears sessions when a local source is toggled off", async () => {
@@ -243,7 +241,7 @@ describe("connection-mutation refresh wiring", () => {
     const toggled = await request("PUT", "/me/providers/local/codex", token, { enabled: false });
     expect(toggled.status).toBe(200);
 
-    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBeNull();
+    expect(await queries.chats.getPiSessionId(pool, chatId)).toBeNull();
   });
 
   it("scopes session clearing to one workspace when a workspace grant is replaced", async () => {
@@ -259,8 +257,8 @@ describe("connection-mutation refresh wiring", () => {
     const chatInOther = generateId("chat");
     await queries.chats.insert(pool, { id: chatInTarget, workspaceId, agentId, title: "target" });
     await queries.chats.insert(pool, { id: chatInOther, workspaceId: otherWorkspaceId, agentId, title: "other" });
-    await queries.chats.setOpencodeSessionId(pool, chatInTarget, "ses_target");
-    await queries.chats.setOpencodeSessionId(pool, chatInOther, "ses_other");
+    await queries.chats.setPiSessionId(pool, chatInTarget, "ses_target");
+    await queries.chats.setPiSessionId(pool, chatInOther, "ses_other");
 
     // Need a connection to grant.
     const conn = await request("POST", "/me/connections", token, {
@@ -270,8 +268,8 @@ describe("connection-mutation refresh wiring", () => {
     });
     const connId = conn.body.connection.id;
     // Connection creation already cleared sessions; reseed both before testing the grant call.
-    await queries.chats.setOpencodeSessionId(pool, chatInTarget, "ses_target_again");
-    await queries.chats.setOpencodeSessionId(pool, chatInOther, "ses_other_again");
+    await queries.chats.setPiSessionId(pool, chatInTarget, "ses_target_again");
+    await queries.chats.setPiSessionId(pool, chatInOther, "ses_other_again");
 
     const grants = await request("PUT", `/workspaces/${workspaceId}/connections`, token, {
       grants: [
@@ -280,8 +278,8 @@ describe("connection-mutation refresh wiring", () => {
     });
     expect(grants.status).toBe(200);
 
-    expect(await queries.chats.getOpencodeSessionId(pool, chatInTarget)).toBeNull();
-    expect(await queries.chats.getOpencodeSessionId(pool, chatInOther)).toBe("ses_other_again");
+    expect(await queries.chats.getPiSessionId(pool, chatInTarget)).toBeNull();
+    expect(await queries.chats.getPiSessionId(pool, chatInOther)).toBe("ses_other_again");
   });
 
   it("emits a `connection.changed` WS event after each mutation", async () => {
@@ -313,7 +311,7 @@ describe("connection-mutation refresh wiring", () => {
  * /me/providers (not POST /me/connections), and the resolver previously
  * skipped GITHUB_TOKEN entirely — and the legacy route didn't trigger a
  * connection refresh. End result: the token landed in the DB/vault but
- * never reached opencode-serve.
+ * never reached pi.
  *
  * These tests cover both halves of the fix:
  *   - PUT /me/providers writes the token in a shape resolveProviderKeys
@@ -365,7 +363,7 @@ describe("legacy /me/providers — sandbox env propagation", () => {
     });
     expect(put.status).toBe(200);
 
-    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBeNull();
+    expect(await queries.chats.getPiSessionId(pool, chatId)).toBeNull();
     const events: WsEvent[] = ws.sent.map((s) => JSON.parse(s));
     const connectionChanged = events.find((e) => e.type === "connection.changed");
     expect(connectionChanged).toBeDefined();
@@ -383,7 +381,7 @@ describe("legacy /me/providers — sandbox env propagation", () => {
     });
     expect(meta.status).toBe(200);
 
-    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBeNull();
+    expect(await queries.chats.getPiSessionId(pool, chatId)).toBeNull();
 
     // Disabled providers must not appear in the resolved env — otherwise
     // the Settings toggle is purely cosmetic and the daemon still sees
@@ -395,34 +393,34 @@ describe("legacy /me/providers — sandbox env propagation", () => {
 
 /**
  * Regression suite for the "I changed my agent's model in Settings but
- * the sandbox keeps using the old model" bug. opencode-serve reads each
+ * the sandbox keeps using the old model" bug. pi reads each
  * agent file's `model:` field into an in-memory cache at daemon startup
  * and ignores subsequent rewrites — and it also ignores per-message
  * `providerID` / `modelID` overrides whenever an `agent` is bound to
- * the session. So changing `agent.model` in Desk only propagates after
+ * the session. So changing `agent.model` in Roomy only propagates after
  * the daemon restarts. PATCH /agents/:id therefore must run the same
  * daemon-refresh pipeline used by connection mutations.
  */
 describe("PATCH /agents/:id — daemon refresh on model change", () => {
   it("clears sessions for chats using the agent when its model changes", async () => {
     const chatId = await makeChatWithSession("ses_agent_model_change");
-    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBe("ses_agent_model_change");
+    expect(await queries.chats.getPiSessionId(pool, chatId)).toBe("ses_agent_model_change");
 
     const before = await request("GET", `/agents/${agentId}`, token);
     const previousModel = before.body.model;
-    const newModel = previousModel === "opencode/big-pickle"
-      ? "opencode/qwen3.6-plus-free"
-      : "opencode/big-pickle";
+    const newModel = previousModel === "anthropic/claude-haiku-4-5"
+      ? "anthropic/claude-sonnet-4-6"
+      : "anthropic/claude-haiku-4-5";
 
     const patched = await request("PATCH", `/agents/${agentId}`, token, { model: newModel });
     expect(patched.status).toBe(200);
     expect(patched.body.model).toBe(newModel);
 
-    expect(await queries.chats.getOpencodeSessionId(pool, chatId)).toBeNull();
+    expect(await queries.chats.getPiSessionId(pool, chatId)).toBeNull();
   });
 
   it("triggers refreshSandboxConnections so daemons re-read the updated agent file", async () => {
-    // The opencode-serve daemon caches each agent's `model:` at startup
+    // The pi runtime caches each agent's `model:` at startup
     // and never re-reads the file. Without a daemon restart, a new
     // session created in the same daemon still inherits the cached
     // (stale) agent config. So clearing chat sessions is necessary but
@@ -432,9 +430,9 @@ describe("PATCH /agents/:id — daemon refresh on model change", () => {
     // Force a real model flip even if the previous test left the agent
     // at the "new" value already.
     const before = await request("GET", `/agents/${agentId}`, token);
-    const flipped = before.body.model === "opencode/big-pickle"
-      ? "opencode/qwen3.6-plus-free"
-      : "opencode/big-pickle";
+    const flipped = before.body.model === "anthropic/claude-haiku-4-5"
+      ? "anthropic/claude-sonnet-4-6"
+      : "anthropic/claude-haiku-4-5";
 
     const patched = await request("PATCH", `/agents/${agentId}`, token, { model: flipped });
     expect(patched.status).toBe(200);

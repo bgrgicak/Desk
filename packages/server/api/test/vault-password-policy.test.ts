@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { enforceVaultPasswordPolicy } from "../src/routes/vault.js";
-import { ValidationError } from "@agent-desk/shared";
+import { ValidationError } from "@roomy-ai/shared";
 
 describe("enforceVaultPasswordPolicy", () => {
   it("accepts a long passphrase", () => {

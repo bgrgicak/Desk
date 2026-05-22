@@ -1,4 +1,4 @@
-import { queries } from "@agent-desk/db";
+import { queries } from "@roomy-ai/db";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -8,7 +8,7 @@ import {
   MessageContentSchema,
   type Message,
   type WsEvent,
-} from "@agent-desk/shared";
+} from "@roomy-ai/shared";
 import { z } from "zod";
 import {
   chatArtifactsDir,
@@ -25,14 +25,14 @@ import {
   workspaceRootPath,
   type FileRef,
   type StorageContext,
-} from "@agent-desk/storage";
-import { writeBuiltinApps } from "@agent-desk/runtime";
+} from "@roomy-ai/storage";
+import { writeBuiltinApps } from "@roomy-ai/runtime";
 import { workspaceSlugForChat } from "./chats-shared.js";
 
 const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
-const APP_DIR_MIME = "application/vnd.desk.app+directory";
-/** In-sandbox mount path for built-in apps (matches `APPS_SANDBOX_MOUNT_DIR` in @agent-desk/runtime). */
-const GLOBAL_APP_SANDBOX_PREFIX = "/opt/desk-apps/";
+const APP_DIR_MIME = "application/vnd.roomy.app+directory";
+/** In-sandbox mount path for built-in apps (matches `APPS_SANDBOX_MOUNT_DIR` in @roomy-ai/runtime). */
+const GLOBAL_APP_SANDBOX_PREFIX = "/opt/roomy-apps/";
 
 /** Built-in apps live outside the workspace tree. The agent attaches them via their in-sandbox path. */
 function isGlobalAppArtifactPath(raw: string): boolean {
@@ -40,7 +40,7 @@ function isGlobalAppArtifactPath(raw: string): boolean {
 }
 
 /**
- * Validates a `/opt/desk-apps/<name>.app/...` path and returns it normalized
+ * Validates a `/opt/roomy-apps/<name>.app/...` path and returns it normalized
  * (with the sandbox prefix retained — the chat stores the path verbatim so
  * the SPA can detect global-scope artifacts by prefix).
  */
@@ -60,6 +60,23 @@ function normalizeGlobalAppPath(raw: string): { sandboxPath: string; insidePath:
   const appDir = segments[0];
   if (!/^[a-z][a-z0-9-]{0,62}\.app$/.test(appDir)) {
     throw new ValidationError(`Invalid built-in app directory: ${appDir}`);
+  }
+  // Built-in apps are renderable in two shapes only: the app root
+  // (`<name>.app`) and a built fragment (`<name>.app/dist/fragments/<frag>`).
+  // The SPA's parseGlobalAppPath only routes those two; any other extant
+  // path inside the mounted source tree (e.g. raw `fragments/<frag>/`,
+  // `src/`, `vite.config.ts`) would attach successfully but render a blank
+  // "cannot display" panel. Reject those up front so the agent gets a
+  // clear error and follows the prompt's "fall back to Markdown" rule
+  // rather than silently storing an unrenderable ref.
+  if (segments.length > 1) {
+    const fragmentShape = /^[a-z][a-z0-9-]{0,62}\.app\/dist\/fragments\/[a-z][a-z0-9-]{0,62}(?:\/index\.html)?$/;
+    const distRootShape = /^[a-z][a-z0-9-]{0,62}\.app\/dist(?:\/index\.html)?$/;
+    if (!fragmentShape.test(inside) && !distRootShape.test(inside)) {
+      throw new ValidationError(
+        `Built-in app path must be ${GLOBAL_APP_SANDBOX_PREFIX}<name>.app or ${GLOBAL_APP_SANDBOX_PREFIX}<name>.app/dist/fragments/<fragment>; got: ${inside}`,
+      );
+    }
   }
   return { sandboxPath: `${GLOBAL_APP_SANDBOX_PREFIX}${inside}`, insidePath: inside };
 }
@@ -147,7 +164,7 @@ export async function attachArtifactRef(
   if (!chat) throw new NotFoundError(`Chat not found: ${data.chatId}`);
 
   // Built-in app path: lives outside the workspace tree, resolved against
-  // ~/Desk/.apps/. The chat row stores the verbatim `/opt/desk-apps/...`
+  // ~/Roomy/.apps/. The chat row stores the verbatim `/opt/roomy-apps/...`
   // path so the SPA can detect global scope by prefix.
   if (isGlobalAppArtifactPath(data.path)) {
     const { sandboxPath, insidePath } = normalizeGlobalAppPath(data.path);
@@ -159,9 +176,9 @@ export async function attachArtifactRef(
     let stat = await fs.stat(abs).catch(() => null);
     if (!stat) {
       // The .apps mirror is populated once on server start by
-      // writeBuiltinApps. If desk-apps was built (or freshly checked
+      // writeBuiltinApps. If roomy-apps was built (or freshly checked
       // out) after start, the mirror is stale and a path the agent
-      // legitimately expects ("/opt/desk-apps/chat-forms.app/...") will
+      // legitimately expects ("/opt/roomy-apps/chat-forms.app/...") will
       // 404 — pushing the agent onto a workspace-relative fallback that
       // gets rendered in library scope and can't post chat messages.
       // Re-sync once on miss and retry the stat before giving up.
@@ -461,7 +478,7 @@ export async function copyAppFromLibrary(
 /**
  * Modify-as-version: replace a library `<name>.app/` with the
  * chat-artifact version of the same app. The prior library copy is
- * moved to `~/Desk/.trash/.app-versions/` for recovery.
+ * moved to `~/Roomy/.trash/.app-versions/` for recovery.
  *
  * Concurrency: pass `expectedSourceVersion` (captured by the UI from
  * `copyLibraryAppToChat`'s response) to enforce an If-Match-style

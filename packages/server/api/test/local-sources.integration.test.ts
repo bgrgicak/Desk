@@ -1,5 +1,5 @@
 /**
- * Integration coverage for local sources — model providers Desk auto-detects
+ * Integration coverage for local sources — model providers Roomy auto-detects
  * on the user's host machine. Codex (ChatGPT subscription tokens) is the
  * first; LM Studio / Ollama will register the same way.
  *
@@ -10,7 +10,7 @@
  *     provider_meta) and the GET roundtrips it.
  *   - Unknown kinds return 404.
  *   - resolveLocalSourceEnv() — the helper used by the runtime — returns
- *     OPENCODE_AUTH_CONTENT iff the user is opted in *and* the host file
+ *     PI_AUTH_JSON_BASE64 iff the user is opted in *and* the host file
  *     is good.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
@@ -19,14 +19,14 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
-import { createRunManager } from "@agent-desk/scheduler";
-import { LOCAL_SOURCE_KINDS, resolveLocalSourceEnv } from "@agent-desk/runtime";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { LOCAL_SOURCE_KINDS, resolveLocalSourceEnv } from "@roomy-ai/runtime";
 
 let pool: Pool;
 let server: http.Server;
@@ -62,21 +62,19 @@ function buildAuthFile(opts: { expSec?: number; email?: string; plan?: string; r
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-local-sources-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-local-sources-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "ls-test";
-  process.env.DESK_SEED_PASSWORD = "ls-pass";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "ls-test", password: "ls-pass" });
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-local-sources-home-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-local-sources-home-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
   // Per-test fake — never touch the developer's real ~/.codex/auth.json.
   codexAuthPath = path.join(home, "codex-auth.json");
-  process.env.DESK_CODEX_AUTH_PATH = codexAuthPath;
+  process.env.ROOMY_CODEX_AUTH_PATH = codexAuthPath;
 
   const storage = { pool, home };
   const runManager = createRunManager({
@@ -100,7 +98,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_CODEX_AUTH_PATH;
+  delete process.env.ROOMY_CODEX_AUTH_PATH;
 });
 
 beforeEach(async () => {
@@ -142,7 +140,7 @@ describe("/me/providers/local", () => {
 
   beforeAll(async () => {
     const login = await request("POST", "/auth/login", undefined, {
-      username: "ls-test",
+      email: "ls-test@roomy.local",
       password: "ls-pass",
     });
     token = (login.body as { token: string }).token;
@@ -207,7 +205,7 @@ describe("resolveLocalSourceEnv", () => {
     const { rows } = await pool.query("SELECT id FROM users LIMIT 1");
     userId = rows[0].id as string;
     const login = await request("POST", "/auth/login", undefined, {
-      username: "ls-test",
+      email: "ls-test@roomy.local",
       password: "ls-pass",
     });
     token = (login.body as { token: string }).token;
@@ -220,15 +218,16 @@ describe("resolveLocalSourceEnv", () => {
     expect(env).toEqual({});
   });
 
-  it("returns OPENCODE_AUTH_CONTENT when Codex is opted in and the host file is good", async () => {
+  it("returns PI_AUTH_JSON_BASE64 when Codex is opted in and the host file is good", async () => {
     await fs.writeFile(codexAuthPath, JSON.stringify(buildAuthFile({ refresh: "rt-bridge" })));
     await request("PUT", "/me/providers/local/codex", token, { enabled: true });
     const env = await resolveLocalSourceEnv(pool, userId);
-    expect(typeof env.OPENCODE_AUTH_CONTENT).toBe("string");
-    const blob = JSON.parse(env.OPENCODE_AUTH_CONTENT);
-    expect(blob.openai.type).toBe("oauth");
-    expect(blob.openai.refresh).toBe("rt-bridge");
-    expect(blob.openai.accountId).toBe("acct-test");
+    expect(typeof env.PI_AUTH_JSON_BASE64).toBe("string");
+    const decoded = Buffer.from(env.PI_AUTH_JSON_BASE64, "base64").toString("utf8");
+    const blob = JSON.parse(decoded);
+    expect(blob["openai-codex"].type).toBe("oauth");
+    expect(blob["openai-codex"].refresh).toBe("rt-bridge");
+    expect(blob["openai-codex"].accountId).toBe("acct-test");
   });
 
   it("returns an empty map when opted in but the host file is missing", async () => {

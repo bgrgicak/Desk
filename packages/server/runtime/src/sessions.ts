@@ -1,13 +1,13 @@
 import * as crypto from "node:crypto";
-import { type Pool } from "@agent-desk/db";
-import { generateId, type SandboxSession } from "@agent-desk/shared";
-import { queries } from "@agent-desk/db";
+import { type Pool } from "@roomy-ai/db";
+import { generateId, type SandboxSession } from "@roomy-ai/shared";
+import { queries } from "@roomy-ai/db";
 
 /**
  * Per-run sandbox session tokens. The runtime mints one before invoking
- * OpenCode and revokes it after the run finishes. The token is passed into
- * the container as `DESK_SANDBOX_TOKEN`; the `desk` CLI forwards it to the
- * REST API as `X-Desk-Sandbox-Token`. Server-side verification lives in
+ * pi and revokes it after the run finishes. The token is passed into
+ * the container as `ROOMY_SANDBOX_TOKEN`; the `roomy` CLI forwards it to the
+ * REST API as `X-Roomy-Sandbox-Token`. Server-side verification lives in
  * `packages/server/api/src/auth/sandboxToken.ts`.
  */
 

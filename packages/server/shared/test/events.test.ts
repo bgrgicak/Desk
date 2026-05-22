@@ -43,7 +43,7 @@ const fixtures: Record<string, WsEvent> = {
   },
   "message.log_appended": {
     type: "message.log_appended",
-    payload: { messageId: "msg_abc", kind: "stdout", line: "hello from opencode" },
+    payload: { messageId: "msg_abc", kind: "stdout", line: "hello from pi" },
   },
 };
 

@@ -6,7 +6,7 @@ import {
   type AgentEvent,
   type AgentLogEntry,
   type Message,
-} from "@agent-desk/shared";
+} from "@roomy-ai/shared";
 
 /**
  * Pure helpers extracted from runs.ts.  Anything in this file must NOT
@@ -49,16 +49,16 @@ export type ModelResolutionReason =
   | "codex-fallback-api-key"; // codex/* → openai/* via API-key fallback (Codex disabled, OPENAI key present)
 
 /**
- * Translate a Desk model id to pi's view of the world.
+ * Translate a Roomy model id to pi's view of the world.
  *
- * Desk exposes Codex (ChatGPT-subscription) OpenAI models under a UI
+ * Roomy exposes Codex (ChatGPT-subscription) OpenAI models under a UI
  * relabel `codex/<name>`; pi's actual provider id for that channel is
  * `openai-codex`. So a saved agent with `model: "codex/gpt-5.5"` needs
  * to land at pi as `openai-codex/gpt-5.5` when the OAuth bridge is on,
  * or as `openai/gpt-5.5` when only an API key is configured.
  *
  * Other models pass through unchanged. When the requested provider has
- * no live auth, pi itself surfaces the error to the user — Desk no
+ * no live auth, pi itself surfaces the error to the user — Roomy no
  * longer substitutes a fallback. This matches pi's CLI semantics: pick
  * a model, get a clear error if its auth is missing.
  *
@@ -75,7 +75,7 @@ export function resolveModelForRun(
   reason: ModelResolutionReason;
 } {
   const hasOpenAiKey = isNonEmpty(providerKeys.OPENAI_API_KEY);
-  const oauthAvailable = isNonEmpty(extraEnv?.OPENCODE_AUTH_CONTENT);
+  const oauthAvailable = isNonEmpty(extraEnv?.PI_AUTH_JSON_BASE64);
 
   if (model.startsWith("codex/")) {
     const suffix = model.slice("codex/".length);
@@ -187,7 +187,7 @@ export function deriveTextFromLog(entries: AgentLogEntry[]): string {
 /**
  * Summaries should be a clean final markdown body. If the model used tools, keep
  * the final text part instead of concatenating planning chatter with the final
- * answer. Current opencode streams that final part as many text deltas, so
+ * answer. Current pi streams that final part as many text deltas, so
  * reconstruct chunks that share a part/message id.
  */
 export function deriveSummaryTextFromLog(entries: AgentLogEntry[]): string {
@@ -323,7 +323,7 @@ export function errorLogLines(err: unknown): string[] {
 export function isUnscheduledTask(task: Message): boolean {
   // True for any task with no schedule. User-authored cards remain kanban
   // cards (sticky column, runs never auto-close them); agent-authored
-  // sub-tasks created via `desk-agent task schedule` are "go do this now"
+  // sub-tasks created via `roomy-agent task schedule` are "go do this now"
   // work items and the afterTaskRun policy mirrors their run's terminal
   // state onto the parent so they don't appear stuck in Active after the
   // agent finishes. The role distinction is owned by afterTaskRun; this
@@ -346,16 +346,16 @@ export function envPositiveInt(name: string): number | null {
 }
 
 export function summaryTriggerFraction(): number {
-  const fromEnv = Number.parseFloat(process.env.DESK_SUMMARY_TRIGGER_FRACTION ?? "");
+  const fromEnv = Number.parseFloat(process.env.ROOMY_SUMMARY_TRIGGER_FRACTION ?? "");
   return Number.isFinite(fromEnv) && fromEnv > 0 && fromEnv < 1 ? fromEnv : 0.15;
 }
 
 export function summaryTriggerBudget(limits: SummaryModelTokenLimits): number {
-  const explicit = envPositiveInt("DESK_SUMMARY_TRIGGER_TOKENS");
+  const explicit = envPositiveInt("ROOMY_SUMMARY_TRIGGER_TOKENS");
   if (explicit !== null) return explicit;
 
-  const min = envPositiveInt("DESK_SUMMARY_TRIGGER_MIN_TOKENS") ?? 6_000;
-  const max = envPositiveInt("DESK_SUMMARY_TRIGGER_MAX_TOKENS") ?? 12_000;
+  const min = envPositiveInt("ROOMY_SUMMARY_TRIGGER_MIN_TOKENS") ?? 6_000;
+  const max = envPositiveInt("ROOMY_SUMMARY_TRIGGER_MAX_TOKENS") ?? 12_000;
   const effectiveInputWindow = limits.inputLimit ?? limits.contextWindow;
   const fractional = Math.floor(effectiveInputWindow * summaryTriggerFraction());
   const safeUpperBound = Math.floor(effectiveInputWindow * 0.6);

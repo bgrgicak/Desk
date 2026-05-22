@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { X } from 'lucide-react'
-import { Button, cn } from '@agent-desk/ui'
+import { Button, cn } from '@roomy-ai/ui'
 import {
   ArtifactKebab,
   ArtifactPreviewBody,

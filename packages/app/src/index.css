@@ -1,4 +1,4 @@
-@import "@agent-desk/ui/styles.css";
+@import "@roomy-ai/ui/styles.css";
 
 html {
   width: 100%;
@@ -62,7 +62,7 @@ th {
  * variable (--topbar-height) set on the AppShell root element to shift it down
  * so it sits below the workspace bar.
  *
- * Desk app-shell sidebar override — keep here, not in @agent-desk/ui.
+ * Roomy app-shell sidebar override — keep here, not in @roomy-ai/ui.
  */
 [data-slot="sidebar-container"] {
   position: absolute !important;

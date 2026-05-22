@@ -1,5 +1,5 @@
-import { type Pool, queries } from "@agent-desk/db";
-import type { Message, WsEvent } from "@agent-desk/shared";
+import { type Pool, queries } from "@roomy-ai/db";
+import type { Message, WsEvent } from "@roomy-ai/shared";
 import { computeNextRun } from "./runs-helpers.js";
 
 /**

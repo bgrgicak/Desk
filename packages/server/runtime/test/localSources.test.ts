@@ -21,13 +21,13 @@ let tmpDir: string;
 let authPath: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "desk-local-sources-"));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "roomy-local-sources-"));
   authPath = path.join(tmpDir, "auth.json");
-  process.env.DESK_CODEX_AUTH_PATH = authPath;
+  process.env.ROOMY_CODEX_AUTH_PATH = authPath;
 });
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
-  delete process.env.DESK_CODEX_AUTH_PATH;
+  delete process.env.ROOMY_CODEX_AUTH_PATH;
 });
 
 describe("registry", () => {
@@ -45,7 +45,7 @@ describe("registry", () => {
 });
 
 describe("Codex local source", () => {
-  it("defaultCodexAuthPath honors DESK_CODEX_AUTH_PATH override", () => {
+  it("defaultCodexAuthPath honors ROOMY_CODEX_AUTH_PATH override", () => {
     expect(defaultCodexAuthPath()).toBe(authPath);
   });
 
@@ -88,28 +88,6 @@ describe("Codex local source", () => {
     expect(detectLocalSource("codex")?.reason).toBe("no_tokens");
   });
 
-  it("loadEnv() emits OPENCODE_AUTH_CONTENT in OpenCode auth-blob format", () => {
-    const exp = Math.floor(Date.now() / 1000) + 3600;
-    const access = jwt({ exp });
-    fs.writeFileSync(authPath, JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        id_token: jwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-7" } }),
-        access_token: access,
-        refresh_token: "rt_yyy",
-        account_id: "acct-7",
-      },
-    }));
-    const env = loadLocalSourceEnv("codex");
-    expect(env).not.toBeNull();
-    const blob = JSON.parse(env!.OPENCODE_AUTH_CONTENT);
-    expect(blob.openai.type).toBe("oauth");
-    expect(blob.openai.refresh).toBe("rt_yyy");
-    expect(blob.openai.access).toBe(access);
-    expect(blob.openai.accountId).toBe("acct-7");
-    expect(blob.openai.expires).toBe(exp * 1000);
-  });
-
   it("loadEnv() returns null when the host file is missing or incomplete", () => {
     expect(loadLocalSourceEnv("codex")).toBeNull();
     fs.writeFileSync(authPath, JSON.stringify({
@@ -126,8 +104,9 @@ describe("Codex local source", () => {
       auth_mode: "chatgpt",
       tokens: { id_token: idToken, access_token: access, refresh_token: "rt_z" },
     }));
-    const blob = JSON.parse(loadLocalSourceEnv("codex")!.OPENCODE_AUTH_CONTENT);
-    expect(blob.openai.accountId).toBe("acct-from-id");
+    const env = loadLocalSourceEnv("codex")!;
+    const parsed = JSON.parse(Buffer.from(env.PI_AUTH_JSON_BASE64, "base64").toString("utf8"));
+    expect(parsed["openai-codex"].accountId).toBe("acct-from-id");
   });
 
   it("loadEnv() falls back to organizations[].id when no chatgpt_account_id claim is present", () => {
@@ -137,11 +116,12 @@ describe("Codex local source", () => {
       auth_mode: "chatgpt",
       tokens: { id_token: idToken, access_token: access, refresh_token: "rt_z" },
     }));
-    const blob = JSON.parse(loadLocalSourceEnv("codex")!.OPENCODE_AUTH_CONTENT);
-    expect(blob.openai.accountId).toBe("org-default");
+    const env = loadLocalSourceEnv("codex")!;
+    const parsed = JSON.parse(Buffer.from(env.PI_AUTH_JSON_BASE64, "base64").toString("utf8"));
+    expect(parsed["openai-codex"].accountId).toBe("org-default");
   });
 
-  it("loadEnv() also emits PI_AUTH_JSON_BASE64 in pi's openai-codex shape", () => {
+  it("loadEnv() emits PI_AUTH_JSON_BASE64 in pi's openai-codex shape", () => {
     const access = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
     fs.writeFileSync(authPath, JSON.stringify({
       auth_mode: "chatgpt",
@@ -163,11 +143,5 @@ describe("Codex local source", () => {
     expect(parsed["openai-codex"].refresh).toBe("rt_pi");
     expect(parsed["openai-codex"].accountId).toBe("acct_pi_123");
     expect(typeof parsed["openai-codex"].expires).toBe("number");
-    // The two blobs are semantically equivalent — Codex auth, same
-    // tokens — but the provider-id key and the absence of `id_token`
-    // are what differ between the opencode-serve daemon path and pi.
-    const opencodeBlob = JSON.parse(env.OPENCODE_AUTH_CONTENT);
-    expect(opencodeBlob.openai.access).toBe(parsed["openai-codex"].access);
-    expect(opencodeBlob.openai.refresh).toBe(parsed["openai-codex"].refresh);
   });
 });

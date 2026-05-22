@@ -1,7 +1,7 @@
 /**
  * Modify-as-version flow for library apps.
  *
- * Real desk-server, real SQLite, real fs. Walks the full flow:
+ * Real roomy-server, real SQLite, real fs. Walks the full flow:
  *   1. Materialize a library `<name>.app/`.
  *   2. `POST /chats/:id/copy-library-app` clones it into the chat's
  *      artifacts dir (with node_modules and dist intact).
@@ -16,15 +16,15 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { Pool, runMigrations, insertSeedFixture } from "@roomy-ai/db";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 import {
   ensureLayout,
   ensureWorkspaceLayout,
   workspaceRootPath,
   chatArtifactsDir,
-} from "@agent-desk/storage";
+} from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -41,18 +41,16 @@ let authToken: string;
 const APP_NAME = "versioned-app";
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-modver-int-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-modver-int-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "modver-int-user";
-  process.env.DESK_SEED_PASSWORD = "pw";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "modver-int-user", password: "pw" });
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-modver-int-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-modver-int-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const { rows: wsRows } = await pool.query<{ id: string; path: string }>(
     "SELECT id, path FROM workspaces LIMIT 1",
@@ -73,7 +71,7 @@ beforeAll(async () => {
   await fs.mkdir(path.join(appRoot, "dist"), { recursive: true });
   await fs.mkdir(path.join(appRoot, "node_modules"), { recursive: true });
   await fs.writeFile(
-    path.join(appRoot, "desk.app.json"),
+    path.join(appRoot, "roomy.app.json"),
     JSON.stringify({ name: APP_NAME, version: "0.1.0", capabilities: [] }),
     "utf8",
   );
@@ -100,7 +98,7 @@ beforeAll(async () => {
   port = (server.address() as net.AddressInfo).port;
 
   const login = await httpRaw("POST", "/auth/login", {
-    body: { username: "modver-int-user", password: "pw" },
+    body: { email: "modver-int-user@roomy.local", password: "pw" },
   });
   authToken = (login.bodyJson as { token: string }).token;
 });
@@ -112,7 +110,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 interface RawResponse {
@@ -260,7 +258,7 @@ describe("modify-as-version flow", () => {
     const lib = path.join(wsRoot, "concurrent.app");
     await fs.mkdir(path.join(lib, "dist"), { recursive: true });
     await fs.writeFile(
-      path.join(lib, "desk.app.json"),
+      path.join(lib, "roomy.app.json"),
       JSON.stringify({ name: "concurrent", capabilities: [] }),
       "utf8",
     );
@@ -288,7 +286,7 @@ describe("modify-as-version flow", () => {
     // manifest, advancing its mtime past the captured sourceVersion.
     await new Promise((r) => setTimeout(r, 10));
     const newMtime = new Date(Date.now() + 5_000);
-    await fs.utimes(path.join(lib, "desk.app.json"), newMtime, newMtime);
+    await fs.utimes(path.join(lib, "roomy.app.json"), newMtime, newMtime);
 
     const replace = await httpRaw(
       "POST",
@@ -333,7 +331,7 @@ describe("modify-as-version flow", () => {
     const sweepApp = path.join(wsRoot, "sweep.app");
     await fs.mkdir(path.join(sweepApp, "dist"), { recursive: true });
     await fs.writeFile(
-      path.join(sweepApp, "desk.app.json"),
+      path.join(sweepApp, "roomy.app.json"),
       JSON.stringify({ name: "sweep", capabilities: [] }),
       "utf8",
     );
@@ -367,7 +365,7 @@ describe("modify-as-version flow", () => {
     );
     await fs.mkdir(hiddenApp, { recursive: true });
     await fs.writeFile(
-      path.join(hiddenApp, "desk.app.json"),
+      path.join(hiddenApp, "roomy.app.json"),
       JSON.stringify({ name: "hidden-source", capabilities: [] }),
       "utf8",
     );
@@ -388,7 +386,7 @@ describe("modify-as-version flow", () => {
     );
     await fs.mkdir(targetHiddenSource, { recursive: true });
     await fs.writeFile(
-      path.join(targetHiddenSource, "desk.app.json"),
+      path.join(targetHiddenSource, "roomy.app.json"),
       JSON.stringify({ name: "target-hidden", capabilities: [] }),
       "utf8",
     );
@@ -438,7 +436,7 @@ describe("modify-as-version flow", () => {
     const symlinkApp = path.join(wsRoot, "symlink-source.app");
     await fs.mkdir(realApp, { recursive: true });
     await fs.writeFile(
-      path.join(realApp, "desk.app.json"),
+      path.join(realApp, "roomy.app.json"),
       JSON.stringify({ name: "real-symlink-source", capabilities: [] }),
       "utf8",
     );

@@ -1,16 +1,16 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { type Pool } from "@agent-desk/db";
+import { type Pool } from "@roomy-ai/db";
 import {
   generateId,
   GOAL_KEYS,
   type GoalKey,
   type Message,
   type WsEvent,
-} from "@agent-desk/shared";
-import { queries } from "@agent-desk/db";
-import { resolveDeskHome } from "@agent-desk/storage";
+} from "@roomy-ai/shared";
+import { queries } from "@roomy-ai/db";
+import { resolveRoomyHome } from "@roomy-ai/storage";
 import {
   buildWorkspaceMountPlan,
   createOrReuse,
@@ -24,7 +24,7 @@ import {
   type LogEvent,
   type AgentFileInput,
   type SandboxHandle,
-} from "@agent-desk/runtime";
+} from "@roomy-ai/runtime";
 import * as sandboxSweep from "./runs-sandbox-sweep.js";
 import { createSummaryScheduler } from "./runs-summary.js";
 import { derivePromptInputs as derivePromptInputsExtern } from "./runs-prompt.js";
@@ -47,7 +47,7 @@ import {
   resolveModelForRun,
   type SummaryModelTokenLimits,
 } from "./runs-helpers.js";
-import { withModule } from "@agent-desk/shared/logger";
+import { withModule } from "@roomy-ai/shared/logger";
 const log = withModule("scheduler/runs");
 
 export interface RunManagerOptions {
@@ -60,7 +60,7 @@ export interface RunManagerOptions {
    */
   resolveProviderKeys?: (userId: string, workspaceId?: string) => Promise<Record<string, string>>;
   /**
-   * Test-injectable replacement for the runtime's opencode spawn. Called
+   * Test-injectable replacement for the runtime's pi spawn. Called
    * by fireMessage with the run id. Return the exit code; the scheduler
    * handles state transitions and child-message insertion.
    */
@@ -73,7 +73,7 @@ export interface RunManagerOptions {
   ) => Promise<{ exitCode: number; model?: string }>;
   /** Test-injectable replacement for the production workspace reflection call. */
   reflectWorkspace?: ReflectFn<WorkspaceReflectionInput>;
-  /** DESK_HOME root. Defaults to resolveDeskHome(). */
+  /** ROOMY_HOME root. Defaults to resolveRoomyHome(). */
   home?: string;
   /** Test hook for model metadata used by the adaptive summary trigger. */
   summaryModelContextWindowFn?: (chatId: string, modelId: string) => Promise<number | SummaryModelTokenLimits | null>;
@@ -134,11 +134,11 @@ async function isAlreadyCancelled(pool: Pool, messageId: string): Promise<boolea
 
 export function createRunManager(opts: RunManagerOptions) {
   const { pool, emit = () => {} } = opts;
-  const home = opts.home ?? resolveDeskHome();
+  const home = opts.home ?? resolveRoomyHome();
   const resolveProviderKeys = opts.resolveProviderKeys ?? (() => Promise.resolve({}));
 
   let inFlight = 0;
-  const MAX_CONCURRENT = parseInt(process.env.DESK_SCHEDULER_MAX_CONCURRENT ?? "10", 10);
+  const MAX_CONCURRENT = parseInt(process.env.ROOMY_SCHEDULER_MAX_CONCURRENT ?? "10", 10);
 
   /**
    * Emit a `message.updated` for the row we just wrote, and — when the
@@ -316,7 +316,7 @@ export function createRunManager(opts: RunManagerOptions) {
     if (!msg) return { fired: false, childIds: [] };
     // Task model: a task anchor lives in the source chat (kind='task',
     // carries the schedule). Its run output — task_runs, agent child
-    // replies, opencode session, logs — lands in the anchor's thread
+    // replies, pi session, logs — lands in the anchor's thread
     // chat so the source chat stays clean and the task list opens an
     // isolated transcript. Legacy task anchors without a thread fall
     // back to the source chat (no behaviour change). All other kinds
@@ -434,7 +434,7 @@ export function createRunManager(opts: RunManagerOptions) {
       );
       const ctxRow = ctxRows[0];
       const workspaceId = ctxRow?.workspace_id ?? (await firstWorkspaceId());
-      const workspaceSlug = ctxRow?.workspace_path ?? "desk";
+      const workspaceSlug = ctxRow?.workspace_path ?? "roomy";
       const workspaceName = ctxRow?.workspace_name ?? workspaceSlug;
       const workspaceKind: "project" | "hub" =
         ctxRow?.workspace_kind === "hub" ? "hub" : "project";
@@ -470,8 +470,8 @@ export function createRunManager(opts: RunManagerOptions) {
         );
       }
       // Codex/ChatGPT bridge: when the user has opted in and the host has a
-      // valid `~/.codex/auth.json`, translate it to OpenCode's auth blob and
-      // forward it as OPENCODE_AUTH_CONTENT. Re-read per run so a refresh on
+      // valid `~/.codex/auth.json`, translate it to pi's auth blob and
+      // forward it as PI_AUTH_JSON_BASE64. Re-read per run so a refresh on
       // the host (interactive `codex` use) propagates without recreating the
       // sandbox.
       const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
@@ -500,7 +500,7 @@ export function createRunManager(opts: RunManagerOptions) {
       const runAgentId = runAgent?.id ?? agentId;
       const agentFileInput: AgentFileInput = {
         agentId: runAgentId,
-        agentName: runAgent?.name ?? "Desk Agent",
+        agentName: runAgent?.name ?? "Roomy Agent",
         model: runAgent?.model ?? "anthropic/claude-haiku-4-5",
         userName,
         userTimezone,
@@ -565,14 +565,14 @@ export function createRunManager(opts: RunManagerOptions) {
           await onLog(evt);
         };
         let attempt = 0;
-        // One opencode-serve session per Desk chat. Read the chat's
+        // One pi session per Roomy chat. Read the chat's
         // currently-bound session id (null on the chat's first turn) and
         // pass it into the runtime; the runtime returns the session that
         // actually handled the run, which may be a freshly-created one if
         // the chat had none or the stored id was stale on the daemon.
-        let opencodeSessionId = await queries.chats.getOpencodeSessionId(pool, executionChatId);
+        let piSessionId = await queries.chats.getPiSessionId(pool, executionChatId);
         const activeModelIds = activeAgents.map((a) => a.model);
-        // Translate the primary Desk model id and every active fallback
+        // Translate the primary Roomy model id and every active fallback
         // model into pi's provider namespace. `codex/<n>` becomes
         // `openai-codex/<n>` when OAuth is live, `openai/<n>` when only
         // an API key is. Missing-auth stays on the requested runtime
@@ -608,7 +608,7 @@ export function createRunManager(opts: RunManagerOptions) {
             });
           } else {
             try {
-              const handle: SandboxHandle = process.env.DESK_SANDBOX_DRIVER === "fake"
+              const handle: SandboxHandle = process.env.ROOMY_SANDBOX_DRIVER === "fake"
                 ? { containerId: "fake-sandbox", workspaceId }
                 : await createOrReuse(
                     workspaceId,
@@ -633,7 +633,7 @@ export function createRunManager(opts: RunManagerOptions) {
                 providerKeys: billing.providerKeys,
                 extraEnv,
                 mountPlan,
-                opencodeSessionId,
+                piSessionId,
                 onLog: onLogWithStderrCapture,
               });
             } catch (err) {
@@ -660,10 +660,10 @@ export function createRunManager(opts: RunManagerOptions) {
             // Persist the session id after every attempt (not just success):
             // a resource-retry inside the loop should reuse the same session
             // so the model's context across attempts stays consistent.
-            const nextSessionId = (result as { opencodeSessionId?: string }).opencodeSessionId;
-            if (nextSessionId && nextSessionId !== opencodeSessionId) {
-              await queries.chats.setOpencodeSessionId(pool, executionChatId, nextSessionId);
-              opencodeSessionId = nextSessionId;
+            const nextSessionId = (result as { piSessionId?: string }).piSessionId;
+            if (nextSessionId && nextSessionId !== piSessionId) {
+              await queries.chats.setPiSessionId(pool, executionChatId, nextSessionId);
+              piSessionId = nextSessionId;
             }
           }
           if (result.exitCode === 0) break;
@@ -708,7 +708,7 @@ export function createRunManager(opts: RunManagerOptions) {
       // Symmetric to the catch-block guard below: if `preemptChatRun`
       // already set state='cancelled' while we were awaiting the runner,
       // `finalizeExecution` was a WHERE-clause no-op and the row is
-      // still cancelled. opencode's session.abort path resolves with
+      // still cancelled. pi's session.abort path resolves with
       // exitCode=0, so without this guard the success path below would
       // happily read the (orphaned) log and insert another agent child —
       // producing one duplicate reply per preempted send when the user
@@ -726,7 +726,7 @@ export function createRunManager(opts: RunManagerOptions) {
         // When the run produced a new summary, snapshot the previous summary
         // (if any) so a bad rewrite doesn't silently erase user edits.
         if (outputKind === "summary") {
-          const { snapshotSummary } = await import("@agent-desk/storage");
+          const { snapshotSummary } = await import("@roomy-ai/storage");
           const prev = await pool.query(
             `SELECT id, content FROM messages
              WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary'
@@ -764,7 +764,7 @@ export function createRunManager(opts: RunManagerOptions) {
         // summary alongside its own files. Best-effort — the DB row is the
         // source of truth.
         if (content.type === "summary") {
-          const { materializeSummary } = await import("@agent-desk/storage");
+          const { materializeSummary } = await import("@roomy-ai/storage");
           await materializeSummary(home, workspaceSlug, executionChatId, child.id, content.body).catch(() => { /* best-effort */ });
         }
         emit({ type: "message.appended", payload: child, workspaceId });
@@ -840,7 +840,7 @@ export function createRunManager(opts: RunManagerOptions) {
    * keep the parent task pending so an error does not count as completion.
    *
    * Unscheduled agent-authored tasks are sandbox-issued sub-tasks: the
-   * agent ran `desk-agent task schedule` to spin off work, the auto-fire
+   * agent ran `roomy-agent task schedule` to spin off work, the auto-fire
    * path in /sandbox/messages promoted the parent to `running` so the
    * kanban badge reads Active, and the run has now ended. Two outcomes:
    *
@@ -851,7 +851,7 @@ export function createRunManager(opts: RunManagerOptions) {
    *     from inside the agent isn't overwritten.
    *
    *   - Run succeeded: leave the parent in `running` (Active). The
-   *     canonical close is `desk-agent task complete`, called either
+   *     canonical close is `roomy-agent task complete`, called either
    *     from inside the agent during the run or by a later caller
    *     (main-thread agent, user gesture). If the agent forgot to call
    *     it, the agent's reply has likely landed in the thread chat
@@ -980,7 +980,7 @@ export function createRunManager(opts: RunManagerOptions) {
    * (executeAt = now). Otherwise the existing time-based 30-minute fallback
    * applies.
    *
-   * The trigger uses the active chat agent's OpenCode-reported context window
+   * The trigger uses the active chat agent's pi-reported context window
    * when available. Defaults follow long-context RAG/memory practice: summarize
    * at a small fraction of the model window, but clamp the threshold so small
    * local models keep enough working context and frontier models do not wait
@@ -1000,7 +1000,7 @@ export function createRunManager(opts: RunManagerOptions) {
   const cancelSummary = summaryScheduler.cancelSummary;
   const cancelSummaryForChat = summaryScheduler.cancelSummaryForChat;
 
-  /** Cancels an in-flight exec: kills the opencode child if possible. */
+  /** Cancels an in-flight exec: kills the pi child if possible. */
   async function cancelRun(messageId: string): Promise<void> {
     await runtimeCancelRun(messageId);
     await queries.messages.updateMessage(pool, messageId, { state: "cancelled" });
@@ -1046,13 +1046,13 @@ export function createRunManager(opts: RunManagerOptions) {
 
   /**
    * Unconditionally cancel the chat's in-flight agent_turn so a new
-   * user send can fire cleanly. This matches opencode's own client
-   * pattern: opencode itself silently drops the new message's `parts`
+   * user send can fire cleanly. This matches pi's own client
+   * pattern: pi itself silently drops the new message's `parts`
    * if you POST to a busy session, so its bundled TUI/CLI calls
    * `session.abort(...)` before any new turn. We mirror that here.
    *
    * `POST /session/:id/abort` is safe to follow with a fresh send:
-   * opencode preserves session history/messages-on-disk and the new
+   * pi preserves session history/messages-on-disk and the new
    * turn starts cleanly against an `Idle` session. The prior turn's
    * partial assistant reply is kept on the row (the cancel path
    * resolves with `Cancelled` after `lastAssistant` is captured).
@@ -1073,12 +1073,12 @@ export function createRunManager(opts: RunManagerOptions) {
    * of zombie rows: only cancels when the log file has been silent for
    * `staleAfterMs`, so a healthy long-running step is never killed by
    * a periodic sweep. Not wired to the chat-send route any more — that
-   * uses `preemptChatRun` (always-preempt) to match opencode semantics.
+   * uses `preemptChatRun` (always-preempt) to match pi semantics.
    *
    * Why we keep it: a follow-up that catches a wedged daemon (e.g. a
    * deadlocked tool with the row stuck in `running` and no log
    * activity) can call this explicitly without forcing a preempt
-   * decision on healthy runs. The signal is log mtime — opencode
+   * decision on healthy runs. The signal is log mtime — pi
    * writes to the per-message log file on every event, so a
    * legitimately long-running step keeps the file growing.
    */
@@ -1087,7 +1087,7 @@ export function createRunManager(opts: RunManagerOptions) {
     opts: { staleAfterMs?: number } = {},
   ): Promise<{ preempted: string } | null> {
     const staleAfterMs = opts.staleAfterMs
-      ?? parseInt(process.env.DESK_RUN_STALE_PREEMPT_MS ?? "30000", 10);
+      ?? parseInt(process.env.ROOMY_RUN_STALE_PREEMPT_MS ?? "30000", 10);
     const running = await findRunningChatTurn(chatId);
     if (!running) return null;
     const logPath = path.join(
@@ -1103,9 +1103,9 @@ export function createRunManager(opts: RunManagerOptions) {
       const stat = await fsp.stat(logPath);
       mtimeMs = stat.mtimeMs;
     } catch {
-      // Missing log file means opencode hasn't emitted its first event
+      // Missing log file means pi hasn't emitted its first event
       // yet — usually container cold-start (entrypoint downloading
-      // deps, `.deskrc` running). Stale-only mode is conservative:
+      // deps, `.roomyrc` running). Stale-only mode is conservative:
       // skip rather than risk killing legitimately-progressing work.
       // Stuck-with-no-log rows are recovered by `recoverOrphanedRuns`
       // at the requeue cap.

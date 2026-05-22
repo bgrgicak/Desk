@@ -1,6 +1,6 @@
 -- Secrets now live exclusively in the per-user KDBX vault. The remaining
 -- connection/user-settings metadata is non-secret JSON, so drop the old
--- DESK_SECRET_KEY-backed encrypted blobs and store plain JSON instead.
+-- ROOMY_SECRET_KEY-backed encrypted blobs and store plain JSON instead.
 -- Existing encrypted metadata is intentionally not migrated.
 
 ALTER TABLE connector_connections ADD COLUMN metadata_json TEXT;

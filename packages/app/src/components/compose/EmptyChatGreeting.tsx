@@ -1,16 +1,16 @@
-import { cn } from '@agent-desk/ui'
+import { cn } from '@roomy-ai/ui'
 import { useGetMeQuery } from '@/store/api'
 import { useAvatarUrl } from '@/hooks/use-avatar'
 import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'
 import { initialsOf } from '@/lib/initials'
 import { roomColor } from '@/components/rooms/roomColor'
-import { DeskLogo } from '@/components/home/DeskLogo'
+import { RoomyLogo } from '@/components/home/RoomyLogo'
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 
 interface EmptyChatGreetingProps {
   /** When set, the second avatar shows the room (icon or initials on
    *  the room tint) — same affordance the chat header uses. When
-   *  omitted, the second avatar is the Desk wordmark (the Home "Ask
+   *  omitted, the second avatar is the Roomy wordmark (the Home "Ask
    *  AI" variant). */
   workspace?: WorkspaceInfo
   /** Skip the avatar stack entirely. Used by the room chat view,
@@ -23,7 +23,7 @@ interface EmptyChatGreetingProps {
 
 /**
  * Hello-greeting block shown at the top of a chat's empty state
- * (Figma 747-8319). Avatar stack (user + room or Desk wordmark)
+ * (Figma 747-8319). Avatar stack (user + room or Roomy wordmark)
  * sits above a `Hello, {name}` heading and a muted-tone
  * `How can I help you today?` subtitle.
  *
@@ -38,7 +38,7 @@ export function EmptyChatGreeting({ workspace, hideAvatars, className }: EmptyCh
 
   return (
     <div className={cn('flex flex-col items-start gap-4', className)}>
-      {/* Avatar stack — user first, then either the room or the Desk
+      {/* Avatar stack — user first, then either the room or the Roomy
           wordmark depending on context. `-space-x-2` overlaps the
           two circles by 8 px; `ring-2 ring-background` separates
           them from each other and from the page. Skipped in the
@@ -50,7 +50,7 @@ export function EmptyChatGreeting({ workspace, hideAvatars, className }: EmptyCh
           {workspace ? (
             <WorkspaceAvatar workspace={workspace} iconUrl={workspaceIcon} />
           ) : (
-            <DeskAvatar />
+            <RoomyAvatar />
           )}
         </div>
       )}
@@ -120,18 +120,18 @@ function WorkspaceAvatar({
   )
 }
 
-function DeskAvatar() {
+function RoomyAvatar() {
   // Pulled straight from the Figma — the stylised 𝒹 glyph on a
-  // pink-to-mint gradient circle (`DeskLogo` is a 32×32 SVG). The
+  // pink-to-mint gradient circle (`RoomyLogo` is a 32×32 SVG). The
   // outer `<span>` ring matches the user-avatar ring so the two
   // circles read as a true overlap.
   return (
     <span
-      aria-label="Desk"
-      title="Desk"
+      aria-label="Roomy"
+      title="Roomy"
       className="block h-8 w-8 shrink-0 rounded-full ring-2 ring-background select-none"
     >
-      <DeskLogo className="h-full w-full text-foreground" />
+      <RoomyLogo className="h-full w-full text-foreground" />
     </span>
   )
 }

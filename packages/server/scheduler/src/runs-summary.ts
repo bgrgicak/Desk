@@ -1,6 +1,6 @@
-import { type Pool, queries } from "@agent-desk/db";
-import { estimateMessagesTokens, listModels, resolveLocalSourceEnv } from "@agent-desk/runtime";
-import { generateId } from "@agent-desk/shared";
+import { type Pool, queries } from "@roomy-ai/db";
+import { estimateMessagesTokens, listModels, resolveLocalSourceEnv } from "@roomy-ai/runtime";
+import { generateId } from "@roomy-ai/shared";
 import {
   envPositiveInt,
   formatMessageForPrompt,
@@ -87,7 +87,7 @@ export function createSummaryScheduler(deps: SummarySchedulerDeps): SummarySched
   }
 
   async function summaryModelTokenLimits(chatId: string, modelId: string): Promise<SummaryModelTokenLimits> {
-    const fromEnv = envPositiveInt("DESK_SUMMARY_MODEL_CONTEXT_WINDOW");
+    const fromEnv = envPositiveInt("ROOMY_SUMMARY_MODEL_CONTEXT_WINDOW");
     if (fromEnv !== null) return { contextWindow: fromEnv };
 
     if (summaryModelContextWindowFn) {
@@ -135,7 +135,7 @@ export function createSummaryScheduler(deps: SummarySchedulerDeps): SummarySched
       }
     }
 
-    // Conservative fallback for unknown/local models when OpenCode metadata is
+    // Conservative fallback for unknown/local models when pi metadata is
     // unavailable: enough room for a useful transcript, much lower than old 60K.
     return { contextWindow: 60_000 };
   }

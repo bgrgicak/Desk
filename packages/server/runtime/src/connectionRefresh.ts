@@ -15,10 +15,10 @@
  * lists end up empty under pi (no daemon to act on).
  */
 
-import type { Pool } from "@agent-desk/db";
-import { queries } from "@agent-desk/db";
+import type { Pool } from "@roomy-ai/db";
+import { queries } from "@roomy-ai/db";
 import type { Engine } from "./engine.js";
-import { withModule } from "@agent-desk/shared/logger";
+import { withModule } from "@roomy-ai/shared/logger";
 const log = withModule("runtime/connectionRefresh");
 
 export interface RefreshSandboxConnectionsOpts {
@@ -62,7 +62,7 @@ export interface RefreshSandboxConnectionsResult {
 export async function refreshSandboxConnections(
   opts: RefreshSandboxConnectionsOpts,
 ): Promise<RefreshSandboxConnectionsResult> {
-  const clearedSessions = await queries.chats.clearOpencodeSessionsForUser(
+  const clearedSessions = await queries.chats.clearPiSessionsForUser(
     opts.pool,
     opts.userId,
     opts.workspaceId,

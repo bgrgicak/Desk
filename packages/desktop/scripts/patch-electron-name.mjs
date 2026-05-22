@@ -1,5 +1,5 @@
 /**
- * Patches the local Electron.app Info.plist so the dev build shows "Desk"
+ * Patches the local Electron.app Info.plist so the dev build shows "Roomy"
  * in the macOS Dock instead of "Electron". Runs silently on non-macOS.
  */
 import { execFileSync } from "node:child_process";
@@ -24,9 +24,9 @@ if (!existsSync(plist)) {
 
 const pb = "/usr/libexec/PlistBuddy";
 try {
-  execFileSync(pb, ["-c", "Set :CFBundleDisplayName Desk", plist]);
-  execFileSync(pb, ["-c", "Set :CFBundleName Desk", plist]);
-  console.log("patch-electron-name: patched CFBundleDisplayName + CFBundleName → Desk");
+  execFileSync(pb, ["-c", "Set :CFBundleDisplayName Roomy", plist]);
+  execFileSync(pb, ["-c", "Set :CFBundleName Roomy", plist]);
+  console.log("patch-electron-name: patched CFBundleDisplayName + CFBundleName → Roomy");
 } catch (err) {
   console.warn("patch-electron-name: failed to patch Info.plist:", err.message);
 }

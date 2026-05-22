@@ -12,7 +12,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { initialsOf } from '@/lib/initials'
 
 // Shared sidebar-row appearance — kept in lockstep with the file / task rows

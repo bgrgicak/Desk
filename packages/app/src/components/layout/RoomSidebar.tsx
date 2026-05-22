@@ -26,7 +26,7 @@ import {
   SidebarMenuItem,
   SidebarTrigger,
   useSidebar,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { SIDEBAR_ROW_STATE_CLASS, SidebarAccountMenu } from './sidebarShared'
 import { useGlobalPalette } from '@/components/global-palette/GlobalPaletteProvider'
 import { ChatMenuItems } from '@/components/chats/ChatMenuItems'
@@ -42,10 +42,10 @@ import type { Chat, PinnedEntryKind } from '@/data/ui-types'
 import { useChatHierarchy } from '@/store/selectors/threads'
 import type { HomePinRef } from '@/hooks/use-home-pins'
 
-// Per-room sidebar: Pinned + Chats (date-grouped) at the top, followed by a
-// footer with Library / Tasks / Customize. Extracted from AppShell so the
-// shell stays slim and so the same sidebar can later be reused inside other
-// room sub-views without copy-paste.
+// Per-room sidebar: Tasks / Library / Settings, then Pinned + Chats (date-
+// grouped), with a footer hosting Search + the profile dropdown. Extracted
+// from AppShell so the shell stays slim and so the same sidebar can later be
+// reused inside other room sub-views without copy-paste.
 
 const CHATS_PER_PAGE = 10
 const PINNED_PER_PAGE = 5
@@ -498,11 +498,10 @@ export function RoomSidebar({
       <SidebarHeader className="bg-transparent p-0">
         <SidebarTrigger className="absolute right-2 top-2 z-20 h-8 w-8 rounded-md md:hidden" />
 
-        {/* ── Top-level workspace nav: Tasks / Library.
+        {/* ── Top-level workspace nav: Tasks / Library / Settings.
             Sits above Pinned so the most-used workspace destinations
             are reachable without scrolling past Pinned + Chats.
-            Settings lives down by the profile dropdown (footer) so
-            account-adjacent controls cluster together. ── */}
+            Search lives down by the profile dropdown (footer). ── */}
         <SidebarMenu className="pt-6 pb-1">
           <SidebarMenuItem>
             <MobileDismissSidebarMenuButton
@@ -529,12 +528,10 @@ export function RoomSidebar({
             </MobileDismissSidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
-            <MobileDismissSidebarMenuButton
-              onClick={() => palette.open()}
-              className={cn(SIDEBAR_ROW_STATE_CLASS, 'text-foreground')}
-            >
-              <Search className="h-4 w-4 text-muted-foreground" />
-              <span>Search</span>
+            <MobileDismissSidebarMenuButton onClick={onOpenSettings} className={cn(SIDEBAR_ROW_STATE_CLASS, 'group/settings text-foreground')}>
+              <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+              <span className="flex-1">Settings</span>
+              <ArrowUpRight className="h-4 w-4 text-muted-foreground opacity-0 transition-opacity group-hover/settings:opacity-100" />
             </MobileDismissSidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -811,12 +808,10 @@ export function RoomSidebar({
         </SectionBody>
       </SidebarContent>
 
-      {/* ── Footer: Settings + Profile.
-          Settings sits just above the Profile dropdown so
-          account-adjacent controls cluster together at the bottom
-          of the rail (was previously up near Tasks/Library — moved
-          here to keep the top of the sidebar focused on workspace
-          destinations).
+      {/* ── Footer: Search + Profile.
+          Search sits just above the Profile dropdown so the global
+          palette trigger is always one click away regardless of how
+          far the user has scrolled the chat list.
 
           The Profile row opens a DropdownMenu that floats just above
           its trigger (`side="top"` + small positive sideOffset). The
@@ -831,10 +826,12 @@ export function RoomSidebar({
       <SidebarFooter className={cn('bg-transparent p-0 border-t border-transparent', sidebarScrolledUnder && 'border-foreground/10')}>
         <SidebarMenu className="pb-1">
           <SidebarMenuItem>
-            <MobileDismissSidebarMenuButton onClick={onOpenSettings} className={cn(SIDEBAR_ROW_STATE_CLASS, 'group/customize text-foreground')}>
-              <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
-              <span className="flex-1">Customize</span>
-              <ArrowUpRight className="h-4 w-4 text-muted-foreground opacity-0 transition-opacity group-hover/customize:opacity-100" />
+            <MobileDismissSidebarMenuButton
+              onClick={() => palette.open()}
+              className={cn(SIDEBAR_ROW_STATE_CLASS, 'text-foreground')}
+            >
+              <Search className="h-4 w-4 text-muted-foreground" />
+              <span>Search</span>
             </MobileDismissSidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

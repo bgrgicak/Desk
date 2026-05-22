@@ -1,5 +1,5 @@
 {
-  "name": "@agent-desk/runtime",
+  "name": "@roomy-ai/runtime",
   "version": "0.1.0-alpha.0",
   "license": "MIT",
   "type": "module",
@@ -7,7 +7,7 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "@agent-desk/dev": "./src/index.ts",
+      "@roomy-ai/dev": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
@@ -32,9 +32,9 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@agent-desk/shared": ">=0.1.0-0",
-    "@agent-desk/db": ">=0.1.0-0",
-    "@agent-desk/storage": ">=0.1.0-0"
+    "@roomy-ai/shared": ">=0.1.0-0",
+    "@roomy-ai/db": ">=0.1.0-0",
+    "@roomy-ai/storage": ">=0.1.0-0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
