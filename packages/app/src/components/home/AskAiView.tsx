@@ -22,5 +22,5 @@ export function AskAiView() {
     return <div className="flex h-full min-h-0 w-full flex-col" />
   }
 
-  return <ChatView chat={askAiChat} />
+  return <ChatView chat={askAiChat} hideRightPanel />
 }
