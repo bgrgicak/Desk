@@ -51,7 +51,7 @@ export function GlobalPaletteSearch({
   onSelectChat,
   onSelectFile,
 }: GlobalPaletteSearchProps) {
-  const { query, setQuery, openChat } = useGlobalPalette()
+  const { query, setQuery, startNewChat, openChat } = useGlobalPalette()
   const trimmed = query.trim()
   const isSearching = trimmed.length > 0
 
@@ -116,6 +116,17 @@ export function GlobalPaletteSearch({
       />
       <CommandList className="min-h-0 max-h-[576px]" style={listMaxHeight ? { maxHeight: listMaxHeight } : undefined}>
         <CommandEmpty>No results found.</CommandEmpty>
+
+        {/* Lead with Ask AI so it is always visible while searching. */}
+        {isSearching && (
+          <CommandGroup heading="Ask AI">
+            <CommandItem value={`ask-ai:${trimmed}`} onSelect={() => startNewChat(trimmed)}>
+              <Sparkles className="text-muted-foreground" />
+              <span className="font-medium">Ask AI</span>
+              <span className="min-w-0 truncate text-muted-foreground">{trimmed}</span>
+            </CommandItem>
+          </CommandGroup>
+        )}
 
         {/* Default view ─ no query: recent global Ask AI chats. */}
         {!isSearching && recentChats && recentChats.length > 0 && (
