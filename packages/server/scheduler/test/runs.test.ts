@@ -286,6 +286,90 @@ emit: (evt) => events.push(evt),
     expect(child?.model).toBe("openai/gpt-5.4");
   });
 
+  it("manual chat retry uses the current top active model as primary", async () => {
+    const userId = generateId("user");
+    await queries.users.insert(pool, {
+      id: userId,
+      username: "retry-model-owner",
+      passwordHash: "x",
+      email: "retry-model-owner@example.com",
+    });
+    const wsId = generateId("workspace");
+    await queries.workspaces.insert(pool, {
+      id: wsId,
+      userId,
+      name: "Retry Model WS",
+      path: `retry-model-${wsId.slice(-6)}`,
+    });
+    const oldId = generateId("agent");
+    const newestId = generateId("agent");
+    await queries.agents.insert(pool, {
+      id: oldId,
+      userId,
+      name: "Original",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    await queries.agents.insert(pool, {
+      id: newestId,
+      userId,
+      name: "Newest",
+      model: "openai/gpt-5.4",
+    });
+    await queries.agents.setOrder(pool, userId, [newestId, oldId]);
+    await queries.workspaceAgents.addToWorkspace(pool, wsId, oldId);
+    await queries.workspaceAgents.addToWorkspace(pool, wsId, newestId);
+
+    const localChatId = generateId("chat");
+    await queries.chats.insert(pool, {
+      id: localChatId,
+      workspaceId: wsId,
+      agentId: oldId,
+      title: "Retry model chat",
+    });
+    const userMessageId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content)
+       VALUES (?, ?, 'user', ?)`,
+      [userMessageId, localChatId, JSON.stringify({ type: "text", text: "retry with latest" })],
+    );
+    const turnId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, state, parent_id, agent_id)
+       VALUES (?, ?, 'system', ?, 'pending', ?, ?)`,
+      [
+        turnId,
+        localChatId,
+        JSON.stringify({ type: "agent_turn", userMessageId }),
+        userMessageId,
+        oldId,
+      ],
+    );
+
+    let capturedPrimary: string | undefined;
+    let capturedFallbacks: string[] | undefined;
+    let capturedAgentId: string | undefined;
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_messageId, runAgentId, _prompt, onLog, runOpts) => {
+        capturedAgentId = runAgentId;
+        capturedPrimary = runOpts?.agentFileInput.model;
+        capturedFallbacks = runOpts?.modelFallbacks;
+        await onLog({ runId: _messageId, seq: 0, kind: "stdout", payload: "retried" });
+        return { exitCode: 0, model: "openai/gpt-5.4" };
+      },
+    });
+
+    const result = await mgr.fireMessage(turnId, { manual: true });
+
+    expect(result.childIds).toHaveLength(1);
+    expect(capturedAgentId).toBe(newestId);
+    expect(capturedPrimary).toBe("openai/gpt-5.4");
+    expect(capturedFallbacks).toEqual(["anthropic/claude-sonnet-4-6"]);
+    const child = await queries.messages.findById(pool, result.childIds[0]);
+    expect(child?.agentId).toBe(newestId);
+    expect(child?.model).toBe("openai/gpt-5.4");
+  });
+
   it("streams each newline-delimited tool event as its own log_appended event", async () => {
     const events: WsEvent[] = [];
     const toolUse = JSON.stringify({ type: "tool_use", part: { tool: "read" } });

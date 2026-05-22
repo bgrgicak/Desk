@@ -37,6 +37,7 @@ import {
   useGetAgentsQuery,
   useGetLocalSourcesQuery,
   useGetModelsQuery,
+  useGetProviderKeysQuery,
   usePatchAgentMutation,
   usePutLocalSourceMutation,
   usePutProviderKeysMutation,
@@ -201,6 +202,30 @@ function providerLabel(provider: string): string {
   if (provider === 'codex')     return 'Codex'
   if (provider === 'opencode')  return 'OpenCode'
   return provider
+}
+
+export function modelProviderCredentialScopeText(
+  provider: string,
+  mode: 'new' | 'edit',
+  hasSavedCredential = false,
+): string | undefined {
+  if (!modelProviderConnectionEnvKey(provider)) return undefined
+  const label = providerLabel(provider)
+  if (mode === 'new') {
+    if (hasSavedCredential) {
+      return `This model will reuse the shared ${label} API key unless you enter a replacement.`
+    }
+    return `This saves one shared ${label} API key for every ${label} model.`
+  }
+  return `One ${label} API key is shared by every ${label} model. Updating it here replaces that shared key.`
+}
+
+export function modelProviderCredentialRequired(
+  provider: string,
+  mode: 'new' | 'edit',
+  hasSavedCredential: boolean,
+): boolean {
+  return mode === 'new' && Boolean(modelProviderConnectionEnvKey(provider)) && !hasSavedCredential
 }
 
 function brandKindForProvider(provider: string): ConnectionKind | null {
@@ -548,11 +573,12 @@ function ModelsList({
 }
 
 function ModelDetail({
-  agents, modelIndex, localSources, focus, busy, onSave, onCancel, onDelete,
+  agents, modelIndex, localSources, providerKeys, focus, busy, onSave, onCancel, onDelete,
 }: {
   agents: ServerAgent[]
   modelIndex: Map<string, ModelRef[]>
   localSources: Record<string, LocalSourceState>
+  providerKeys: Record<string, string | null>
   focus: Exclude<ModelsFocus, null>
   busy: boolean
   onSave: (v: { id?: string; name: string; model: string; provider: string; credentialSecret?: string }) => void
@@ -581,10 +607,13 @@ function ModelDetail({
   const connectionEnvKey = modelProviderConnectionEnvKey(provider)
   const connectionKind = modelProviderConnectionKind(provider)
   const connectionDefinition = connectionKind ? managedConnectionDefinitionForKind(connectionKind) : undefined
+  const savedCredentialMask = connectionEnvKey ? providerKeys[connectionEnvKey] : null
+  const hasSavedCredential = Boolean(savedCredentialMask)
+  const credentialScopeText = modelProviderCredentialScopeText(provider, focus.mode, hasSavedCredential)
   const localSource = providerOption?.localSourceKind ? localSources[providerOption.localSourceKind] : undefined
   const localSourceUnavailable = providerOption?.localSourceKind !== undefined && localSource?.available === false
   const normalizedModel = normalizeModelIdForProvider(provider, model)
-  const needsCredential = focus.mode === 'new' && Boolean(connectionEnvKey)
+  const needsCredential = modelProviderCredentialRequired(provider, focus.mode, hasSavedCredential)
   const canSave = name.trim().length > 0
     && normalizedModel.length > 0
     && (!needsCredential || credentialSecret.trim().length > 0)
@@ -617,6 +646,7 @@ function ModelDetail({
         <Field label="Connection">
           <select
             value={provider}
+            aria-label="Connection"
             onChange={e => selectProvider(e.target.value)}
             className="flex h-9 w-full rounded-md border border-input bg-transparent pl-3 pr-8 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring appearance-none bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2216%22%20height%3D%2216%22%20fill%3D%22none%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20stroke%3D%22%236b7280%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22M4%206l4%204%204-4%22%2F%3E%3C%2Fsvg%3E')] bg-no-repeat bg-[right_0.5rem_center]"
           >
@@ -683,18 +713,39 @@ function ModelDetail({
         </Field>
 
         {connectionEnvKey && (
-          <Field
-            label={connectionDefinition?.secretLabel ?? 'API key'}
-            help={focus.mode === 'edit' ? 'Leave blank to keep the saved key.' : undefined}
-          >
-            <Input
-              type="password"
-              value={credentialSecret}
-              onChange={e => setCredentialSecret(e.target.value)}
-              placeholder={connectionDefinition?.secretPlaceholder ?? 'API key'}
-              autoComplete="off"
-            />
-          </Field>
+          <div className="space-y-2">
+            {credentialScopeText && (
+              <div
+                data-testid={`model-provider-credential-scope-${connectionEnvKey}`}
+                className="rounded-md border bg-muted/30 px-3 py-2 text-xs leading-relaxed text-muted-foreground"
+              >
+                <p>{credentialScopeText}</p>
+                <p className="mt-1 font-mono text-[11px] text-muted-foreground/75">{connectionEnvKey}</p>
+                {savedCredentialMask && (
+                  <p className="mt-1 text-muted-foreground/85">Saved shared key: {savedCredentialMask}</p>
+                )}
+              </div>
+            )}
+            <Field
+              label={connectionDefinition?.secretLabel ?? 'API key'}
+              help={
+                focus.mode === 'edit'
+                  ? 'Leave blank to keep the shared key.'
+                  : hasSavedCredential
+                    ? 'Leave blank to reuse the shared key.'
+                    : undefined
+              }
+            >
+              <Input
+                type="password"
+                value={credentialSecret}
+                onChange={e => setCredentialSecret(e.target.value)}
+                placeholder={savedCredentialMask ?? connectionDefinition?.secretPlaceholder ?? 'API key'}
+                autoComplete="off"
+                data-testid={connectionEnvKey ? `model-provider-credential-${connectionEnvKey}` : undefined}
+              />
+            </Field>
+          </div>
         )}
 
         {providerOption?.localSourceKind && (
@@ -762,6 +813,7 @@ export function ModelsSection() {
   const { data: serverAgents } = useGetAgentsQuery()
   const { data: models } = useGetModelsQuery()
   const { data: localSourcesData } = useGetLocalSourcesQuery()
+  const { data: providerKeys } = useGetProviderKeysQuery()
   const [createAgent, { isLoading: creatingAgent }] = useCreateAgentMutation()
   const [patchAgent, { isLoading: patchingAgent }] = usePatchAgentMutation()
   const [putProviderKeys, { isLoading: savingProviderKey }] = usePutProviderKeysMutation()
@@ -797,7 +849,9 @@ export function ModelsSection() {
       const envKey = modelProviderConnectionEnvKey(v.provider)
       if (envKey) {
         const secret = v.credentialSecret?.trim()
-        if (!v.id && !secret) {
+        const hasSavedCredential = Boolean(providerKeys?.[envKey])
+        const needsCredential = modelProviderCredentialRequired(v.provider, v.id ? 'edit' : 'new', hasSavedCredential)
+        if (needsCredential && !secret) {
           toast.error('API key is required')
           return
         }
@@ -867,6 +921,7 @@ export function ModelsSection() {
         agents={agents}
         modelIndex={modelIndex}
         localSources={localSources}
+        providerKeys={providerKeys ?? {}}
         focus={focus}
         busy={creatingAgent || patchingAgent || savingProviderKey || savingLocalSource}
         onSave={handleSave}

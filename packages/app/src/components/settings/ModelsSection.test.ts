@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  modelProviderCredentialRequired,
+  modelProviderCredentialScopeText,
   modelProviderConnectionEnvKey,
   normalizeModelIdForProvider,
   reorderModelIds,
@@ -11,6 +13,26 @@ describe('model settings helpers', () => {
     expect(modelProviderConnectionEnvKey('openai')).toBe('OPENAI_API_KEY')
     expect(modelProviderConnectionEnvKey('codex')).toBeUndefined()
     expect(modelProviderConnectionEnvKey('opencode')).toBeUndefined()
+  })
+
+  it('explains that API keys are shared per model provider', () => {
+    expect(modelProviderCredentialScopeText('anthropic', 'new')).toBe(
+      'This saves one shared Claude API key for every Claude model.',
+    )
+    expect(modelProviderCredentialScopeText('anthropic', 'new', true)).toBe(
+      'This model will reuse the shared Claude API key unless you enter a replacement.',
+    )
+    expect(modelProviderCredentialScopeText('openai', 'edit')).toBe(
+      'One ChatGPT API key is shared by every ChatGPT model. Updating it here replaces that shared key.',
+    )
+    expect(modelProviderCredentialScopeText('codex', 'edit')).toBeUndefined()
+  })
+
+  it('requires provider credentials only when no shared key exists yet', () => {
+    expect(modelProviderCredentialRequired('anthropic', 'new', false)).toBe(true)
+    expect(modelProviderCredentialRequired('anthropic', 'new', true)).toBe(false)
+    expect(modelProviderCredentialRequired('anthropic', 'edit', false)).toBe(false)
+    expect(modelProviderCredentialRequired('codex', 'new', false)).toBe(false)
   })
 
   it('normalizes bare model names with the selected provider', () => {

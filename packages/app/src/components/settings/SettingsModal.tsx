@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { toast } from 'sonner'
 import {
-  Settings2, Plug, Sliders,
+  Settings2, Bot, Plug, Sliders,
   Trash2, Plus, X, Search,
   Pencil, MoreHorizontal,
 } from 'lucide-react'
@@ -124,6 +124,7 @@ import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'
 import { initialsOf } from '@/lib/initials'
 import { PreferenceRow } from '@/components/settings/shared'
+import { ModelsSection } from '@/components/settings/ModelsSection'
 import { describeApiError } from '@/components/settings/errors'
 import { isVaultLockedError } from '@/lib/api-error'
 import { useAppDispatch } from '@/store/hooks'
@@ -156,11 +157,12 @@ function OpenAILogo({ className }: { className?: string }) {
 
 // ── Nav sections ─────────────────────────────────────────────────────────────
 
-export type WorkspaceSettingsSection = 'workspace' | 'connections' | 'preferences'
+export type WorkspaceSettingsSection = 'workspace' | 'connections' | 'models' | 'preferences'
 
 const NAV: { id: WorkspaceSettingsSection; label: string; icon: typeof Settings2 }[] = [
   { id: 'workspace',   label: 'Workspace',   icon: Settings2 },
   { id: 'connections', label: 'Connections', icon: Plug      },
+  { id: 'models',      label: 'Models',      icon: Bot       },
   { id: 'preferences', label: 'Preferences', icon: Sliders   },
 ]
 
@@ -1751,6 +1753,8 @@ export function SettingsModal({
                   onSaveGenericConnector={handleSaveGenericConnector}
                   onToggleLocalSource={handleToggleLocalSource}
                 />
+              ) : activeSection === 'models' ? (
+                <ModelsSection />
               ) : (
                 <div className="flex-1 w-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden px-4 pt-3 pb-6">
                   {activeSection === 'connections' && (

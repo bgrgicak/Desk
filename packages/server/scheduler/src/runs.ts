@@ -489,7 +489,14 @@ export function createRunManager(opts: RunManagerOptions) {
       });
       const activeAgents = userId ? await queries.agents.listActiveByUser(pool, userId) : [];
       const agent = await queries.agents.findById(pool, agentId);
-      const runAgent = agent?.enabled ? agent : activeAgents[0] ?? agent;
+      // Manual chat retries are the user's "try the conversation again now"
+      // action, so pick up the current Models screen ordering instead of
+      // pinning the failed turn to the agent id captured on the old trigger.
+      // Task runs still preserve their task/chat agent binding.
+      const useLatestModelForRetry = fireOptions.manual === true && msg.content.type === "agent_turn";
+      const runAgent = useLatestModelForRetry
+        ? activeAgents[0] ?? agent
+        : agent?.enabled ? agent : activeAgents[0] ?? agent;
       const runAgentId = runAgent?.id ?? agentId;
       const agentFileInput: AgentFileInput = {
         agentId: runAgentId,
