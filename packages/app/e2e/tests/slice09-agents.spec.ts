@@ -17,10 +17,11 @@ import { test, expect } from "../fixtures";
 
 async function openAgentsTab(page: import("@playwright/test").Page) {
   // Models lives under My Account (global user settings), not Customize
-  // (workspace settings).
+  // (workspace settings). The nav item now reads "AI providers" — same
+  // section, the label was clarified.
   await page.getByTestId("account-avatar").click();
   await page.getByTestId("open-my-account").click();
-  await page.getByRole("dialog").getByRole("button", { name: /^Models$/i }).click();
+  await page.getByRole("dialog").getByRole("button", { name: /^AI providers$/i }).click();
   // Wait for /tools/models to populate. The Add form snapshots flatModels
   // via useState(initialModel) on mount — open it before models resolve and
   // the Add agent button stays disabled with no way to pick one. The Desk

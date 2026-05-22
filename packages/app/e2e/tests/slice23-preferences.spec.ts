@@ -22,12 +22,14 @@ test("preferences toggle persists across reload", async ({ loggedInPage }) => {
   // Pick a non-default view ("tasks") to verify persistence.
   await dialog.getByTestId("prefs-default-view-tasks").click();
 
-  // Reload, re-open Settings → Preferences. The value must stick.
+  // Reload and verify the value persisted. The Settings modal lives in
+  // the URL query string now (`?settings=preferences`), so after reload
+  // the dialog re-opens on Preferences automatically — no need to click
+  // Settings again. Just wait for the dialog to render.
   await loggedInPage.reload();
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
-  await loggedInPage.getByRole("button", { name: /Settings/ }).click();
   dialog = loggedInPage.getByRole("dialog");
-  await dialog.getByRole("button", { name: /^Preferences$/ }).click();
+  await expect(dialog).toBeVisible();
 
   // The selected view button has the active styling — assert via its
   // class containing the active-state classes.
