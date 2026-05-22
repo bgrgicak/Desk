@@ -505,6 +505,45 @@ function mergePendingProgressIntoChatMessageCaches(
 }
 
 /**
+ * Returns true when every live RTK Query cache entry that contains
+ * this chat already reports `unread: false`. Used by
+ * `markChatReadQuietly` to skip a no-op reconcile PATCH — without that
+ * guard, a caller wired to an unstable React effect dep can close a
+ * PATCH → chat.updated → cascade → refetch → effect → PATCH loop.
+ *
+ * Returns false if we don't find the chat in any cache (be safe and
+ * let the PATCH go through).
+ */
+function isChatCacheAlreadyRead(
+  getState: () => unknown,
+  chatId: string,
+): boolean {
+  const state = getState() as Record<string, unknown>;
+  const apiState = state[api.reducerPath] as
+    | { queries?: Record<string, { endpointName?: string; data?: unknown }> }
+    | undefined;
+  if (!apiState?.queries) return false;
+  let foundAny = false;
+  for (const entry of Object.values(apiState.queries)) {
+    if (!entry?.endpointName || entry.data == null) continue;
+    if (entry.endpointName === "getChats") {
+      const list = entry.data as ServerChat[];
+      if (!Array.isArray(list)) continue;
+      const chat = list.find((c) => c.id === chatId);
+      if (!chat) continue;
+      foundAny = true;
+      if (chat.unread) return false;
+    } else if (entry.endpointName === "getChat") {
+      const chat = entry.data as ServerChat;
+      if (chat?.id !== chatId) continue;
+      foundAny = true;
+      if (chat.unread) return false;
+    }
+  }
+  return foundAny;
+}
+
+/**
  * Clears unread on the server and patches the RTK Query cache in one
  * step, without going through RTK Query's mutation (which would
  * invalidate Chat tags and trigger a refetch that races with the
@@ -512,12 +551,19 @@ function mergePendingProgressIntoChatMessageCaches(
  *
  * The server emits a `chat.updated` WS event after the PATCH, which the
  * middleware handles normally to confirm the cache state.
+ *
+ * Short-circuits when the cache already says unread=false. The call
+ * sites are guarded too (App.tsx, ChatView, TasksRoute all check the
+ * unread bool in their effects), but a caller that forgets to guard
+ * can otherwise close a PATCH loop with the server's chat.updated →
+ * message.updated task cascade — every refetch refires the effect.
  */
 export function markChatReadQuietly(
   chatId: string,
   dispatch?: (a: unknown) => unknown,
   getState?: () => unknown,
 ): void {
+  if (getState && isChatCacheAlreadyRead(getState, chatId)) return;
   if (dispatch) {
     patchChatUnreadInCache(dispatch, chatId, getState);
   }

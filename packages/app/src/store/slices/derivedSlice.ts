@@ -19,13 +19,7 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit"
 import { api } from "../api"
 import type { RootState } from "../store"
-import type {
-  ArtifactUpdate,
-  Folder,
-  InboxItem,
-  TodayItem,
-  Run,
-} from "@/data/ui-types"
+import type { ArtifactUpdate } from "@/data/ui-types"
 
 export interface DerivedState {
   artifactUpdates: ArtifactUpdate[]
@@ -104,8 +98,3 @@ export const selectViewingChatId = (s: RootState): string | null =>
 
 export const selectCurrentUserId = (s: RootState): string | null =>
   s.derived.currentUserId
-
-export const selectFolders = (_s: RootState): Folder[] => []
-export const selectInboxItems = (_s: RootState): InboxItem[] => []
-export const selectTodayItems = (_s: RootState): TodayItem[] => []
-export const selectRunById = (_s: RootState, _runId: string | undefined): Run | null => null

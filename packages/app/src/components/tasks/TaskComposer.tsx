@@ -12,6 +12,9 @@ export interface TaskComposerSubmit {
   cron?: string
   /** Library files referenced via the Files picker. */
   attachments: AttachmentRef[]
+  /** Raw File objects dropped on the surrounding page or picked via
+   *  the composer's attach button — ride along as multipart parts. */
+  files: File[]
 }
 
 interface TaskComposerProps {
@@ -21,6 +24,16 @@ interface TaskComposerProps {
    *  with the intent of immediately composing (e.g. from Home's
    *  empty-section "Create new task" dropdown). */
   autoFocus?: boolean
+  /** Files staged via the surrounding page's drop zone (or its attach
+   *  picker). Rendered as removable chips in the composer's upload
+   *  tray and forwarded out via `onSubmit.files`. */
+  pendingFiles?: Array<{ id: string; file: File }>
+  /** Remove one staged file from the page-owned buffer. */
+  onRemovePendingFile?: (id: string) => void
+  /** Open the page-level file picker (hidden input owned by the
+   *  surrounding FileDropZone). Wires the composer's attach button to
+   *  the same buffer that drops feed. */
+  onOpenUploadPicker?: () => void
 }
 
 /** First line, capped — used as the chat/task title. */
@@ -39,7 +52,14 @@ function deriveTitle(text: string): string {
  * payload up — the task is created in the idle **To do** state (or
  * **Scheduled** when a Schedule was set), never auto-run.
  */
-export function TaskComposer({ onSubmit, disabled, autoFocus }: TaskComposerProps) {
+export function TaskComposer({
+  onSubmit,
+  disabled,
+  autoFocus,
+  pendingFiles = [],
+  onRemovePendingFile,
+  onOpenUploadPicker,
+}: TaskComposerProps) {
   const handleSend = (
     message: string,
     uploads: UploadedFile[],
@@ -48,6 +68,9 @@ export function TaskComposer({ onSubmit, disabled, autoFocus }: TaskComposerProp
     const text = message.trim()
     if (!text) return
     const seen = new Set<string>()
+    // Library mentions carry a `path`; dropped/picked raw files don't,
+    // so the path filter cleanly partitions the two — library refs go
+    // out as `attachments`, raw files as multipart `files`.
     const attachments: AttachmentRef[] = uploads
       .filter(u => typeof u.path === 'string')
       .filter(u => {
@@ -68,6 +91,7 @@ export function TaskComposer({ onSubmit, disabled, autoFocus }: TaskComposerProp
       executeAt: options?.executeAt,
       cron: options?.cron,
       attachments,
+      files: pendingFiles.map(p => p.file),
     })
   }
 
@@ -80,6 +104,14 @@ export function TaskComposer({ onSubmit, disabled, autoFocus }: TaskComposerProp
       disabled={disabled}
       autoFocus={autoFocus}
       onSend={handleSend}
+      onOpenUploadPicker={onOpenUploadPicker}
+      extraUploads={pendingFiles.map(p => ({
+        id: p.id,
+        name: p.file.name,
+        mime: p.file.type,
+        size: p.file.size,
+      }))}
+      onRemoveExtraUpload={onRemovePendingFile}
     />
   );
 }

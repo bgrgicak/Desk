@@ -12,13 +12,15 @@ export interface UiState {
   savedArtifactIds: string[];
   readUpdateIds: string[];
 
-  todaySheetOpen: boolean;
   /** Agent id carried over from the artifact-creation sheet's "Skip to chat"
    * path, consumed once by ChatView when the new-chat composer mounts. */
   pendingNewChatAgentId: string | null;
   /** Deep-link request from the global palette: open the SettingsModal at
    * the named section. AppShell consumes and clears. */
   pendingSettingsSection: SettingsSection | null;
+  /** Deep-link request from the global palette: open the My Account modal.
+   * AppShell consumes and clears. */
+  pendingMyAccountOpen: boolean;
   /** Per-user vault password dialog. Driven by VaultGate on app load and
    * by mutation error handlers that catch HTTP 423 (VAULT_LOCKED). When
    * `forced` is true the user cannot dismiss the dialog (it's the app
@@ -32,9 +34,9 @@ const initialState: UiState = {
   savedArtifactIds: [],
   readUpdateIds: [],
 
-  todaySheetOpen: false,
   pendingNewChatAgentId: null,
   pendingSettingsSection: null,
+  pendingMyAccountOpen: false,
   vaultDialog: { open: false, forced: false },
 };
 
@@ -74,9 +76,6 @@ const slice = createSlice({
         state.readUpdateIds.push(action.payload);
     },
 
-    setTodaySheetOpen(state, action: PayloadAction<boolean>) {
-      state.todaySheetOpen = action.payload;
-    },
     setPendingNewChatAgentId(state, action: PayloadAction<string | null>) {
       state.pendingNewChatAgentId = action.payload;
     },
@@ -85,6 +84,9 @@ const slice = createSlice({
       action: PayloadAction<SettingsSection | null>,
     ) {
       state.pendingSettingsSection = action.payload;
+    },
+    setPendingMyAccountOpen(state, action: PayloadAction<boolean>) {
+      state.pendingMyAccountOpen = action.payload;
     },
     openVaultDialog(
       state,
@@ -111,9 +113,9 @@ export const {
   markArtifactsSaved,
   markUpdateRead,
 
-  setTodaySheetOpen,
   setPendingNewChatAgentId,
   setPendingSettingsSection,
+  setPendingMyAccountOpen,
   openVaultDialog,
   closeVaultDialog,
 } = slice.actions;

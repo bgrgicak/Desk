@@ -1,5 +1,5 @@
 import type { Pool } from "../pool.js";
-import type { Message } from "@agent-desk/shared";
+import type { Message, TaskStatus } from "@agent-desk/shared";
 import {
   FULL_MESSAGE_SELECT,
   FULL_MESSAGE_SELECT_M,
@@ -10,6 +10,23 @@ import {
   type MessageListView,
   type PaginatedMessages,
 } from "./messages-internal.js";
+import { decorateMessagesWithTaskStatus } from "./messages-task-status.js";
+
+/**
+ * Wraps a paginated result with `taskStatus` decoration so every
+ * Message that leaves the read layer carries the canonical, computed
+ * task status. Surfaces no longer need to join chats + task_runs in JS
+ * to derive it — that drift was the root cause of badges disagreeing
+ * across the Tasks page, the inline TaskResultCard, ChatRightPanel,
+ * and Home.
+ */
+async function decoratePaginated(
+  db: Pool,
+  result: PaginatedMessages,
+): Promise<PaginatedMessages> {
+  result.items = await decorateMessagesWithTaskStatus(db, result.items);
+  return result;
+}
 
 /**
  * Lists messages in a chat with cursor-based pagination.
@@ -43,7 +60,7 @@ export async function listByChat(
       result.items = [anchor, ...result.items];
     }
   }
-  return result;
+  return decoratePaginated(db, result);
 }
 
 async function listByChatInChat(
@@ -284,7 +301,10 @@ export async function listAgentContextByChat(
 
 export async function findById(db: Pool, id: string): Promise<Message | null> {
   const { rows } = await db.query("SELECT * FROM messages WHERE id = ?", [id]);
-  return rows.length ? rowToMessage(rows[0]) : null;
+  if (!rows.length) return null;
+  const message = rowToMessage(rows[0]);
+  const [decorated] = await decorateMessagesWithTaskStatus(db, [message]);
+  return decorated;
 }
 
 /**
@@ -328,7 +348,25 @@ export interface CrossChatListOptions {
   cursor?: string;
   limit?: number;
   view?: MessageListView;
+  /** Filter by the *computed* `taskStatus` (`needs_input`, `active`,
+   * `scheduled`, `complete`, `todo`, `failed`). OR semantics: a row passes
+   * if its decorated status is in the list. Applied after
+   * `decorateMessagesWithTaskStatus`, so callers get the same answer as
+   * reading `m.taskStatus` themselves — but server-side, which is what
+   * Home's per-bucket queries want. Pagination is best-effort when this
+   * is set (we fetch a wider window before filtering); callers that need
+   * exact paging should stick to the raw `states` filter. */
+  taskStatuses?: TaskStatus[];
 }
+
+/**
+ * SQL row cap applied before the taskStatus post-filter runs. Has to be
+ * large enough that "all tasks in a user's workspace" fits comfortably —
+ * the alternative is computing taskStatus inline in SQL, which would
+ * duplicate `computeTaskStatus` priority logic in two places. For Home,
+ * the realistic upper bound is dozens of tasks per workspace.
+ */
+const TASK_STATUS_FILTER_FETCH_CAP = 1000;
 
 /**
  * Cross-chat message listing — joins messages → chats → workspaces and filters
@@ -343,6 +381,14 @@ export async function listCrossChat(
   opts: CrossChatListOptions,
 ): Promise<PaginatedMessages> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+  // When the caller filters by computed `taskStatus`, raw-state pagination
+  // is no longer the right page boundary — a 50-row page might decorate
+  // down to 0 matches and look "done" while plenty of rows behind the
+  // cursor still qualify. Widen the SQL fetch so the post-filter sees the
+  // whole working set; if a workspace ever bumps the cap, the symptom is
+  // a missing tail rather than a wrong page count.
+  const filterByTaskStatus = (opts.taskStatuses ?? []).length > 0;
+  const sqlLimit = filterByTaskStatus ? TASK_STATUS_FILTER_FETCH_CAP : limit;
   // SQL is built with anonymous `?` placeholders. Each branch pushes its
   // params in textual order to match the order the placeholders appear
   // in the assembled WHERE clause; the LIMIT param is appended last.
@@ -436,7 +482,7 @@ export async function listCrossChat(
     params.push(cursorId);
   }
 
-  params.push(limit + 1);
+  params.push(sqlLimit + 1);
 
   const sql = `
     SELECT ${FULL_MESSAGE_SELECT_M}
@@ -449,13 +495,37 @@ export async function listCrossChat(
   `;
 
   const { rows } = await db.query(sql, params);
-  const hasMore = rows.length > limit;
   const view = opts.view ?? "full";
+
+  if (filterByTaskStatus) {
+    // Decorate the whole working set, filter on the computed status, and
+    // page over the survivors. `hasMore` here means "another decorated
+    // match exists past the page", which is the user-facing meaning the
+    // filter expects.
+    const decoratedAll = await decorateMessagesWithTaskStatus(
+      db,
+      rows.map((row) => rowToListedMessage(row, view)),
+    );
+    const allowed = new Set(opts.taskStatuses);
+    const matching = decoratedAll.filter(
+      (m) => m.taskStatus !== undefined && allowed.has(m.taskStatus),
+    );
+    const pageItems = matching.slice(0, limit);
+    const hasMore = matching.length > limit;
+    let nextCursor: string | undefined;
+    if (hasMore && pageItems.length > 0) {
+      const last = pageItems[pageItems.length - 1];
+      nextCursor = `${last.createdAt}|${last.id}`;
+    }
+    return { items: pageItems, nextCursor };
+  }
+
+  const hasMore = rows.length > limit;
   const items = rows.slice(0, limit).map((row) => rowToListedMessage(row, view));
   let nextCursor: string | undefined;
   if (hasMore && items.length > 0) {
     const last = items[items.length - 1];
     nextCursor = `${last.createdAt}|${last.id}`;
   }
-  return { items, nextCursor };
+  return decoratePaginated(db, { items, nextCursor });
 }

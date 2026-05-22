@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import {
   ArrowUpRight,
   ChevronDown, ChevronRight, FolderOpen, ListFilter,
-  Loader2, MessagesSquare, PinOff, Plus, SlidersHorizontal,
+  Loader2, MessagesSquare, PinOff, Plus, Search, SlidersHorizontal,
   Zap,
   type LucideIcon,
 } from 'lucide-react'
@@ -28,6 +28,7 @@ import {
   useSidebar,
 } from '@agent-desk/ui'
 import { SIDEBAR_ROW_STATE_CLASS, SidebarAccountMenu } from './sidebarShared'
+import { useGlobalPalette } from '@/components/global-palette/GlobalPaletteProvider'
 import { ChatMenuItems } from '@/components/chats/ChatMenuItems'
 import { RowKebab } from '@/components/shared/RowKebab'
 import { SectionBody, SectionHeader } from '@/components/shared/SectionHeader'
@@ -361,6 +362,8 @@ export function RoomSidebar({
   const [isPinnedDropOver, setIsPinnedDropOver] = useState(false)
   const pinnedDropCounter = useRef(0)
 
+  const palette = useGlobalPalette()
+
   const [appliedFilter, setAppliedFilter] = useState<ChatFilterValues>(EMPTY_FILTER)
   const [pendingFilter, setPendingFilter] = useState<ChatFilterValues>(EMPTY_FILTER)
   const [filterOpen, setFilterOpen] = useState(false)
@@ -523,6 +526,15 @@ export function RoomSidebar({
                 <FolderOpen className="h-4 w-4 text-muted-foreground" />
                 <span>Library</span>
               </Link>
+            </MobileDismissSidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <MobileDismissSidebarMenuButton
+              onClick={() => palette.open()}
+              className={cn(SIDEBAR_ROW_STATE_CLASS, 'text-foreground')}
+            >
+              <Search className="h-4 w-4 text-muted-foreground" />
+              <span>Search</span>
             </MobileDismissSidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

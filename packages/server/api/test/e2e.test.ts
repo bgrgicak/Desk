@@ -1005,9 +1005,19 @@ describe("API e2e (real Postgres)", () => {
 
 /**
  * Gap 15: Real-stack e2e — HTTP → scheduler → real container sandbox → real
- * opencode CLI → free opencode/big-pickle model → assistant message persisted
- * → WS event. Auto-skips when no usable container engine + sandbox image is
- * available locally. No API keys required.
+ * pi CLI → model → assistant message persisted → WS event. Originally
+ * pinned to `opencode/big-pickle` (pi's free tier) so it ran in CI with
+ * no API keys; that tier is gone, so the spec is paused.
+ *
+ * To revive: point pi inside the sandbox at an aimock server on the
+ * host via `ANTHROPIC_BASE_URL` (see
+ * `packages/server/api/test/helpers/aimock.ts`), switch `FREE_MODEL` to
+ * `anthropic/claude-haiku-4-5`, and inject `ANTHROPIC_API_KEY=mock` as
+ * a provider key. Pi must forward the base-URL env into the container
+ * (`docker exec -e ANTHROPIC_BASE_URL=…`) and reach the host network
+ * (`host.docker.internal` on Docker Desktop). Until that's wired, the
+ * suite stays skipped — keeping the source as documentation of the
+ * real-stack contract we still want to honour.
  */
 const REAL_E2E_SANDBOX_AVAILABLE = await (async () => {
   try {
@@ -1021,7 +1031,12 @@ const REAL_E2E_SANDBOX_AVAILABLE = await (async () => {
 
 const FREE_MODEL = "opencode/big-pickle";
 
-describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
+// Skipped pending the aimock wiring described above. Keep the
+// describe-with-skip rather than deleting so the contract stays in the
+// codebase as documentation, and re-enabling is a one-line flip.
+const REAL_STACK_E2E_ENABLED = false;
+
+describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
   "real-stack e2e (real Docker + free opencode model)",
   () => {
   let realPool: Pool;

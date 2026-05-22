@@ -366,9 +366,14 @@ async function findOrCreateReflectionChat(
   if (existing[0]?.id) return existing[0].id;
 
   const chatId = generateId("chat");
+  // `created_at` defaults to `''` (migration 0042 — SQLite forbids
+  // non-constant ALTER TABLE defaults). Empty strings sort before any
+  // real ISO timestamp, so an unstamped reflection chat would silently
+  // hijack title-agnostic "oldest in workspace" lookups. Stamp it the
+  // same way `queries.chats.insert` does.
   await pool.query(
-    `INSERT INTO chats (id, workspace_id, agent_id, title, unread)
-     VALUES (?, ?, ?, ?, 0)`,
+    `INSERT INTO chats (id, workspace_id, agent_id, title, unread, created_at)
+     VALUES (?, ?, ?, ?, 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
     [chatId, workspaceId, agentId, DAILY_REFLECTION_CHAT_TITLE],
   );
   return chatId;

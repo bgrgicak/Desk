@@ -59,6 +59,7 @@ describe('task selectors', () => {
       kind: 'task',
       title: 'Daily workspace memory reflection',
       cron: '0 3 * * *',
+      taskStatus: 'scheduled',
     }), [], [], [{
       id: 'wks_test',
       userId: 'usr_test',
@@ -88,7 +89,7 @@ describe('task selectors', () => {
   })
 
   it('maps scheduled summary requests as readable scheduled tasks', () => {
-    const task = toUiTask(message(), [], [{
+    const task = toUiTask(message({ taskStatus: 'scheduled' }), [], [{
       id: 'cht_test',
       workspaceId: 'wks_test',
       agentId: 'agent_test',
@@ -190,6 +191,7 @@ describe('task selectors', () => {
       executeAt: undefined,
       cron: undefined,
       state: 'pending',
+      taskStatus: 'active',
     }), [], [{
       id: 'cht_test',
       workspaceId: 'wks_test',
@@ -215,6 +217,7 @@ describe('task selectors', () => {
       executeAt: undefined,
       cron: undefined,
       state: 'pending',
+      taskStatus: 'needs_input',
     }), [], [{
       id: 'cht_test',
       workspaceId: 'wks_test',
@@ -252,6 +255,7 @@ describe('task selectors', () => {
       executeAt: undefined,
       cron: undefined,
       state: 'pending',
+      taskStatus: 'needs_input',
     }), [], [
       {
         id: 'cht_parent',
@@ -287,6 +291,7 @@ describe('task selectors', () => {
       executeAt: '2099-05-08T08:00:00.000Z',
       cron: undefined,
       state: 'pending',
+      taskStatus: 'scheduled',
     }), [], [{
       id: 'cht_test',
       workspaceId: 'wks_test',
@@ -312,6 +317,7 @@ describe('task selectors', () => {
       executeAt: '2099-05-08T08:00:00.000Z',
       cron: undefined,
       state: 'pending',
+      taskStatus: 'active',
     }), [], [{
       id: 'cht_test',
       workspaceId: 'wks_test',
@@ -336,6 +342,7 @@ describe('task selectors', () => {
       executeAt: undefined,
       cron: undefined,
       state: 'succeeded',
+      taskStatus: 'complete',
     }), [], [{
       id: 'cht_test',
       workspaceId: 'wks_test',
@@ -360,6 +367,7 @@ describe('task selectors', () => {
       executeAt: undefined,
       cron: undefined,
       state: 'pending',
+      taskStatus: 'active',
     }), [], [], [], [
       message({
         id: 'msg_run_active',
@@ -435,6 +443,7 @@ describe('task selectors', () => {
       executeAt: undefined,
       cron: undefined,
       state: 'running',
+      taskStatus: 'active',
     }), [])
 
     expect(task.status).toBe('active')

@@ -44,66 +44,6 @@ export interface ArtifactUpdate {
   timestamp: number
 }
 
-// ── Today / Inbox ─────────────────────────────────────────────────────────────
-
-export type InboxUICard =
-  | {
-      type: 'email-draft'
-      to: string
-      subject: string
-      body: string
-    }
-  | {
-      type: 'expense-flags'
-      entries: { description: string; date: string; amount: string }[]
-    }
-  | {
-      type: 'reconnect'
-      service: string
-      detail: string
-    }
-
-export interface InboxItem {
-  id: string
-  type: 'question' | 'completion' | 'error'
-  agentName: string
-  message: string
-  artifactId?: string
-  runId?: string
-  timestamp: Date
-  read: boolean
-  quickReplies?: string[]
-  uiCard?: InboxUICard
-}
-
-export type TodayItemType =
-  | 'broken-connection'
-  | 'decision-from-run'
-  | 'agent-question'
-  | 'calendar-prompt'
-  | 'unresolved-follow-up'
-  | 'user-todo'
-
-export type TodayBand = 'right-now' | 'today' | 'this-week' | 'earlier'
-
-export interface TodayChip { label: string }
-
-export interface TodayItem {
-  id: string
-  type: TodayItemType
-  ask: string
-  context: string
-  workspaceId: string
-  workspaceName: string
-  sourceLabel: string
-  timestamp: Date
-  band: TodayBand
-  chips?: TodayChip[]
-  routeToWorkspace?: boolean
-  note?: string
-  attachment?: { name: string; size: string }
-}
-
 // ── Library / Context ─────────────────────────────────────────────────────────
 
 export interface ContextItem {

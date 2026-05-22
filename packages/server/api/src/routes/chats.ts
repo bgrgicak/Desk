@@ -359,7 +359,8 @@ export async function sendMessage(
       agentId: chat.agentId,
     });
     emit({ type: "message.appended", payload: message, workspaceId: chat.workspaceId, chatTitle: chat.title, actorUserId: opts?.actorUserId });
-    return { userMessage: message, triggerId: messageId };
+    const decorated = await queries.messages.decorateMessageWithTaskStatus(pool, message);
+    return { userMessage: decorated, triggerId: messageId };
   }
 
   const userMessage = await queries.messages.insert(pool, {
@@ -837,7 +838,7 @@ export async function patchMessage(
     if (data.state === "cancelled" && updated.kind === "task") {
       await postTaskDoneNotification(pool, updated, emit);
     }
-    return updated;
+    return queries.messages.decorateMessageWithTaskStatus(pool, updated);
   }
 
   // Non-transition path: apply the DB update, then if the schedule changed,
@@ -846,10 +847,10 @@ export async function patchMessage(
   if (!updated) throw new NotFoundError(`Message not found: ${messageId}`);
   if (lifecycleOps && (data.executeAt !== undefined || data.cron !== undefined)) {
     const synced = await lifecycleOps.rescheduleMessage(messageId);
-    return synced ?? updated;
+    return queries.messages.decorateMessageWithTaskStatus(pool, synced ?? updated);
   }
   emit({ type: "message.updated", payload: updated });
-  return updated;
+  return queries.messages.decorateMessageWithTaskStatus(pool, updated);
 }
 
 /**
@@ -968,7 +969,7 @@ export async function runMessage(
     log.error({ err, messageId }, "runMessage fireMessage failed");
   });
 
-  return rowToReturn;
+  return queries.messages.decorateMessageWithTaskStatus(pool, rowToReturn);
 }
 
 /**

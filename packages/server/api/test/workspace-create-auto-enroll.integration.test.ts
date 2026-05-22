@@ -108,7 +108,7 @@ async function insertAgent(name: string): Promise<string> {
     id,
     userId,
     name,
-    model: "opencode/big-pickle",
+    model: "anthropic/claude-haiku-4-5",
   });
   return id;
 }
@@ -137,7 +137,7 @@ describe("POST /workspaces — ensure a default workspace agent", () => {
     expect(stillEnrolled[0].agentId).toBe(alphaId);
   });
 
-  it("creates and enrolls a default opencode agent for a user with no agents", async () => {
+  it("creates and enrolls a default Anthropic agent for a user with no agents", async () => {
     const otherUserId = generateId("user");
     await queries.users.insert(pool, {
       id: otherUserId,
@@ -164,22 +164,22 @@ describe("POST /workspaces — ensure a default workspace agent", () => {
     expect(agent).toMatchObject({
       userId: otherUserId,
       name: "Desk",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
     });
 
     const listRes = await request("GET", `/workspaces/${ws.id}/agents`, otherToken);
     expect(listRes.status).toBe(200);
     expect(listRes.body).toMatchObject([
-      { id: memberships[0].agentId, model: "opencode/big-pickle" },
+      { id: memberships[0].agentId, model: "anthropic/claude-haiku-4-5" },
     ]);
 
     const patchRes = await request("PATCH", `/agents/${memberships[0].agentId}`, otherToken, {
-      model: "opencode/hy3-preview-free",
+      model: "anthropic/claude-sonnet-4-5",
     });
     expect(patchRes.status).toBe(200);
     expect(patchRes.body).toMatchObject({
       id: memberships[0].agentId,
-      model: "opencode/hy3-preview-free",
+      model: "anthropic/claude-sonnet-4-5",
     });
 
     const removeRes = await request(
@@ -219,7 +219,7 @@ describe("POST /workspaces — ensure a default workspace agent", () => {
     const listRes = await request("GET", `/workspaces/${ws.id}/agents`, repairToken);
     expect(listRes.status).toBe(200);
     expect(listRes.body).toMatchObject([
-      { name: "Desk", model: "opencode/big-pickle" },
+      { name: "Desk", model: "anthropic/claude-haiku-4-5" },
     ]);
 
     const after = await queries.workspaceAgents.listForWorkspace(pool, ws.id);

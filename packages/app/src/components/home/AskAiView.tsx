@@ -1,149 +1,174 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { MessageBubble } from '@/components/compose/MessageBubble'
+import { useCallback, useState } from 'react'
+import { toast } from 'sonner'
+import { ChatThread } from '@/components/compose/ChatThread'
 import { ChatInput } from '@/components/compose/ChatInput'
-import { StatusIndicator } from '@/components/compose/StatusIndicator'
 import { EmptyChatGreeting } from '@/components/compose/EmptyChatGreeting'
 import { SuggestionPills } from '@/components/compose/SuggestionPills'
+import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone'
 import {
-  useGlobalChat,
-  createGlobalChat,
-  sendGlobalChatMessage,
-  type GlobalChatMessage,
-} from '@/components/global-palette/globalChatStore'
+  useGetAskAiChatQuery,
+  usePostChatMessageMutation,
+} from '@/store/api'
 import { usePrefs } from '@/hooks/use-prefs'
-import type { ServerMessage } from '@/store/types'
+import type { SendOptions, UploadedFile } from '@/components/compose/ChatInput'
+import type { AttachmentRef } from '@/store/types'
 import type { GoalKey } from '@agent-desk/shared'
 
-// One persistent "Ask AI" thread on Home. Backed by the existing in-app
-// global chat store (mock streaming, localStorage) — the hub-workspace
-// chat seam is noted in the plan. We remember a single dedicated chat id
-// so Home always reopens the same thread (no thread list).
-const ASKAI_ID_KEY = 'desk.home-askai.v1'
-
-function loadAskAiChatId(): string | null {
-  try {
-    return localStorage.getItem(ASKAI_ID_KEY)
-  } catch {
-    return null
-  }
-}
-function saveAskAiChatId(id: string): void {
-  try {
-    localStorage.setItem(ASKAI_ID_KEY, id)
-  } catch {
-    /* ignore */
-  }
-}
-
-/** Adapt the global-chat stub message to the ServerMessage shape
- *  MessageBubble expects (same adapter the global palette uses). */
-function toServerMessage(m: GlobalChatMessage): ServerMessage {
-  return {
-    id: m.id,
-    // Trunk added `kind` as a required field on ServerMessage. The
-    // global-palette stub thread is plain chatter — mark it as such.
-    kind: 'chat',
-    chatId: 'home-askai',
-    role: m.role,
-    content: { type: 'text', text: m.content },
-    createdAt: new Date(m.createdAt).toISOString(),
-  }
-}
-
 const COLUMN = 'w-full max-w-4xl min-w-0 mx-auto'
+// Messages get an extra `px-6` to match the ChatInput card's internal
+// `pl-6`/`pr-6`, so the assistant text and the textarea/placeholder line
+// up on the same left edge (and the user bubble's right edge lines up
+// with the card content's right edge).
+const MESSAGE_COLUMN = `${COLUMN} px-6`
 
 /**
- * The Home "Ask AI" surface — the same chat UI as a room, just a single
- * thread (no thread list / new-chat). Reuses MessageBubble + ChatInput +
- * StatusIndicator over the global chat store.
+ * The Home "Ask AI" surface — a single, persistent thread backed by the
+ * hub workspace's oldest chat. The hub itself is hidden from the public
+ * workspaces API; the server exposes this one chat via /me/ask-ai-chat
+ * and creates it on demand. Every message round-trips through the real
+ * chat backend, so the agent reply is real (no mocks).
  */
 export function AskAiView() {
   const { developerMode } = usePrefs()
-  const [chatId, setChatId] = useState<string | null>(() => loadAskAiChatId())
-  const chat = useGlobalChat(chatId)
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const { data: askAiChat, isLoading: isLoadingChat } = useGetAskAiChatQuery()
+  const [postMessage] = usePostChatMessageMutation()
+  const [isSending, setIsSending] = useState(false)
+
   // Suggestion-pill state: prefill text + Tools goal pushed into the
-  // composer when the user clicks a pill. Cleared by the composer
-  // itself once submitted.
+  // composer when the user clicks a pill.
   const [pillPrefill, setPillPrefill] = useState<string | undefined>(undefined)
   const [pillGoal, setPillGoal] = useState<GoalKey | null>(null)
 
-  const visibleMessages = useMemo(
-    () => (chat ? chat.messages.filter(m => m.content.length > 0) : []),
-    [chat],
-  )
-  const isTyping = !!chat?.messages.some(m => m.role === 'agent' && m.streaming)
-  const isEmpty = visibleMessages.length === 0 && !isTyping
+  // Files dropped onto the view or picked via the composer's attach
+  // button. Held in browser memory until the user sends — the file
+  // rides on the next outgoing message as a multipart part (same
+  // pattern as ChatView).
+  const [pendingFiles, setPendingFiles] = useState<Array<{ id: string; file: File }>>([])
 
-  const lastTick = visibleMessages.map(m => `${m.id}:${m.content.length}`).join(',')
-  useEffect(() => {
-    const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [lastTick, isTyping])
+  const handleUpload = useCallback((entries: UploadEntry[]) => {
+    setPendingFiles(prev => [
+      ...prev,
+      ...entries.map(({ file }, i) => ({
+        id: `pending-${Date.now()}-${i}-${file.name}`,
+        file,
+      })),
+    ])
+  }, [])
 
-  const handleSend = (msg: string) => {
+  const removePendingFile = useCallback((id: string) => {
+    setPendingFiles(prev => prev.filter(p => p.id !== id))
+  }, [])
+
+  const handleSend = async (
+    msg: string,
+    uploads: UploadedFile[],
+    options?: SendOptions,
+  ) => {
     const text = msg.trim()
-    if (!text) return
-    if (!chatId) {
-      const { id } = createGlobalChat(text)
-      saveAskAiChatId(id)
-      setChatId(id)
+    if (!text && uploads.length === 0 && pendingFiles.length === 0) return
+    if (isSending) return
+    if (!askAiChat) {
+      toast.error('Ask AI chat is not ready yet')
       return
     }
-    sendGlobalChatMessage(chatId, text)
+    // Library-mention uploads (path set) become AttachmentRefs; the
+    // raw File bodies live in `pendingFiles` state and ride along as
+    // multipart parts.
+    const seen = new Set<string>()
+    const attachments: AttachmentRef[] = uploads
+      .filter(u => typeof u.path === 'string')
+      .filter(u => {
+        if (seen.has(u.path!)) return false
+        seen.add(u.path!)
+        return true
+      })
+      .map(u => ({
+        path: u.path!,
+        name: u.name,
+        kind: u.kind,
+        mime: u.mime,
+        size: u.size,
+      }))
+    const files = pendingFiles.map(p => p.file)
+    setPendingFiles([])
+    setIsSending(true)
+    try {
+      await postMessage({
+        chatId: askAiChat.id,
+        content: text,
+        attachments: attachments.length > 0 ? attachments : undefined,
+        files: files.length > 0 ? files : undefined,
+        ...options,
+      }).unwrap()
+    } catch {
+      toast.error('Failed to send message')
+    } finally {
+      setIsSending(false)
+    }
   }
 
-  return (
-    <div className="flex h-full min-h-0 w-full flex-col">
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-6 pt-8 pb-4">
-        <div className={`${COLUMN} space-y-4`}>
-          {isEmpty ? (
-            <EmptyChatGreeting />
-          ) : (
-            <>
-              {visibleMessages.map((m, i) => (
-                <MessageBubble
-                  key={m.id}
-                  message={toServerMessage(m)}
-                  isFirstInGroup={i === 0 || visibleMessages[i - 1].role !== m.role}
-                  agentName="Desk AI"
-                  developerMode={developerMode}
-                />
-              ))}
-              <StatusIndicator text={null} isTyping={isTyping} />
-            </>
-          )}
-        </div>
-      </div>
+  const isThreadEmpty = !askAiChat && !isLoadingChat
 
-      <div className="shrink-0 px-6 pb-6 pt-2">
-        <div className={`${COLUMN} flex flex-col gap-3`}>
-          {isEmpty && (
-            <SuggestionPills
-              onSelect={s => {
-                setPillPrefill(s.prompt)
-                if (s.goal !== undefined) setPillGoal(s.goal)
-              }}
-            />
-          )}
-          <ChatInput
-            onSend={(msg) => {
-              handleSend(msg)
-              setPillPrefill(undefined)
-              setPillGoal(null)
-            }}
-            placeholder="Ask Desk AI anything…"
-            // Pills can select a Tools goal (Task / App), so the
-            // picker must be visible — without it the goal wouldn't
-            // surface to the user.
-            showGoalPicker
-            goal={pillGoal}
-            prefillValue={pillPrefill}
-            hideAgentPicker
-            directUpload
-          />
-        </div>
-      </div>
-    </div>
+  return (
+    <FileDropZone
+      onFiles={handleUpload}
+      overlayLabel="Drop to attach to Desk AI"
+      className="flex h-full min-h-0 w-full flex-col"
+    >
+      {({ openPicker }) => (
+        <ChatThread
+          chatId={askAiChat?.id ?? ''}
+          skipQuery={!askAiChat}
+          developerMode={developerMode}
+          isSending={isSending}
+          agentName="Desk AI"
+          innerClassName="px-6 pt-8 pb-4 space-y-4"
+          messageClassName={() => MESSAGE_COLUMN}
+          statusClassName={MESSAGE_COLUMN}
+          agentHeaderClassName={MESSAGE_COLUMN}
+          emptySlot={
+            <div className={MESSAGE_COLUMN}>
+              <EmptyChatGreeting />
+            </div>
+          }
+          footerSlot={
+            <div className="shrink-0 px-6 pb-6 pt-2">
+              <div className={`${COLUMN} flex flex-col gap-3`}>
+                {isThreadEmpty && (
+                  <SuggestionPills
+                    className="px-6"
+                    onSelect={s => {
+                      setPillPrefill(s.prompt)
+                      if (s.goal !== undefined) setPillGoal(s.goal)
+                    }}
+                  />
+                )}
+                <ChatInput
+                  autoFocus
+                  onSend={(msg, uploads, options) => {
+                    void handleSend(msg, uploads, options)
+                    setPillPrefill(undefined)
+                    setPillGoal(null)
+                  }}
+                  placeholder="Ask Desk AI anything…"
+                  showGoalPicker
+                  goal={pillGoal}
+                  prefillValue={pillPrefill}
+                  hideAgentPicker
+                  onOpenUploadPicker={openPicker}
+                  extraUploads={pendingFiles.map(p => ({
+                    id: p.id,
+                    name: p.file.name,
+                    mime: p.file.type,
+                    size: p.file.size,
+                  }))}
+                  onRemoveExtraUpload={removePendingFile}
+                />
+              </div>
+            </div>
+          }
+        />
+      )}
+    </FileDropZone>
   )
 }

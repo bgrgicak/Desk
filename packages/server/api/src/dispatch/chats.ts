@@ -138,7 +138,8 @@ export async function dispatchChats(
     const { userMessage, triggerId } = await chatRoutes.sendMessage(pool, segments[1], body, emit, { actorUserId: userId });
 
     // Self-firing kinds (task / summary): execute_at is computed at insert
-    // time; the DB poll loop fires them when due. Unscheduled tasks just sit.
+    // time; the DB poll loop fires scheduled tasks when due. Unscheduled
+    // tasks land on the kanban as Active immediately (auto-run below).
     if (userMessage.kind && userMessage.kind !== "chat") {
       // Task messages created from inside an existing conversation
       // anchor a dedicated thread chat so the tasks list opens that
@@ -148,6 +149,7 @@ export async function dispatchChats(
       // spun up a fresh chat to hold the task; adding a thread shell on
       // top would leave an empty placeholder parent the user never
       // sees. Summary kinds keep firing in place.
+      let threadChat: Awaited<ReturnType<typeof chatRoutes.createThreadShell>> | undefined;
       if (userMessage.kind === "task" && !userMessage.threadChatId) {
         const { rows: priorCountRows } = await pool.query<{ n: number }>(
           `SELECT COUNT(*) AS n FROM messages WHERE chat_id = ? AND id <> ?`,
@@ -155,14 +157,31 @@ export async function dispatchChats(
         );
         const hasPriorMessages = (priorCountRows[0]?.n ?? 0) > 0;
         if (hasPriorMessages) {
-          const threadChat = await chatRoutes.createThreadShell(
+          threadChat = await chatRoutes.createThreadShell(
             pool, segments[1], userMessage, emit,
           );
-          sendJson(res, 201, { ...userMessage, threadChatId: threadChat.id, threadChat });
-          return true;
         }
       }
-      sendJson(res, 201, userMessage);
+
+      // Auto-run unscheduled tasks — same path as the user pressing
+      // "Run now" on an existing task. fireMessage inserts a task_run
+      // child whose `running` state flips the kanban badge to Active.
+      // Scheduled tasks (executeAt / cron) stay pending so the poll
+      // loop owns their firing.
+      const hasSchedule = !!(userMessage.executeAt || userMessage.cron);
+      if (userMessage.kind === "task" && !hasSchedule) {
+        try {
+          await chatRoutes.runMessage(pool, segments[1], userMessage.id, runManager, emit);
+        } catch (err) {
+          log.error({ err, messageId: userMessage.id }, "auto-run of new task failed");
+        }
+      }
+
+      if (threadChat) {
+        sendJson(res, 201, { ...userMessage, threadChatId: threadChat.id, threadChat });
+      } else {
+        sendJson(res, 201, userMessage);
+      }
       return true;
     }
 

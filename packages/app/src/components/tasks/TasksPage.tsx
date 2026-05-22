@@ -31,6 +31,7 @@ import { TaskComposer, type TaskComposerSubmit } from './TaskComposer'
 import { TaskCard } from './TaskCard'
 import { TaskChatPanel } from './TaskChatPanel'
 import { TaskPanelActionsMenu } from './TaskPanelActionsMenu'
+import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone'
 import type { SchedulePickerValue } from './SchedulePicker'
 import {
   TaskTabs,
@@ -268,6 +269,34 @@ export function TasksPage({
   const [filters, setFilters] = useState<TaskListFilters>(DEFAULT_TASK_FILTERS)
   const [search, setSearch] = useState('')
 
+  // Files dropped onto the list (or picked via the composer's attach
+  // button) ride along with the next created task as multipart parts.
+  // Held here — not in TaskComposer — so dropping anywhere across the
+  // list pane works, not just on the input strip.
+  const [pendingFiles, setPendingFiles] = useState<Array<{ id: string; file: File }>>([])
+  const handleDroppedFiles = useCallback((entries: UploadEntry[]) => {
+    setPendingFiles(prev => [
+      ...prev,
+      ...entries.map(({ file }, i) => ({
+        id: `pending-${Date.now()}-${i}-${file.name}`,
+        file,
+      })),
+    ])
+  }, [])
+  const removePendingFile = useCallback((id: string) => {
+    setPendingFiles(prev => prev.filter(p => p.id !== id))
+  }, [])
+  const handleCreateTask = useCallback(
+    (input: TaskComposerSubmit) => {
+      // Clear optimistically — mirrors TaskChatPanel/AskAiView, so a
+      // failed create doesn't leave the staged chips behind on the
+      // next, unrelated task.
+      setPendingFiles([])
+      void onCreateTask(input)
+    },
+    [onCreateTask],
+  )
+
   // Stable action dispatcher passed to every memoized TaskCardRow.
   // AppInner re-creates these handlers on every render; without
   // indirection through a ref every visible TaskCard would re-render
@@ -426,6 +455,21 @@ export function TasksPage({
   }, [allTasks, tab, filters, search])
 
   return (
+    // FileDropZone wraps the list pane so dropping a file *anywhere*
+    // across the task list stages it on the new-task composer — same
+    // pattern AskAiView / ChatView / TaskChatPanel use. The chat
+    // panel below has its own FileDropZone, so we disable this one
+    // when the docked chat is open: that pane owns drop semantics
+    // (drops attach to the *chat*, not a new task) and a disabled
+    // outer zone keeps drag events from being swallowed before they
+    // reach the chat pane's listener.
+    <FileDropZone
+      onFiles={handleDroppedFiles}
+      overlayLabel="Drop to attach to new task"
+      className="flex flex-1 min-h-0 overflow-hidden"
+      disabled={panelOpen}
+    >
+      {({ openPicker }) => (
     <div className="relative flex flex-1 min-h-0 overflow-hidden">
       {/* List column — always `flex-1`. The chat pane animates its own
           width (below), so this column simply yields space as the chat
@@ -437,12 +481,11 @@ export function TasksPage({
             content-actions slot pinned to the list/chat seam (or the
             24 px gutter when no chat is docked), separate from the
             chat-pane collapse X — mirroring ContextDetail.
-            Skipped on mobile when the chat overlay is open: the list
-            is fully covered by the overlay, and both slots resolve to
-            `right-6` at that breakpoint (no resizable split to push
-            list controls leftward), so the filter/search and the
-            chat-close X would otherwise stack on top of each other. */}
-        {!(panelOpen && isSmallViewport) && (
+            Hidden whenever a task chat is open: the controls filter
+            the list, but the user has zoomed into a single task, and
+            on a docked desktop split they'd otherwise sit next to (or
+            overlap with) the chat pane's own header chip + close X. */}
+        {!panelOpen && (
           <TopBarContentActions>
             <TaskFilterSearch
               filters={filters}
@@ -586,7 +629,12 @@ export function TasksPage({
             >
               <div className={`${gutter} pt-2 pb-6`}>
                 <div className={COMPOSER_COLUMN}>
-                  <TaskComposer onSubmit={onCreateTask} />
+                  <TaskComposer
+                    onSubmit={handleCreateTask}
+                    pendingFiles={pendingFiles}
+                    onRemovePendingFile={removePendingFile}
+                    onOpenUploadPicker={openPicker}
+                  />
                 </div>
               </div>
             </motion.div>
@@ -694,6 +742,8 @@ export function TasksPage({
         </TopBarActions>
       )}
     </div>
+      )}
+    </FileDropZone>
   )
 }
 

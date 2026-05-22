@@ -81,7 +81,7 @@ export function TaskPills({ status }: { status: Task['status'] }) {
   if (status === 'active') {
     return <Pill icon={CircleDot} label="Active" className="bg-blue-500 text-white" />
   }
-  return <Pill icon={CircleDot} label="Open" className="bg-blue-500 text-white" />
+  return <Pill icon={CircleDot} label="Open" className="bg-slate-100 text-slate-600" />
 }
 
 // ── Priority badge ─────────────────────────────────────────────────────────────

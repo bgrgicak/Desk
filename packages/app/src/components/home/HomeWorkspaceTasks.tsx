@@ -7,6 +7,10 @@ import { roomColor } from '@/components/rooms/roomColor'
 import { usePrefs } from '@/hooks/use-prefs'
 import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'
 
+// Home limits per bucket — generous because all task messages are
+// decorated server-side and a workspace rarely holds more.
+const HOME_BUCKET_LIMIT = 200
+
 export interface HomeTask {
   task: Task
   roomName: string
@@ -44,23 +48,28 @@ export function HomeWorkspaceTasks({
   const kind = taskMessageKindsForDeveloperMode(developerMode)
   const iconUrl = useWorkspaceIconUrl(workspace.id)
 
+  // Filter by the server-computed `taskStatus`. The raw `state`/`unread`
+  // filters used here previously missed every pending task — including
+  // scheduled cron tasks between fires and any queued one-shot — because
+  // they live in `state='pending'` no matter what the user-facing status
+  // is. The server is authoritative for status; ask it directly.
   const { currentData: needsInputResp } = useGetMessagesQuery({
     workspaceId: workspace.id,
     kind,
-    // Trunk renamed `awaitingUser` → `unread` and tightened the
-    // semantics: unread now flips only on agent-authored visible
-    // rows, which is exactly the "Needs your input" signal we want.
-    unread: true,
+    taskStatus: ['needs_input'],
+    limit: HOME_BUCKET_LIMIT,
   })
   const { currentData: activeResp } = useGetMessagesQuery({
     workspaceId: workspace.id,
     kind,
-    state: ['running'],
+    taskStatus: ['active'],
+    limit: HOME_BUCKET_LIMIT,
   })
   const { currentData: doneResp } = useGetMessagesQuery({
     workspaceId: workspace.id,
     kind,
-    state: ['succeeded', 'cancelled'],
+    taskStatus: ['complete'],
+    limit: HOME_BUCKET_LIMIT,
   })
 
   useEffect(() => {

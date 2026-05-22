@@ -4,8 +4,6 @@ import { useSearchParams } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { FileText, MessageSquare } from 'lucide-react'
 import {
-  Sheet,
-  SheetContent,
   SidebarInset,
   SidebarProvider,
   CommandDialog,
@@ -17,8 +15,6 @@ import {
   CommandSeparator,
   useIsMobile,
 } from '@agent-desk/ui'
-import { TodayPanel } from '@/components/today/TodayPanel'
-import { TodayDetailPanel } from '@/components/today/TodayDetailPanel'
 import { BackgroundBlobs } from '@/components/layout/BackgroundBlobs'
 import { TopBar } from '@/components/layout/TopBar'
 import { RoomSidebar, type PinnedSidebarEntry } from '@/components/layout/RoomSidebar'
@@ -28,7 +24,7 @@ import { useSplitResize } from '@/components/shared/splitPane'
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 import { SettingsModal } from '@/components/settings/SettingsModal'
 import { MyAccountModal } from '@/components/account/MyAccountModal'
-import type { Chat, Artifact, InboxItem } from '@/data/ui-types'
+import type { Chat, Artifact } from '@/data/ui-types'
 import { useChatHierarchy } from '@/store/selectors/threads'
 import { getArtifactIcon } from '@/data/ui-types'
 import { DRAG_TYPE_PINNED_ITEM } from '@/components/library/LibraryCard'
@@ -42,7 +38,11 @@ import {
 import { useAvatarUrl } from '@/hooks/use-avatar'
 import { toWorkspaceInfo } from '@/store/selectors/workspaces'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
-import { setPendingSettingsSection, type SettingsSection } from '@/store/slices/uiSlice'
+import {
+  setPendingSettingsSection,
+  setPendingMyAccountOpen,
+  type SettingsSection,
+} from '@/store/slices/uiSlice'
 import {
   PREVIEW_MIN_CHAT_WIDTH,
   PREVIEW_MIN_PANEL_WIDTH,
@@ -55,7 +55,7 @@ import { PreviewPanel } from '@/components/chats/PreviewPanel'
 import { buildPath, type RouteView } from '@/router/nav'
 import type { TopBarCrumb } from '@/components/layout/TopBar'
 
-export type View = 'today' | 'pinned' | 'tasks' | 'chats' | 'context' | 'compose'
+export type View = 'pinned' | 'tasks' | 'chats' | 'context' | 'compose'
 
 // Below this width the preview panel switches from a docked flex
 // sibling to a full-screen overlay (same threshold as the chat right
@@ -176,10 +176,6 @@ interface AppShellProps {
   activeWorkspaceId: string
   onSelectWorkspace: (id: string) => void
   getWorkspaceHref?: (id: string) => string
-  onGlobalToday: () => void
-  // ── Today sheet ──
-  todaySheetOpen?: boolean
-  onTodaySheetClose?: () => void
   onSignOut?: () => void
   onChatWithAgent?: (agentId: string) => void
   pinnedEntries?: PinnedSidebarEntry[]
@@ -208,8 +204,6 @@ export function AppShell({
   onArtifactClick,
   activeWorkspaceId,
   onSelectWorkspace,
-  todaySheetOpen = false,
-  onTodaySheetClose,
   onSignOut,
   onChatWithAgent,
   pinnedEntries = [],
@@ -235,8 +229,6 @@ export function AppShell({
   const [isInsetDropOver, setIsInsetDropOver] = useState(false)
   const insetDropCounter = useRef(0)
 
-  const [selectedTodayItem, setSelectedTodayItem] = useState<InboxItem | null>(null)
-  const [focusTodayInput, setFocusTodayInput] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection | undefined>(undefined)
   const [myAccountOpen, setMyAccountOpen] = useState(false)
@@ -249,6 +241,13 @@ export function AppShell({
     setSettingsOpen(true)
     appDispatch(setPendingSettingsSection(null))
   }, [pendingSettingsSection, appDispatch])
+
+  const pendingMyAccountOpen = useAppSelector(s => s.ui.pendingMyAccountOpen)
+  useEffect(() => {
+    if (!pendingMyAccountOpen) return
+    setMyAccountOpen(true)
+    appDispatch(setPendingMyAccountOpen(false))
+  }, [pendingMyAccountOpen, appDispatch])
 
   const handleInsetDragEnter = (e: React.DragEvent) => {
     if (!e.dataTransfer.types.includes(DRAG_TYPE_PINNED_ITEM)) return
@@ -472,61 +471,6 @@ export function AppShell({
           hideBreadcrumb={isPreviewOpen}
           hideSidebarTrigger={!showSidebar}
         >
-          {/* ── Today sheet (slides in from left) ── */}
-          <Sheet
-            open={todaySheetOpen}
-            onOpenChange={open => {
-              if (!open) {
-                setSelectedTodayItem(null)
-                onTodaySheetClose?.()
-              }
-            }}
-          >
-            <SheetContent
-              side="left"
-              showCloseButton={false}
-              className="flex flex-row p-0 gap-0 sm:max-w-none overflow-hidden"
-              style={{
-                width: selectedTodayItem ? '75vw' : '560px',
-                transition: 'width 0.25s ease',
-              }}
-            >
-              <div className="relative flex flex-col shrink-0 overflow-hidden border-r" style={{ width: '560px' }}>
-                <TodayPanel
-                  onClose={() => { setSelectedTodayItem(null); onTodaySheetClose?.() }}
-                  onSelectItem={(item, focusInput) => {
-                    setFocusTodayInput(focusInput ?? false)
-                    setSelectedTodayItem(prev => prev?.id === item.id && !focusInput ? null : item)
-                  }}
-                  selectedItemId={selectedTodayItem?.id}
-                />
-              </div>
-
-              <div className="flex-1 min-w-0 relative overflow-hidden">
-                <AnimatePresence>
-                  {selectedTodayItem && (
-                    <TodayDetailPanel
-                      key={selectedTodayItem.id}
-                      item={selectedTodayItem}
-                      workspaceId={chats.find(c => c.id === selectedTodayItem.runId)?.workspaceId}
-                      focusInput={focusTodayInput}
-                      onFocusConsumed={() => setFocusTodayInput(false)}
-                      onClose={() => setSelectedTodayItem(null)}
-                      onOpenArtifact={(artifactId) => {
-                        const artifact = artifacts.find(a => a.id === artifactId)
-                        if (artifact) {
-                          onArtifactClick?.(artifact)
-                          setSelectedTodayItem(null)
-                          onTodaySheetClose?.()
-                        }
-                      }}
-                    />
-                  )}
-                </AnimatePresence>
-              </div>
-            </SheetContent>
-          </Sheet>
-
           {/* ── Sidebar + content (no card chrome — floats on the blob) ── */}
           <div className="flex flex-1 min-w-0 min-h-0 w-full max-w-full overflow-hidden">
             <RoomSidebarSlot show={showSidebar}>

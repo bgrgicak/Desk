@@ -79,10 +79,86 @@ export function createApp(opts: AppOptions): Server {
   const { pool, storage, runManager } = opts;
   const vault = opts.vault ?? new VaultStore(pathJoin(storage.home, "vaults"));
 
+  /**
+   * Central WS emitter. Two responsibilities beyond just forwarding to
+   * the broadcast registry, both of which exist so the SPA never has
+   * to derive `taskStatus` itself:
+   *
+   *   1. **Decorate task messages on the way out.** Every
+   *      `message.appended` / `message.updated` whose payload is a
+   *      `kind: 'task'` row is decorated with the canonical
+   *      `taskStatus` before broadcast. The original event is fanned
+   *      out the moment decoration resolves (fire-and-forget keeps
+   *      callers' control flow synchronous, the same as the old
+   *      emit).
+   *
+   *   2. **Cascade chat → task.** When a `chat.updated` fires, the
+   *      chat's `unread` and live `running` flags have likely changed
+   *      — both of which feed `computeTaskStatus`. Push a fresh
+   *      `message.updated` for every task anchored in that chat (or
+   *      whose thread chat *is* that chat) so the SPA's badges
+   *      repaint without a refetch.
+   *
+   *      Same cascade fires for `task_run` lifecycle events: a
+   *      running child flips the parent to Active. We re-broadcast
+   *      the affected parent task.
+   */
   function emitEvent(event: WsEvent): void {
-    if (opts.broadcastUserId) {
-      broadcast(opts.broadcastUserId, event);
+    const userId = opts.broadcastUserId;
+    if (!userId) return;
+
+    if (event.type === "message.appended" || event.type === "message.updated") {
+      const payload = event.payload;
+      if (payload.kind === "task") {
+        // Decorate then broadcast. Fire-and-forget so callers stay
+        // synchronous. On error, fall back to broadcasting the raw
+        // event so the SPA still moves — the badge will be wrong,
+        // not missing.
+        void queries.messages.decorateMessageWithTaskStatus(pool, payload).then(
+          (decorated) => broadcast(userId, { ...event, payload: decorated }),
+          (err: Error) => {
+            log.warn({ err: err.message }, "task-status decoration failed; broadcasting raw");
+            broadcast(userId, event);
+          },
+        );
+        return;
+      }
+      if (payload.kind === "task_run" && payload.parentId) {
+        // Broadcast the run event itself first, then chase the parent
+        // task whose status may have just flipped to / from Active.
+        broadcast(userId, event);
+        const parentId = payload.parentId;
+        void queries.messages.findById(pool, parentId).then(
+          (parent) => {
+            if (parent) broadcast(userId, { type: "message.updated", payload: parent });
+          },
+          (err: Error) => {
+            log.warn({ err: err.message }, "task_run parent lookup failed");
+          },
+        );
+        return;
+      }
+      broadcast(userId, event);
+      return;
     }
+
+    if (event.type === "chat.updated") {
+      const chatId = event.payload.id;
+      broadcast(userId, event);
+      void queries.messages.findTasksAffectedByChat(pool, chatId).then(
+        (tasks) => {
+          for (const task of tasks) {
+            broadcast(userId, { type: "message.updated", payload: task });
+          }
+        },
+        (err: Error) => {
+          log.warn({ err: err.message, chatId }, "task cascade lookup failed");
+        },
+      );
+      return;
+    }
+
+    broadcast(userId, event);
   }
 
   /**

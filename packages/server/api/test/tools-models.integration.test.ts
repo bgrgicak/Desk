@@ -1,10 +1,19 @@
 /**
  * End-to-end API test for GET /tools/models against a real sandbox.
- * Catches the kind of regression that only surfaces with real Docker + ESM +
- * real `opencode models` — e.g. CJS `require` calls leaking into ESM runtime.
+ * Catches regressions that only surface with real Docker + ESM + real
+ * `pi --list-models` — e.g. CJS `require` calls leaking into ESM runtime,
+ * argv plumbing, or ID-shape drift in pi's output parser.
  *
- * Gated on Docker availability so it runs in the VM but is skipped on hosts
- * without Docker.
+ * Originally asserted that the free `opencode/big-pickle` model was
+ * always present (no key required). That free tier is gone, so the
+ * spec now only asserts the **shape** of the endpoint — array of
+ * `{ id, provider }` items with the canonical `provider/model` id
+ * format. Provider-specific availability tests should pair with
+ * aimock + a provider-key fixture; see
+ * `packages/server/api/test/helpers/aimock.ts`.
+ *
+ * Gated on Docker availability so it runs in the VM but is skipped on
+ * hosts without Docker.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as http from "node:http";
@@ -99,8 +108,8 @@ afterAll(async () => {
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
 });
 
-describeIf("GET /tools/models (real Docker + opencode)", () => {
-  it("returns a bare array of { id, provider } including free opencode models", async () => {
+describeIf("GET /tools/models (real Docker + pi)", () => {
+  it("returns a bare array of { id, provider } items with canonical 'provider/model' ids", async () => {
     // Capture the seeded agent id so cleanup knows which container we might have created.
     const agentsRes = await httpJson("GET", "/agents", token);
     createdAgentId = (agentsRes.body as Array<{ id: string }>)[0].id;
@@ -109,22 +118,35 @@ describeIf("GET /tools/models (real Docker + opencode)", () => {
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
     const body = res.body as Array<{ id: string; provider: string }>;
-    expect(body.length).toBeGreaterThan(0);
-    // Free opencode models must always be present — no API key required.
-    expect(body.some((m) => m.provider === "opencode")).toBe(true);
+    // Every returned row must carry both fields and use the
+    // `<provider>/<model>` id shape — that's the contract the SPA's
+    // model-picker depends on regardless of which providers happen to
+    // be available. We deliberately do not assert any specific
+    // provider/model is present: the free opencode tier the test once
+    // relied on is gone, and asserting on "anthropic" or "openai"
+    // requires keys most CI runs won't have.
     for (const m of body) {
+      expect(typeof m.id).toBe("string");
+      expect(typeof m.provider).toBe("string");
       expect(m.id.startsWith(`${m.provider}/`)).toBe(true);
     }
   }, 90_000);
 
-  it("?provider=opencode returns only opencode models, including a free model", async () => {
-    const res = await httpJson("GET", "/tools/models?provider=opencode", token);
+  it("?provider=<x> filters the listing to that provider", async () => {
+    // Pick whatever provider the unfiltered listing surfaced (if any)
+    // so the test stays meaningful regardless of which providers are
+    // available in the runtime. If nothing's listed, the filter
+    // contract is trivially satisfied — there's nothing to filter.
+    const allRes = await httpJson("GET", "/tools/models", token);
+    const all = allRes.body as Array<{ id: string; provider: string }>;
+    if (all.length === 0) return;
+    const provider = all[0].provider;
+
+    const res = await httpJson("GET", `/tools/models?provider=${provider}`, token);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
     const body = res.body as Array<{ id: string; provider: string }>;
-    expect(body.length).toBeGreaterThan(0);
-    expect(body.every((m) => m.provider === "opencode")).toBe(true);
-    expect(body.some((m) => m.id === "opencode/big-pickle")).toBe(true);
+    expect(body.every((m) => m.provider === provider)).toBe(true);
   }, 60_000);
 });
 

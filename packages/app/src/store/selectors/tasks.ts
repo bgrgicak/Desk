@@ -1,5 +1,4 @@
 import type { Task, TaskOccurrence } from "@/data/ui-types";
-import { taskStatusFromTaskAndRuns } from "@/lib/task-status";
 import type { ServerAgent, ServerChat, ServerMessage, ServerWorkspace } from "../types";
 
 export function taskMessageKindsForDeveloperMode(_developerMode: boolean): Array<"task" | "summary"> {
@@ -78,16 +77,13 @@ function descriptionFor(m: ServerMessage): string | undefined {
   return description.length > 0 ? description : undefined;
 }
 
-function statusFor(
-  m: ServerMessage,
-  runs: ServerMessage[] = [],
-  chat?: ServerChat,
-): Task["status"] {
-  return taskStatusFromTaskAndRuns(
-    { state: m.state ?? "pending", executeAt: m.executeAt, cron: m.cron },
-    runs.map(run => ({ state: run.state })),
-    chat ? { unread: chat.unread, running: chat.running } : undefined,
-  );
+function statusFor(m: ServerMessage): Task["status"] {
+  // The server stamps `taskStatus` on every task message via
+  // `decorateMessagesWithTaskStatus`. That's the single source of truth;
+  // the client never re-derives status from raw state/cron/chat signals.
+  // The `'todo'` fallback only catches the impossible-in-practice case
+  // of a task row that bypassed the decorator.
+  return m.taskStatus ?? "todo";
 }
 
 function statusTextFor(
@@ -164,7 +160,7 @@ export function toUiTask(
   const chat = chats.find((c) => c.id === (m.threadChatId ?? m.chatId));
   const realStartedAt = m.startedAt ? new Date(m.startedAt) : undefined;
   const completedAt = m.endedAt ? new Date(m.endedAt) : undefined;
-  const status = statusFor(m, runs, chat);
+  const status = statusFor(m);
 
   const history: TaskOccurrence[] = [];
   for (const run of runs) {

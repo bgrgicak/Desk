@@ -210,6 +210,11 @@ export interface MessagesFilter {
   since?: string;
   limit?: number;
   cursor?: string;
+  /** Filter by the *computed* `taskStatus` (server-decorated). Lets Home
+   * ask for "everything that's needs_input/active/scheduled/complete"
+   * without re-deriving status client-side. OR semantics across the
+   * array. */
+  taskStatus?: ('todo' | 'active' | 'needs_input' | 'complete' | 'scheduled' | 'failed')[];
 }
 
 export type WsEvent =
