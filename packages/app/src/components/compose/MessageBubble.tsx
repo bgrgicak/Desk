@@ -5,6 +5,7 @@ import { cn } from '@roomy-ai/ui'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
 import { appAttachmentToPreview } from '@/components/context/AppPreview'
 import { getRelativeTime } from '@/data/ui-types'
+import { fileTypeLabel } from '@/data/file-kind'
 import { humanSize } from '@/store/selectors/library'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { InlineArtifactPreview, UnsupportedFileCard } from '@/components/shared/InlineArtifactPreview'
@@ -37,6 +38,12 @@ interface MessageBubbleProps {
    *  surfaces on the group's last message. Defaults to `true` so
    *  standalone usages keep their actions row. */
   isLastInGroup?: boolean
+  /** All messages belonging to this message's group, supplied only to
+   *  the group's last message (the one that renders the actions row).
+   *  The copy action aggregates over these so a grouped artifact card +
+   *  follow-up reply copies as one (text + a reference per artifact).
+   *  When absent the copy action falls back to this single message. */
+  groupMessages?: ServerMessage[]
   isNew?: boolean
   /** Agent name to display in the message header. */
   agentName?: string
@@ -60,6 +67,7 @@ export const MessageBubble = memo(function MessageBubble({
   workspacePath,
   isFirstInGroup = true,
   isLastInGroup = true,
+  groupMessages,
   isNew = false,
   agentName,
   onAttachmentClick,
@@ -133,7 +141,7 @@ export const MessageBubble = memo(function MessageBubble({
             <MarkdownContent text={message.content.text} workspacePath={workspacePath} workspaceId={workspaceId} />
           </div>
         )}
-        {isLastInGroup && <UserMessageActions message={message} timestamp={timestamp} />}
+        {isLastInGroup && <UserMessageActions messages={groupMessages ?? [message]} timestamp={timestamp} />}
       </div>
     )
   }
@@ -158,7 +166,13 @@ export const MessageBubble = memo(function MessageBubble({
       {hasAttachments && (
         <div className="flex w-full min-w-0 max-w-full flex-col items-start gap-1.5 overflow-hidden mb-1.5">
           {message.attachments!.map(att => (
-            <AttachmentCard key={att.path} attachment={att} workspaceId={workspaceId} chatId={message.chatId} />
+            <AttachmentCard
+              key={att.path}
+              attachment={att}
+              workspaceId={workspaceId}
+              chatId={message.chatId}
+              onClick={onAttachmentClick ? () => onAttachmentClick(att) : undefined}
+            />
           ))}
         </div>
       )}
@@ -174,15 +188,11 @@ export const MessageBubble = memo(function MessageBubble({
       {isLastInGroup && (
         // One row below the message holding the thread button (always
         // visible, left) and the hover-revealed actions (12 px gap to
-        // the right of the button). When there's no thread button the
-        // actions push to the right of the row so they still read as
-        // belonging to the message above.
-        <div
-          className={cn(
-            'mt-3 flex items-center gap-3',
-            !showThreadButton && 'justify-end',
-          )}
-        >
+        // the right of the button). The row is left-aligned in both
+        // cases: with a thread button the actions sit just to its
+        // right; without one they sit at the left edge under the
+        // message rather than being pushed to the far right gutter.
+        <div className="mt-3 flex items-center gap-3">
           {showThreadButton && (
             <MessageThreadButton
               threadChatId={message.threadChatId!}
@@ -190,6 +200,7 @@ export const MessageBubble = memo(function MessageBubble({
             />
           )}
           <AgentMessageActions
+            messages={groupMessages ?? [message]}
             message={message}
             workspaceId={workspaceId}
             timestamp={timestamp}
@@ -212,7 +223,12 @@ export const MessageBubble = memo(function MessageBubble({
 // messages that don't yet have a thread.
 
 interface AgentMessageActionsProps {
+  /** The message that owns this actions row (drives feedback +
+   *  threading targets). */
   message: ServerMessage
+  /** Every message in the group, copied together as one. Defaults to
+   *  just `message` for standalone (ungrouped) usages. */
+  messages: ServerMessage[]
   workspaceId?: string
   timestamp: Date
   /** Whether to surface the small inline reply/open-thread icon.
@@ -223,6 +239,7 @@ interface AgentMessageActionsProps {
 
 function AgentMessageActions({
   message,
+  messages,
   workspaceId,
   timestamp,
   showThread,
@@ -230,7 +247,7 @@ function AgentMessageActions({
   const [feedback, setFeedback] = useState<'up' | 'down' | null>(null)
   const [postFeedback] = usePostMessageFeedbackMutation()
 
-  const handleCopy = () => copyMessageToClipboard(message)
+  const handleCopy = () => copyMessagesToClipboard(messages, workspaceId)
 
   const handleFeedback = (kind: 'up' | 'down') => {
     if (feedback === kind) return
@@ -343,10 +360,10 @@ function ActionIconButton({
 // bubble (parent flex row handles the gap).
 
 function UserMessageActions({
-  message,
+  messages,
   timestamp,
 }: {
-  message: ServerMessage
+  messages: ServerMessage[]
   timestamp: Date
 }) {
   return (
@@ -358,7 +375,7 @@ function UserMessageActions({
       )}
     >
       <span className="text-xs text-muted-foreground mr-1">{getRelativeTime(timestamp)}</span>
-      <ActionIconButton title="Copy message" onClick={() => copyMessageToClipboard(message)}>
+      <ActionIconButton title="Copy message" onClick={() => copyMessagesToClipboard(messages)}>
         <Copy className="h-3.5 w-3.5" />
       </ActionIconButton>
     </div>
@@ -367,11 +384,13 @@ function UserMessageActions({
 
 // ── Shared copy helper ─────────────────────────────────────────────────────
 
-/** Copy the message's text content to the clipboard and surface a toast
- *  for confirmation / failure. Shared by both `AgentMessageActions` and
- *  `UserMessageActions` so the UX matches. */
-async function copyMessageToClipboard(message: ServerMessage): Promise<void> {
-  const text = copyMessageText(message)
+/** Copy a group of messages to the clipboard as one block and surface a
+ *  toast for confirmation / failure. Shared by both `AgentMessageActions`
+ *  and `UserMessageActions` so the UX matches. A single-message group is
+ *  the common case (one bubble); grouped agent turns (e.g. an artifact
+ *  card + a follow-up reply) copy together. */
+async function copyMessagesToClipboard(messages: ServerMessage[], workspaceId?: string): Promise<void> {
+  const text = copyTextForMessages(messages, workspaceId)
   if (!text) {
     toast.error('Nothing to copy from this message')
     return
@@ -384,6 +403,39 @@ async function copyMessageToClipboard(message: ServerMessage): Promise<void> {
       description: err instanceof Error ? err.message : undefined,
     })
   }
+}
+
+/** Build the copyable text for a message group: each message's text
+ *  joined by blank lines, with artifact references contributing a
+ *  markdown link to the artifact (a reference, not its contents).
+ *  Returns `null` when nothing copyable remains. */
+export function copyTextForMessages(messages: ServerMessage[], workspaceId?: string): string | null {
+  const parts: string[] = []
+  for (const message of messages) {
+    const text = copyMessageText(message)
+    if (text) {
+      parts.push(text)
+    } else if (message.content.type === 'artifactRef') {
+      parts.push(artifactReferenceLink(message.content, workspaceId))
+    }
+  }
+  const joined = parts.join('\n\n').trim()
+  return joined || null
+}
+
+/** A `[name](url)` markdown link for an artifact reference. Falls back
+ *  to the bare name when no href can be resolved (no workspace). The URL
+ *  is absolute when a window origin is available so it stays clickable
+ *  when pasted outside the app. */
+function artifactReferenceLink(
+  content: Extract<MessageContent, { type: 'artifactRef' }>,
+  workspaceId?: string,
+): string {
+  const label = content.name ?? basenamePath(content.path)
+  const href = artifactRefHref(content.workspaceId ?? workspaceId, content.path, content.mime, content.params)
+  if (!href) return label
+  const url = typeof window !== 'undefined' ? `${window.location.origin}${href}` : href
+  return `[${label}](${url})`
 }
 
 /** Extract a copyable text representation from a message. Returns
@@ -661,12 +713,15 @@ function AttachmentCard({
   const className =
     `inline-flex min-w-0 max-w-full items-center gap-2 ${attachmentAlignmentClass(align)} overflow-hidden rounded-lg border bg-background px-3 py-2 text-left text-xs align-top sm:max-w-[320px]`
   const Icon = attachment.kind === 'directory' ? Folder : Paperclip
-  // Subtext: byte count when known, falling back to the workspace path.
-  // Directories don't carry a useful size, so we keep the path there.
+  // Subtext: byte count when known. Otherwise describe the file by its
+  // type (App, Image, …) rather than exposing the raw — often
+  // chat-scoped, hidden — path. Plain directories read as "Folder".
   const subtext =
     attachment.kind !== 'directory' && typeof attachment.size === 'number'
       ? humanSize(attachment.size)
-      : attachment.path
+      : attachment.kind === 'directory' && !appPreview
+        ? 'Folder'
+        : fileTypeLabel(attachment.name, attachment.mime, !!appPreview)
   const inner = (
     <>
       <Icon className="h-3.5 w-3.5 text-muted-foreground/70 shrink-0" />
@@ -696,7 +751,7 @@ function AttachmentCard({
           fallback={href ? (
             <a
               href={href}
-              onClick={e => { if (plainLeftClick(e)) onClick?.() }}
+              onClick={e => { if (plainLeftClick(e) && onClick) { e.preventDefault(); onClick() } }}
               className={`${className} hover:bg-muted/40 transition-colors`}
             >
               {inner}

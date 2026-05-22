@@ -1,11 +1,17 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
+import { Provider } from 'react-redux'
 import { describe, expect, it } from 'vitest'
 import type React from 'react'
 import { EntityChip } from './EntityChip'
+import { store } from '@/store/store'
 
 function renderChip(element: React.ReactNode): string {
-  return renderToStaticMarkup(<MemoryRouter>{element}</MemoryRouter>)
+  return renderToStaticMarkup(
+    <Provider store={store}>
+      <MemoryRouter>{element}</MemoryRouter>
+    </Provider>,
+  )
 }
 
 describe('EntityChip', () => {

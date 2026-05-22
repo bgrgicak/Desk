@@ -40,7 +40,7 @@ export const WORKSPACE_TARGETS: SearchTarget[] = [
   { kind: 'page',     id: 'page:tasks',        label: 'Tasks',               icon: Zap,        view: 'tasks' },
   { kind: 'page',     id: 'page:library',      label: 'Library',             icon: FolderOpen, view: 'context', keywords: ['files', 'context'] },
   { kind: 'settings', id: 'set:connections',   label: 'Connections',         icon: Plug,       section: 'connections', keywords: ['api keys', 'integrations'] },
-  { kind: 'settings', id: 'set:workspace',     label: 'Workspace settings',  icon: Briefcase,  section: 'workspace' },
+  { kind: 'settings', id: 'set:workspace',     label: 'Room settings',       icon: Briefcase,  section: 'workspace' },
 ]
 
 /** Global / user-level destinations. */
@@ -48,7 +48,7 @@ export const SETTINGS_TARGETS: SearchTarget[] = [
   { kind: 'page',     id: 'page:your-day',     label: 'Your day',            icon: Sun,      goHome: true,        keywords: ['today', 'home', 'inbox'] },
   { kind: 'page',     id: 'page:account',      label: 'My account',          icon: User,     openMyAccount: true, keywords: ['profile', 'me', 'user settings'] },
   { kind: 'settings', id: 'set:models',        label: 'Models',              icon: Bot,      section: 'models', keywords: ['ai', 'bot', 'assistant', 'fallbacks', 'api keys', 'providers'] },
-  { kind: 'settings', id: 'set:customize',     label: 'Customize',           icon: Sliders,  section: 'workspace', keywords: ['preferences', 'theme', 'timezone', 'workspace settings'] },
+  { kind: 'settings', id: 'set:customize',     label: 'Customize',           icon: Sliders,  section: 'workspace', keywords: ['preferences', 'theme', 'timezone', 'room settings'] },
 ]
 
 function matches(target: SearchTarget, q: string): boolean {

@@ -1,6 +1,7 @@
 import { configureStore } from '@reduxjs/toolkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, buildChatMessagesQuery, buildMessagesQuery, shouldForceRefetchChatMessages } from './api'
+import type { ServerFile } from './types'
 
 describe('message query builders', () => {
   it('requests full chat payloads when developer mode is enabled', () => {
@@ -80,5 +81,82 @@ describe('postChatMessage cache activity', () => {
     const entry = api.endpoints.getChats.select({ workspaceId: 'wks_1' })(store.getState())
     expect(entry.data?.map((chat) => chat.id)).toEqual(['cht_buried', 'cht_top'])
     expect(Date.parse(entry.data?.[0]?.updatedAt ?? '')).toBeGreaterThan(Date.parse('2099-01-01T00:00:00.000Z'))
+  })
+})
+
+describe('deleteChatAttachment optimistic removal', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  const file = (name: string): ServerFile => ({
+    path: `.chats/cht_1/attachments/${name}`,
+    name,
+    mime: 'text/plain',
+    size: 10,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    kind: 'attachment',
+  })
+
+  function makeStore() {
+    return configureStore({
+      reducer: { [api.reducerPath]: api.reducer },
+      middleware: (getDefault) => getDefault().concat(api.middleware),
+    })
+  }
+
+  function stubAbsoluteRequest() {
+    const NativeRequest = globalThis.Request
+    class AbsoluteRequest extends NativeRequest {
+      constructor(input: RequestInfo | URL, init?: RequestInit) {
+        super(typeof input === 'string' && input.startsWith('/') ? `http://localhost${input}` : input, init)
+      }
+    }
+    vi.stubGlobal('Request', AbsoluteRequest)
+  }
+
+  const cachedNames = (store: ReturnType<typeof makeStore>) =>
+    api.endpoints.getChatArtifacts
+      .select({ chatId: 'cht_1', includeArtifacts: true })(store.getState())
+      .data?.map((f) => f.name)
+      .sort()
+
+  it('drops the file from the cached Files list immediately on delete', async () => {
+    const store = makeStore()
+    await store.dispatch(api.util.upsertQueryData('getChatArtifacts', { chatId: 'cht_1', includeArtifacts: true }, [file('keep.txt'), file('remove.txt')]))
+    stubAbsoluteRequest()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    // The optimistic patch in onQueryStarted runs synchronously as the
+    // mutation dispatches — assert before awaiting (the unsubscribed
+    // cache entry is dropped by the post-success tag invalidation).
+    const promise = store.dispatch(api.endpoints.deleteChatAttachment.initiate({ chatId: 'cht_1', name: 'remove.txt' }))
+    expect(cachedNames(store)).toEqual(['keep.txt'])
+    await promise
+  })
+
+  it('restores the file when the server rejects the delete', async () => {
+    const store = makeStore()
+    stubAbsoluteRequest()
+    // Hold an active subscription so the cache entry survives the
+    // mutation lifecycle; the GET returns the seeded list, the DELETE 500s.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if ((input as Request).method === 'DELETE') return new Response('nope', { status: 500 })
+      return new Response(JSON.stringify([file('keep.txt'), file('remove.txt')]), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+    const sub = store.dispatch(api.endpoints.getChatArtifacts.initiate({ chatId: 'cht_1', includeArtifacts: true }))
+    await sub
+    expect(cachedNames(store)).toEqual(['keep.txt', 'remove.txt'])
+
+    const promise = store.dispatch(api.endpoints.deleteChatAttachment.initiate({ chatId: 'cht_1', name: 'remove.txt' }))
+    expect(cachedNames(store)).toEqual(['keep.txt']) // optimistically removed
+    await promise
+    // Let onQueryStarted's rejection handler run its rollback (no
+    // invalidation fires on failure, so the entry is restored, not refetched).
+    await new Promise((r) => setTimeout(r, 0))
+    expect(cachedNames(store)).toEqual(['keep.txt', 'remove.txt'])
+
+    sub.unsubscribe()
   })
 })

@@ -61,12 +61,7 @@ test("search palette returns server results", async ({
   await loggedInPage.keyboard.press("ControlOrMeta+k");
 
   // Type enough to trigger the server query.
-  await loggedInPage.getByPlaceholder(/Ask a question or search/).fill("searchableMoose");
-
-  // Ask AI remains visible even while async search results are loading.
-  await expect(
-    loggedInPage.getByRole("option", { name: /Ask AI.*searchableMoose/i }),
-  ).toBeVisible();
+  await loggedInPage.getByPlaceholder(/Search across all your rooms/).fill("searchableMoose");
 
   await expect(
     loggedInPage.getByRole("option", { name: /searchableMoose/i }).first(),

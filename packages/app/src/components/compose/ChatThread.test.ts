@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { isDeveloperOnlyMessageVisible, isMessageVisible, isRegularMessageVisible } from './messageVisibility'
-import { currentChatMessagesData, failureDetailForAgentTurn, findActiveAgentTurn, findFailedAgentTurn, findFailedOrDiagnosticAgentTurn, isFailedRunDiagnosticMessage, liveAssistantTextMessage, liveDeveloperProgressMessage, progressTextFromLog, shouldShowNewAssistantBadge, shouldShowToolOnlyRunFallback } from './ChatThread'
+import { currentChatMessagesData, failureDetailForAgentTurn, findActiveAgentTurn, findFailedAgentTurn, findFailedOrDiagnosticAgentTurn, isFailedRunDiagnosticMessage, liveAssistantTextMessage, liveDeveloperProgressMessage, progressTextFromLog, sameMessageGroup, shouldShowNewAssistantBadge, shouldShowToolOnlyRunFallback } from './ChatThread'
 import type { ListMessagesResponse, ServerMessage } from '@/store/types'
 
 function message(content: ServerMessage['content'], overrides: Partial<ServerMessage> = {}): ServerMessage {
@@ -664,5 +664,28 @@ describe('shouldShowToolOnlyRunFallback', () => {
     ]
 
     expect(shouldShowToolOnlyRunFallback(items, false)).toBe(false)
+  })
+})
+
+describe('sameMessageGroup', () => {
+  const at = (iso: string, overrides: Partial<ServerMessage> = {}) =>
+    message({ type: 'text', text: 'x' }, { role: 'agent', createdAt: iso, ...overrides })
+
+  it('groups same-role messages within the 3s window', () => {
+    expect(sameMessageGroup(at('2026-05-22T10:00:00.000Z'), at('2026-05-22T10:00:02.500Z'))).toBe(true)
+  })
+
+  it('does not group messages more than 3s apart', () => {
+    expect(sameMessageGroup(at('2026-05-22T10:00:00.000Z'), at('2026-05-22T10:00:03.001Z'))).toBe(false)
+  })
+
+  it('never groups messages from different roles', () => {
+    const user = at('2026-05-22T10:00:00.000Z', { role: 'user' })
+    const agent = at('2026-05-22T10:00:00.500Z', { role: 'agent' })
+    expect(sameMessageGroup(user, agent)).toBe(false)
+  })
+
+  it('treats a missing neighbour as a group boundary', () => {
+    expect(sameMessageGroup(undefined, at('2026-05-22T10:00:00.000Z'))).toBe(false)
   })
 })

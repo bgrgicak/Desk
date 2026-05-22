@@ -260,7 +260,7 @@ export const TaskCard = memo(function TaskCard({
           data-testid={`task-replies-${task.id}`}
         >
           <MessageSquare className="h-4 w-4" />
-          {repliesCount > 0 ? `${repliesCount} replies` : 'Replies'}
+          {repliesCount > 0 ? `Chat (${repliesCount})` : 'Chat'}
         </Button>
 
         {/* Mark as done split button */}

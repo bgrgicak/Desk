@@ -1044,6 +1044,11 @@ export function ContextList({ onItemClick, onCompose, onPinItem, onUnpinItem, on
                   isPinned={item.pinned}
                   onPin={onPinItem ? () => onPinItem(item) : undefined}
                   onUnpin={onUnpinItem ? () => onUnpinItem(item) : undefined}
+                  homePin={
+                    activeWorkspaceId
+                      ? { kind: item.type === 'app' ? 'artifact' : 'file', id: item.id, workspaceId: activeWorkspaceId, label: item.name }
+                      : undefined
+                  }
                   isDraggable={!!onPinItem}
                 />
               ))}
@@ -1175,6 +1180,11 @@ export function ContextList({ onItemClick, onCompose, onPinItem, onUnpinItem, on
                 isPinned={item.pinned}
                 onPin={onPinItem ? () => onPinItem(item) : undefined}
                 onUnpin={onUnpinItem ? () => onUnpinItem(item) : undefined}
+                homePin={
+                  activeWorkspaceId
+                    ? { kind: item.type === 'app' ? 'artifact' : 'file', id: item.id, workspaceId: activeWorkspaceId, label: item.name }
+                    : undefined
+                }
                 isDraggable={!!onPinItem}
               />
             ))}
