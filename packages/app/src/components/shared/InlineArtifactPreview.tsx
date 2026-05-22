@@ -590,17 +590,23 @@ export function UnsupportedFileCard({
       onClick={onPreview}
       onKeyDown={handleKeyDown}
       className={cn(
-        'group w-full min-w-0 max-w-full mt-3 mb-5 cursor-pointer',
+        'group relative w-full min-w-0 max-w-full mt-3 mb-5 cursor-pointer',
         'rounded-xl border transition-colors',
         'flex items-center gap-3 px-4 py-3',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        // Hover state — `:before` overlay layered ABOVE bg-background
+        // and BELOW the card's children (made `relative` via `[&>*]`
+        // so their stacking context paints on top). Replacing
+        // `bg-background` on hover instead let the blob backdrop show
+        // through, which read as the card going darker.
+        '[&>*]:relative before:pointer-events-none before:absolute before:inset-0 before:rounded-xl before:bg-foreground/[0.03] before:opacity-0 before:transition-opacity hover:before:opacity-100',
         // Active state uses a clean `bg-background` (lighter than the
         // previous `foreground/[0.04]` tint, which blended into the
         // blob backdrop) plus a darker border + subtle shadow so the
         // card reads as a separate surface even on coloured patches.
         isActive
           ? 'border-foreground/40 bg-secondary shadow-sm'
-          : 'border-foreground/10 bg-background hover:bg-foreground/[0.02]',
+          : 'border-foreground/10 bg-background',
       )}
       data-testid="artifact-inline-fallback"
       aria-pressed={isActive}

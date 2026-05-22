@@ -6,6 +6,7 @@ import {
   ChevronDown,
   Play,
   Pause,
+  RotateCcw,
   Trash2,
   CalendarClock,
 } from 'lucide-react'
@@ -92,6 +93,9 @@ export interface TaskCardProps {
   onRunNow?: () => void
   onPause?: () => void
   onDelete?: () => void
+  /** Reopen a completed task — moves it back to "todo". When omitted,
+   *  the menu hides the entry. */
+  onReopen?: () => void
   /** Edit the task's schedule (executeAt + cron). Receives the new
    *  value, or `null` to clear the schedule entirely. */
   onSchedule?: (next: SchedulePickerValue | null) => void
@@ -119,6 +123,7 @@ export const TaskCard = memo(function TaskCard({
   onRunNow,
   onPause,
   onDelete,
+  onReopen,
   onSchedule,
   className,
 }: TaskCardProps) {
@@ -163,7 +168,7 @@ export const TaskCard = memo(function TaskCard({
   const showNextRun = !!nextRunText && !isRunning
   const nextRunProgress = showNextRun ? nextRunProgressFor(task) : 0
 
-  const hasMenu = !!(onRunNow || onPause || onDelete || onSchedule)
+  const hasMenu = !!(onRunNow || onPause || onDelete || onSchedule || onReopen)
   // Don't let footer controls trigger the card-level open. The card is
   // an `<a>` (react-router Link), so we also preventDefault to stop the
   // anchor's native navigation — stopPropagation alone leaves the
@@ -296,6 +301,15 @@ export const TaskCard = memo(function TaskCard({
                   className="w-44"
                   onClick={(e) => e.stopPropagation()}
                 >
+                  {onReopen && (
+                    <DropdownMenuItem
+                      onClick={stop(onReopen)}
+                      data-testid={`task-reopen-${task.id}`}
+                    >
+                      <RotateCcw className="h-4 w-4 mr-2" />
+                      Reopen
+                    </DropdownMenuItem>
+                  )}
                   {onRunNow && (
                     <DropdownMenuItem onClick={stop(onRunNow)}>
                       <Play className="h-4 w-4 mr-2" />

@@ -18,14 +18,14 @@ async function deleteAgentByName(serverUrl: string, token: string, name: string)
 }
 
 async function openModelsTab(page: import("@playwright/test").Page) {
-  await page.getByRole("button", { name: /Settings/ }).click();
+  await page.getByRole("button", { name: /Customize/ }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Models$/i }).click();
   return dialog;
 }
 
 async function openGitHubConnection(page: import("@playwright/test").Page) {
-  await page.getByRole("button", { name: /Settings/ }).click();
+  await page.getByRole("button", { name: /Customize/ }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Connections$/i }).click();
   await dialog.getByRole("button", { name: "Add", exact: true }).click();

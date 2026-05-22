@@ -19,6 +19,10 @@ interface RowKebabProps {
   contentClassName?: string
   /** Tooltip / SR label for the trigger. */
   label?: string
+  /** Force the trigger to stay visible regardless of row hover. Use
+   *  when the row is in a sticky-open state (e.g. an expanded thread
+   *  tree) so the user can still reach the menu without re-hovering. */
+  forceVisible?: boolean
 }
 
 /**
@@ -39,13 +43,16 @@ export function RowKebab({
   side,
   contentClassName,
   label = 'Options',
+  forceVisible = false,
 }: RowKebabProps) {
   return (
     <div
       className={cn(
         'absolute right-2 top-1/2 -translate-y-1/2',
-        'opacity-0 transition-opacity',
-        'group-hover/row:opacity-100 group-hover/menu-item:opacity-100',
+        'transition-opacity',
+        forceVisible
+          ? 'opacity-100'
+          : 'opacity-0 group-hover/row:opacity-100 group-hover/menu-item:opacity-100',
         'focus-within:opacity-100',
       )}
     >

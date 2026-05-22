@@ -657,6 +657,16 @@ export function ContextDetail({ item, onBack, onCompose, onRenameItem, isPinned,
                     onMove={() =>
                       setMoveTargets([{ path: item.id, name: item.name, kind: 'item' }])
                     }
+                    homePin={
+                      activeWorkspaceId
+                        ? {
+                            kind: item.type === 'app' ? 'artifact' : 'file',
+                            id: item.id,
+                            workspaceId: activeWorkspaceId,
+                            label: item.name,
+                          }
+                        : undefined
+                    }
                     onDelete={() => setDeleteDialogOpen(true)}
                   />
                 </DropdownMenuContent>

@@ -107,7 +107,7 @@ export function WorkspaceForm({
 
   return (
     <div className="flex-1 flex w-full min-w-0 max-w-full flex-col min-h-0 overflow-hidden">
-      <div ref={scrollRef} className="flex-1 min-w-0 max-w-full overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4">
+      <div ref={scrollRef} className="flex-1 min-w-0 max-w-full overflow-y-auto overflow-x-hidden px-4 pt-2 pb-4">
         <div className="flex min-w-0 max-w-full flex-col gap-4 sm:flex-row sm:gap-6">
           {/* Left: room avatar */}
           <div className="flex shrink-0 flex-col items-center gap-2">

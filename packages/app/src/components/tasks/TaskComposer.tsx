@@ -17,6 +17,10 @@ export interface TaskComposerSubmit {
 interface TaskComposerProps {
   onSubmit: (input: TaskComposerSubmit) => void
   disabled?: boolean
+  /** Focus the textarea on mount — used when we navigate into Tasks
+   *  with the intent of immediately composing (e.g. from Home's
+   *  empty-section "Create new task" dropdown). */
+  autoFocus?: boolean
 }
 
 /** First line, capped — used as the chat/task title. */
@@ -35,7 +39,7 @@ function deriveTitle(text: string): string {
  * payload up — the task is created in the idle **To do** state (or
  * **Scheduled** when a Schedule was set), never auto-run.
  */
-export function TaskComposer({ onSubmit, disabled }: TaskComposerProps) {
+export function TaskComposer({ onSubmit, disabled, autoFocus }: TaskComposerProps) {
   const handleSend = (
     message: string,
     uploads: UploadedFile[],
@@ -74,6 +78,7 @@ export function TaskComposer({ onSubmit, disabled }: TaskComposerProps) {
       placeholder="What do you want to achieve?"
       draftKey="tasks:new-task"
       disabled={disabled}
+      autoFocus={autoFocus}
       onSend={handleSend}
     />
   );

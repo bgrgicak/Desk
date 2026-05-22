@@ -12,7 +12,7 @@ test("preferences toggle persists across reload", async ({ loggedInPage }) => {
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
 
   // Open Customize → Preferences.
-  await loggedInPage.getByRole("button", { name: /Settings/ }).click();
+  await loggedInPage.getByRole("button", { name: /Customize/ }).click();
   let dialog = loggedInPage.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Preferences$/ }).click();
 
@@ -25,7 +25,7 @@ test("preferences toggle persists across reload", async ({ loggedInPage }) => {
   // Reload, re-open Customize → Preferences. The value must stick.
   await loggedInPage.reload();
   await expect(loggedInPage.getByTestId("account-avatar")).toBeVisible();
-  await loggedInPage.getByRole("button", { name: /Settings/ }).click();
+  await loggedInPage.getByRole("button", { name: /Customize/ }).click();
   dialog = loggedInPage.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Preferences$/ }).click();
 

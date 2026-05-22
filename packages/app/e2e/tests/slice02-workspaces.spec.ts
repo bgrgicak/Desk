@@ -37,7 +37,7 @@ test("editing workspace name + description + color from the Settings modal persi
   await expect(loggedInPage.getByRole("link", { name: /Desk/ }).first()).toBeVisible();
 
   // Open the settings modal.
-  await loggedInPage.getByRole("button", { name: /Settings/ }).click();
+  await loggedInPage.getByRole("button", { name: /Customize/ }).click();
 
   // The Workspace section is active by default — it shows the name + description
   // inputs and the accent palette (emoji picker was removed in the redesign).
