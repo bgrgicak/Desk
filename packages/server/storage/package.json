@@ -1,6 +1,6 @@
 {
   "name": "@roomy-ai/storage",
-  "version": "0.1.0-alpha.4",
+  "version": "0.1.0-alpha.5",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
@@ -32,8 +32,8 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@roomy-ai/shared": ">=0.1.0-0",
-    "@roomy-ai/db": ">=0.1.0-0",
+    "@roomy-ai/shared": "0.1.0-alpha.5",
+    "@roomy-ai/db": "0.1.0-alpha.5",
     "ignore": "^7.0.0"
   },
   "devDependencies": {
