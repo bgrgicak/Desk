@@ -11,7 +11,7 @@
  *
  * Event flow:
  *   1. `execRun` ensures the container is up and pre-creates per-run
- *      mounts (handled upstream by `opencode.ts`).
+ *      mounts (handled upstream by `execRun.ts`).
  *   2. Spawns pi via `docker exec`, with the chat session id, provider,
  *      model, and a single text prompt (prompt + attachment references).
  *   3. Pi emits JSON events line-by-line on stdout; the driver translates
@@ -54,11 +54,8 @@ export interface RunOptions {
    * Pi session id for the chat. Threaded in so the runtime stays
    * DB-agnostic; when undefined the driver derives one from `chatId`
    * (chat-scoped runs) or generates a UUID (ad-hoc runs).
-   *
-   * The field name is kept as `opencodeSessionId` for back-compat with
-   * the chat row column; semantics are now "the pi session id we passed".
    */
-  opencodeSessionId?: string | null;
+  piSessionId?: string | null;
   /**
    * Called once per stdout/stderr/event log line. May be sync or async —
    * the driver tracks any returned promise and awaits all of them before
@@ -108,7 +105,7 @@ export interface ExecResult {
    * onto the chat row so subsequent turns reuse the same pi session.
    * Always populated unless the run failed before pi was invoked.
    */
-  opencodeSessionId?: string;
+  piSessionId?: string;
   /** Runtime model id that handled the successful attempt, or the last failed attempt. */
   model?: string;
 }
@@ -154,7 +151,7 @@ function createFakeDriver(): SandboxDriver {
 
       return {
         exitCode: 0,
-        opencodeSessionId: opts.opencodeSessionId ?? `fake_session_${runId}`,
+        piSessionId: opts.piSessionId ?? `fake_session_${runId}`,
         model: opts.model,
       };
     },
@@ -213,7 +210,7 @@ export function piModelReference(model: string): string {
 /**
  * Builds the single prompt string pi receives for a turn. Folds attachment
  * references in as additional sentences so the agent knows what files to
- * read; pi has no separate "parts" concept like opencode did.
+ * read; pi has no separate "parts" concept, so everything goes inline.
  */
 export function buildPiPrompt(opts: { prompt: string; attachments?: string[] }): string {
   if (!opts.attachments || opts.attachments.length === 0) return opts.prompt;
@@ -314,7 +311,7 @@ function createRealDriver(): SandboxDriver {
 
       const handle = await acquireReadyHandle();
 
-      const sessionId = opts.opencodeSessionId ?? opts.chatId ?? randomUUID();
+      const sessionId = opts.piSessionId ?? opts.chatId ?? randomUUID();
 
       let seq = 0;
       const pendingLogs: Promise<unknown>[] = [];
@@ -370,7 +367,7 @@ function createRealDriver(): SandboxDriver {
           const handledModel = result.model ?? attemptModel;
           lastResult = {
             exitCode,
-            opencodeSessionId: sessionId,
+            piSessionId: sessionId,
             model: handledModel,
           };
 
@@ -389,7 +386,7 @@ function createRealDriver(): SandboxDriver {
         }
 
         await Promise.all(pendingLogs);
-        return lastResult ?? { exitCode: 1, opencodeSessionId: sessionId };
+        return lastResult ?? { exitCode: 1, piSessionId: sessionId };
       } finally {
         activeRuns.delete(opts.runId);
         if (opts.sandboxToken) {
@@ -435,9 +432,8 @@ export function sandboxTokenPath(runId: string): string {
 
 /**
  * Match the failures that mean "this attempt needs a fresh container,
- * not retry on the existing one". Same surface as the old opencode
- * recovery — the underlying container engine produces the same strings
- * regardless of which agent runtime we use.
+ * not retry on the existing one". The underlying container engine
+ * produces the same strings regardless of which agent runtime we use.
  */
 export function isContainerGoneError(message: string): boolean {
   return (

@@ -14,8 +14,8 @@ describe('displayBasename', () => {
   })
 
   it('returns the folder name for paths with a trailing slash', () => {
-    expect(displayBasename('~/Desk/desk-dev/Desk/.claude/worktrees/opencode-serve-per-sandbox/')).toBe(
-      'opencode-serve-per-sandbox',
+    expect(displayBasename('~/Desk/desk-dev/Desk/.claude/worktrees/some-branch/')).toBe(
+      'some-branch',
     )
   })
 

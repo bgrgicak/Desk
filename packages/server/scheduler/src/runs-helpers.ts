@@ -75,7 +75,7 @@ export function resolveModelForRun(
   reason: ModelResolutionReason;
 } {
   const hasOpenAiKey = isNonEmpty(providerKeys.OPENAI_API_KEY);
-  const oauthAvailable = isNonEmpty(extraEnv?.OPENCODE_AUTH_CONTENT);
+  const oauthAvailable = isNonEmpty(extraEnv?.PI_AUTH_JSON_BASE64);
 
   if (model.startsWith("codex/")) {
     const suffix = model.slice("codex/".length);
@@ -187,7 +187,7 @@ export function deriveTextFromLog(entries: AgentLogEntry[]): string {
 /**
  * Summaries should be a clean final markdown body. If the model used tools, keep
  * the final text part instead of concatenating planning chatter with the final
- * answer. Current opencode streams that final part as many text deltas, so
+ * answer. Current pi streams that final part as many text deltas, so
  * reconstruct chunks that share a part/message id.
  */
 export function deriveSummaryTextFromLog(entries: AgentLogEntry[]): string {

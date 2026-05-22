@@ -135,7 +135,7 @@ export function createSummaryScheduler(deps: SummarySchedulerDeps): SummarySched
       }
     }
 
-    // Conservative fallback for unknown/local models when OpenCode metadata is
+    // Conservative fallback for unknown/local models when pi metadata is
     // unavailable: enough room for a useful transcript, much lower than old 60K.
     return { contextWindow: 60_000 };
   }

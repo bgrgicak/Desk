@@ -153,7 +153,7 @@ describe("isContainerGoneError", () => {
   });
 
   it("matches the ensure-timeout marker so the driver retries on a wedged docker socket", () => {
-    expect(isContainerGoneError("opencode-serve: ensure timed out after 30000ms (container abc)")).toBe(true);
+    expect(isContainerGoneError("pi: ensure timed out after 30000ms (container abc)")).toBe(true);
   });
 
   it("returns false for ordinary failures", () => {

@@ -1,12 +1,11 @@
 /**
  * Boots a per-test aimock HTTP server so integration tests that need an
  * actual model response can hit a deterministic, zero-cost mock instead
- * of the real Anthropic / OpenAI API. Replaces the role
- * `opencode/big-pickle` used to play — the free model is gone, but the
- * test policy ("no fakes as the only coverage of any surface") still
- * holds. Tests that want real-stack coverage should record a fixture
- * once against a paid key (locally, by a developer) and replay it
- * against this server in CI.
+ * of the real Anthropic / OpenAI API. Replaces the free-tier model we
+ * used to rely on (no longer available), while keeping the test policy
+ * ("no fakes as the only coverage of any surface"). Tests that want
+ * real-stack coverage should record a fixture once against a paid key
+ * (locally, by a developer) and replay it against this server in CI.
  *
  * # Usage
  *

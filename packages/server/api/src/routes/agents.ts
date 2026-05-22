@@ -36,7 +36,7 @@ export interface PatchAgentResult {
   /**
    * True when `data.model` was provided and differs from the stored value.
    * The route handler uses this to decide whether to restart the per-
-   * workspace opencode-serve daemons: opencode-serve caches each agent
+   * workspace pi runtimes: pi caches each agent
    * file's `model:` field at startup, so a Desk-side model change does
    * NOT propagate to a running daemon until it's restarted, even though
    * we rewrite the agent file each turn. Clearing sessions alone is not
@@ -75,18 +75,18 @@ export async function patchAgent(
 
   const modelChanged = data.model !== undefined && !!before && before.model !== data.model;
 
-  // Switching the agent's model invalidates every opencode-serve session
+  // Switching the agent's model invalidates every pi session
   // bound to this agent: the daemon binds providerID/modelID to the
   // session at creation time and ignores per-message overrides, so
   // existing chats keep using the old model until their session is
   // recreated. Forget the session ids here so the next turn in those
   // chats creates a fresh session bound to the new model.
   if (modelChanged) {
-    const cleared = await queries.chats.clearOpencodeSessionsForAgent(pool, id);
+    const cleared = await queries.chats.clearPiSessionsForAgent(pool, id);
     if (cleared.length > 0) {
       log.info(
         `agent ${id} model changed (${before!.model} → ${data.model}); ` +
-        `cleared opencode session id from ${cleared.length} chat(s)`,
+        `cleared pi session id from ${cleared.length} chat(s)`,
       );
     }
   }

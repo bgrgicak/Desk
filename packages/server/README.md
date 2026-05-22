@@ -55,7 +55,7 @@ nerdctl build -f packages/server/runtime/Dockerfile.sandbox \
 - [api/](api/) — HTTP + WS server (entry: [api/src/main.ts](api/src/main.ts))
 - [db/](db/) — SQLite migrations + typed queries
 - [storage/](storage/) — file layout under `~/Desk/`
-- [runtime/](runtime/) — sandbox lifecycle (engine.ts → docker/nerdctl) + OpenCode driver
+- [runtime/](runtime/) — sandbox lifecycle (engine.ts → docker/nerdctl) +, pi-driven
 - [scheduler/](scheduler/) — runs + at/crontab adapter + reconcile
 - [sandbox-cli/](sandbox-cli/) — the `desk-agent` binary installed inside sandboxes
 - [shared/](shared/) — cross-package types + Zod schemas

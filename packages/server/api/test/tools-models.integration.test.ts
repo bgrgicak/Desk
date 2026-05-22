@@ -4,7 +4,7 @@
  * `pi --list-models` — e.g. CJS `require` calls leaking into ESM runtime,
  * argv plumbing, or ID-shape drift in pi's output parser.
  *
- * Originally asserted that the free `opencode/big-pickle` model was
+ * Originally asserted that the free `anthropic/claude-haiku-4-5` model was
  * always present (no key required). That free tier is gone, so the
  * spec now only asserts the **shape** of the endpoint — array of
  * `{ id, provider }` items with the canonical `provider/model` id
@@ -122,7 +122,7 @@ describeIf("GET /tools/models (real Docker + pi)", () => {
     // `<provider>/<model>` id shape — that's the contract the SPA's
     // model-picker depends on regardless of which providers happen to
     // be available. We deliberately do not assert any specific
-    // provider/model is present: the free opencode tier the test once
+    // provider/model is present: the free model tier the test once
     // relied on is gone, and asserting on "anthropic" or "openai"
     // requires keys most CI runs won't have.
     for (const m of body) {

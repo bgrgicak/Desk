@@ -52,7 +52,7 @@ beforeAll(async () => {
   agentId = generateId("agent");
   await pool.query(
     `INSERT INTO agents (id, user_id, name, model)
-     VALUES (?, ?, ?, 'opencode/big-pickle')`,
+     VALUES (?, ?, ?, 'anthropic/claude-haiku-4-5')`,
     [agentId, userId, "Reflector"],
   );
 
@@ -129,7 +129,7 @@ describe("runWorkspaceReflection", () => {
       workspaceName: "WS A",
       userId,
       userName: "reflector",
-      agent: { id: agentId, name: "Reflector", model: "opencode/big-pickle" },
+      agent: { id: agentId, name: "Reflector", model: "anthropic/claude-haiku-4-5" },
       reflectWorkspace,
     });
 
@@ -202,7 +202,7 @@ describe("runWorkspaceReflection", () => {
       workspaceName: "WS A",
       userId,
       userName: "reflector",
-      agent: { id: agentId, name: "Reflector", model: "opencode/big-pickle" },
+      agent: { id: agentId, name: "Reflector", model: "anthropic/claude-haiku-4-5" },
       reflectWorkspace,
     });
   });
@@ -266,7 +266,7 @@ describe("runWorkspaceReflection", () => {
         workspaceName: "WS Feedback",
         userId,
         userName: "reflector",
-        agent: { id: agentId, name: "Reflector", model: "opencode/big-pickle" },
+        agent: { id: agentId, name: "Reflector", model: "anthropic/claude-haiku-4-5" },
         reflectWorkspace,
       });
 
@@ -299,7 +299,7 @@ describe("runWorkspaceReflection", () => {
       workspaceName: "WS B",
       userId,
       userName: "reflector",
-      agent: { id: agentId, name: "Reflector", model: "opencode/big-pickle" },
+      agent: { id: agentId, name: "Reflector", model: "anthropic/claude-haiku-4-5" },
       reflectWorkspace,
     });
     expect(body).toBeNull();
@@ -350,7 +350,7 @@ describe("runWorkspaceReflection", () => {
         workspaceName: "WS A",
         userId,
         userName: "reflector",
-        agent: { id: agentId, name: "Reflector", model: "opencode/big-pickle" },
+        agent: { id: agentId, name: "Reflector", model: "anthropic/claude-haiku-4-5" },
         reflectWorkspace: async () => ({
           journal: `# Journal — iteration ${i}\n`.padEnd(2048, "x"),
           memoryEdits: [
@@ -419,7 +419,7 @@ describe("runWorkspaceReflection", () => {
       userName: "reflector",
       agent: { id: agentId, name: "Reflector", model: "codex/gpt-5.5" },
       providerKeys: { OPENAI_API_KEY: "sk-key" },
-      extraEnv: { OPENCODE_AUTH_CONTENT: JSON.stringify({ openai: { type: "oauth" } }) },
+      extraEnv: { PI_AUTH_JSON_BASE64: "eyJvcGVuYWktY29kZXgiOnsidHlwZSI6Im9hdXRoIn19" },
       reflectWorkspace,
     });
     expect(captured).not.toBeNull();
@@ -445,7 +445,7 @@ describe("runWorkspaceReflection", () => {
       workspaceName: "WS A",
       userId,
       userName: "reflector",
-      agent: { id: agentId, name: "Reflector", model: "opencode/big-pickle" },
+      agent: { id: agentId, name: "Reflector", model: "anthropic/claude-haiku-4-5" },
       reflectWorkspace,
     });
 

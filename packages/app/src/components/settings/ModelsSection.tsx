@@ -90,19 +90,12 @@ type ModelProviderOption = {
 }
 
 const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
-  opencode: 'opencode/big-pickle',
   codex: 'codex/gpt-5.5',
   anthropic: 'anthropic/claude-sonnet-4-6',
   openai: 'openai/gpt-5.4',
 }
 
 const MODEL_PROVIDER_OPTIONS: ModelProviderOption[] = [
-  {
-    provider: 'opencode',
-    label: 'OpenCode',
-    description: 'Free models',
-    placeholder: DEFAULT_MODEL_BY_PROVIDER.opencode,
-  },
   {
     provider: 'codex',
     label: 'Codex',
@@ -200,7 +193,6 @@ function providerLabel(provider: string): string {
   if (provider === 'anthropic') return 'Claude'
   if (provider === 'openai')    return 'ChatGPT'
   if (provider === 'codex')     return 'Codex'
-  if (provider === 'opencode')  return 'OpenCode'
   return provider
 }
 
@@ -589,7 +581,7 @@ function ModelDetail({
   const flatModels = useMemo(() => allModels(modelIndex), [modelIndex])
   const initialProvider = existing
     ? modelProviderFromModelId(existing.model)
-    : (modelIndex.has('opencode') ? 'opencode' : (flatModels[0]?.provider ?? 'opencode'))
+    : (modelIndex.has('anthropic') ? 'anthropic' : (flatModels[0]?.provider ?? 'anthropic'))
   const initialModel = existing?.model ?? defaultModelForProvider(modelIndex, initialProvider)
 
   const [name, setName] = useState(existing?.name ?? '')

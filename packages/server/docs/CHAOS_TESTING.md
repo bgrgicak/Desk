@@ -188,7 +188,7 @@ After a run that exits non-zero:
 - Periodically against a deployment to baseline drift.
 
 Unlike `npm run test:host`, this targets a *live, running* server and
-exercises the real sandbox stack — Docker, opencode-serve, the
+exercises the real sandbox stack — Docker, pi runtime, the
 scheduler, the WebSocket fan-out. It's slower (tens of seconds to
 minutes) but catches integration regressions the unit tests can't.
 
@@ -271,7 +271,7 @@ For each bad outcome, look for the corresponding signals:
    `packages/server/api`, or wherever the process is writing
    stdout/stderr): grep for the runId / messageId. Pull the surrounding
    ~30 lines. The relevant modules to look for:
-   `runtime/driver`, `runtime/docker`, `runtime/opencodeServer`,
+   `runtime/driver`, `runtime/docker`, `runtime/piClient`,
    `scheduler/runs`.
 
 2. **Kernel OOM events** during the run window:

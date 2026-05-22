@@ -87,7 +87,7 @@ Prefer commands that replace or upsert a named server. If the tool only appends,
 guard the append by checking for the server name first:
 
 ```sh
-opencode mcp add browser --command playwright-mcp || true
+pi mcp add browser --command playwright-mcp || true
 ```
 
 If a command is not naturally idempotent, wrap it in an existence check against

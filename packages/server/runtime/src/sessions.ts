@@ -5,7 +5,7 @@ import { queries } from "@agent-desk/db";
 
 /**
  * Per-run sandbox session tokens. The runtime mints one before invoking
- * OpenCode and revokes it after the run finishes. The token is passed into
+ * pi and revokes it after the run finishes. The token is passed into
  * the container as `DESK_SANDBOX_TOKEN`; the `desk` CLI forwards it to the
  * REST API as `X-Desk-Sandbox-Token`. Server-side verification lives in
  * `packages/server/api/src/auth/sandboxToken.ts`.

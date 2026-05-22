@@ -22,7 +22,7 @@ describe("renderAgentFile", () => {
 
     // Header from the new renderer
     expect(result).toMatch(/^# Jarvis/);
-    // The opencode-specific YAML frontmatter is gone — pi treats this
+    // The pi-specific YAML frontmatter is gone — pi treats this
     // as plain system-prompt text and the model/permissions come from
     // CLI flags. The body still uses long `---...---` divider lines, so
     // assert the absence of frontmatter keys rather than the bare `---`.
@@ -430,7 +430,7 @@ describe("writeAgentFile", () => {
       const body = await fs.readFile(target, "utf-8");
       expect(body).toContain("# Helper");
       expect(body).toContain("You are Helper, call me Desk.");
-      // No opencode-specific frontmatter leaks into the file.
+      // No pi-specific frontmatter leaks into the file.
       expect(body).not.toContain("model:");
       expect(body).not.toContain("permission:");
     } finally {

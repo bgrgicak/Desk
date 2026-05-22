@@ -447,7 +447,7 @@ describe("sweepIdleSandboxes", () => {
 // User-driven preemption: when a follow-up chat message comes in for a chat
 // whose previous agent_turn is still `running` but visibly hung (log file has
 // gone silent for `staleAfterMs`), cancel the old run so the new one can fire
-// without racing a zombie opencode. The signal is log mtime, not wall-clock
+// without racing a zombie pi. The signal is log mtime, not wall-clock
 // row age — a long-but-active stream keeps the file growing and is left alone.
 
 describe("preemptStalledChatRun", () => {
@@ -526,7 +526,7 @@ describe("preemptStalledChatRun", () => {
     const slug = `preempt-active-${Date.now()}`;
     const { chatId: cid, workspaceSlug } = await makeWorkspaceWithChat(slug);
     const msgId = await insertRunningAgentTurn({ chatId: cid, startedSecondsAgo: 600 });
-    // Log mtime is "right now" — opencode emitted an event a moment ago, so
+    // Log mtime is "right now" — pi emitted an event a moment ago, so
     // this is an active long-running step, not a stuck one. Even though the
     // row's been running for 10 minutes, the log says it's working.
     await writeLogWithMtime(workspaceSlug, cid, msgId, Date.now());
@@ -610,7 +610,7 @@ describe("preemptStalledChatRun", () => {
 
 describe("preemptChatRun (always-preempt)", () => {
   // The POST /chats/{id}/messages route hands this every send. The
-  // always-preempt semantics match opencode's own client pattern:
+  // always-preempt semantics match pi's own client pattern:
   // overlapping sends on a single session would otherwise have their
   // payloads silently dropped by the daemon. Every previous-run state
   // (active log, silent log, no log at all) should be preempted —

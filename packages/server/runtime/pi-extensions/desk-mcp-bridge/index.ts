@@ -15,7 +15,7 @@
  * for each MCP tool it discovers. Pi tool calls forward to the MCP
  * server's tools/call.
  *
- * Config shape (lifted from opencode/Claude Desktop, both
+ * Config shape (lifted from pi/Claude Desktop, both
  * compatible):
  *
  *   {

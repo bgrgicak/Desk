@@ -458,7 +458,7 @@ test("attach picker mentions a library folder and the next message attaches the 
 
   // Regression: ChatInput.handleSubmit used to filter out folder mentions
   // before reaching onSend, so directory attachments never made it on the
-  // wire and opencode never saw the folder.
+  // wire and pi never saw the folder.
   const messagePromise = page.waitForRequest(
     (req) =>
       req.method() === "POST" &&

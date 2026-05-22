@@ -56,6 +56,23 @@ fi
 DESK_HOME_DEFAULT="${HOME}/Desk"
 mkdir -p "${DESK_HOME_DEFAULT}"
 
+# 3a. Build any built-in app that is missing its dist/. Source-mode dev reads
+#     fragments directly from packages/desk-apps/<name>.app/dist/, which is
+#     only ever produced by an explicit `npm run build`. Without this step,
+#     a freshly pulled new app (sources only, no dist) silently 404s on
+#     attach-artifact.
+DESK_APPS_ROOT="${REPO_ROOT}/packages/desk-apps"
+if [ -d "${DESK_APPS_ROOT}" ]; then
+  for app_dir in "${DESK_APPS_ROOT}"/*.app; do
+    [ -d "${app_dir}" ] || continue
+    if [ ! -d "${app_dir}/dist" ]; then
+      echo "==> Building built-in app: $(basename "${app_dir}")"
+      (cd "$REPO_ROOT" && npm -w @agent-desk/desk-apps run build)
+      break
+    fi
+  done
+fi
+
 # 3b. Rebuild the sandbox docker image when its inputs (sandbox-cli source,
 #     Dockerfile, app-scaffold manifests) have changed. Skipped silently
 #     when the existing image's `desk.fingerprint` label still matches.

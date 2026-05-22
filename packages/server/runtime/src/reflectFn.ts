@@ -12,7 +12,7 @@ import { queries, type Pool } from "@agent-desk/db";
 import { generateId } from "@agent-desk/shared";
 import { createOrReuse } from "./docker.js";
 import { buildWorkspaceMountPlan } from "./mounts.js";
-import { execRun } from "./opencode.js";
+import { execRun } from "./execRun.js";
 
 // Local copies of the scheduler types. We can't depend on
 // `@agent-desk/scheduler` here without creating a cycle (scheduler
@@ -36,7 +36,7 @@ interface WorkspaceReflectionInput {
   userTimezone?: string;
   agent: { id: string; name: string; model: string };
   providerKeys?: Record<string, string>;
-  /** Codex-bridge env (`OPENCODE_AUTH_CONTENT`), injected into the reflection sandbox exec. */
+  /** Codex-bridge env (`PI_AUTH_JSON_BASE64`), injected into the reflection sandbox exec. */
   extraEnv?: Record<string, string>;
   date: string;
   activity: Array<{
@@ -131,7 +131,7 @@ function extractJsonObject(s: string): string | null {
   return null;
 }
 
-function extractOpencodeText(raw: string): string | null {
+function extractPiText(raw: string): string | null {
   const texts: string[] = [];
   for (const line of raw.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -151,7 +151,7 @@ function extractOpencodeText(raw: string): string | null {
 }
 
 function parseReflection(raw: string): ReflectionResult | null {
-  const blob = extractJsonObject(extractOpencodeText(raw) ?? raw);
+  const blob = extractJsonObject(extractPiText(raw) ?? raw);
   if (!blob) return null;
   let parsed: unknown;
   try {
@@ -204,7 +204,7 @@ async function callReflection(
   // a regular chat fire would build. Without this, a hub reflection
   // recreates the container with only the 2-bind default plan and the
   // very next chat turn drift-recreates it back to the full sibling-
-  // mount plan — opencode-serve never stays up long enough for a turn
+  // mount plan — pi never stays up long enough for a turn
   // to complete. Mirrors scheduler/runs.ts:fireMessage.
   const workspace = await queries.workspaces.findById(input.pool, input.workspaceId);
   const workspaceKind: "project" | "hub" = workspace?.kind === "hub" ? "hub" : "project";
@@ -251,7 +251,7 @@ async function callReflection(
     mountPlan,
     onLog: (event) => {
       // The runtime emits per-turn output as `kind: "event"` (translated
-      // SSE events from opencode-serve, each a JSON line like
+      // SSE events from pi, each a JSON line like
       // `{"type":"text","part":{"text":"…"}}`). Legacy `kind: "stdout"`
       // entries are still accepted for the fake driver and any future
       // raw-output path.
@@ -262,7 +262,7 @@ async function callReflection(
     },
   });
   if (result.exitCode !== 0) {
-    // The driver now folds the daemon's own `/tmp/opencode-serve.log`
+    // The driver now folds the daemon's own `/tmp/pi.log`
     // tail into stderr on failure paths (see driver.ts), so the message
     // length budget has to be larger than the old 400 char cap or the
     // useful part gets clipped.

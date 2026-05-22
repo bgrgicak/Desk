@@ -93,12 +93,12 @@ The DB stores derivatives, not raw secrets:
   the raw token only ever exists in the cookie/header sent by the
   browser.
 - **Provider API keys** (user-supplied per-provider tokens): entries in the
-  per-user KDBX vault at `${DESK_HOME}/vaults/{userId}.kdbx`.
+  per-user KDBX vault at `${DESK_HOME}/.vaults/{userId}.kdbx`.
 - **Internal API token** (at/cron jobs → `/internal/messages/fire`):
   generated on first boot if missing — no need to back up.
 - **Per-user secrets vault** (provider API keys and logins for sites the agent
   should sign in to): a KDBX 4 file per user at
-  `${DESK_HOME}/vaults/{userId}.kdbx`. It is encrypted with the auto-generated
+  `${DESK_HOME}/.vaults/{userId}.kdbx`. It is encrypted with the auto-generated
   `DESK_VAULT_PASSWORD` stored in `.env`; back up both the KDBX files and
   `.env`, or the vault is unrecoverable.
 

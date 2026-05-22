@@ -76,7 +76,7 @@ function handleResponse(
 /**
  * Posts to the host-side desk-server REST API. Resolves the API URL from
  * `DESK_API_URL` and authenticates with the per-run sandbox session token
- * in `DESK_SANDBOX_TOKEN` — both injected by the runtime when OpenCode is
+ * in `DESK_SANDBOX_TOKEN` — both injected by the runtime when pi is
  * started for a run.
  */
 export async function postJson(

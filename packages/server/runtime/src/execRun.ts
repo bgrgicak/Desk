@@ -1,17 +1,12 @@
 /**
  * Top-level `execRun` entry point — composes mounts + agent file +
- * driver invocation for one turn. Kept in this filename for import
- * stability; the runtime underneath is now pi, not opencode.
+ * driver invocation for one turn. The runtime underneath is pi.
  *
- * Compared to the old opencode-daemon version this module loses:
- *   - the `withMcpLock` per-workspace serial queue (pi has no MCP yet,
- *     no shared config file to race on),
- *   - the lazy MCP / Xvfb start path,
- *   - the daemon-restart-on-config-change side-effect.
- *
- * MCP is deferred — when we bring it back via a pi extension, the lock
- * comes with it (same shape, scoped to whatever shared config the
- * extension reads).
+ * MCP is deferred — when we bring it back via a pi extension, the
+ * per-workspace `withMcpLock` queue comes with it (scoped to whatever
+ * shared config the extension reads), and the lazy Xvfb start path
+ * already in this file extends to cover any future browser-bearing
+ * extensions.
  */
 
 import { type Pool } from "@agent-desk/db";
@@ -25,7 +20,7 @@ import { projectMounts, teardownMounts, type MountPlan } from "./mounts.js";
 import { writeAgentFile, writeWorkspaceMcpConfig, chatNeedsBrowser, type AgentFileInput } from "./agentFile.js";
 import { detectEngine, type Engine } from "./engine.js";
 import { withModule } from "@agent-desk/shared/logger";
-const log = withModule("runtime/opencode");
+const log = withModule("runtime/execRun");
 
 /**
  * Per-workspace serial queue for MCP-config writes + lazy Xvfb start.
@@ -103,10 +98,10 @@ export interface ExecRunOptions {
   /**
    * Existing pi session id for this chat. Null/undefined on the chat's
    * first turn — the driver picks one (chatId or a fresh UUID) and
-   * surfaces it via `ExecResult.opencodeSessionId` for the caller (the
+   * surfaces it via `ExecResult.piSessionId` for the caller (the
    * scheduler) to persist on the chat row.
    */
-  opencodeSessionId?: string | null;
+  piSessionId?: string | null;
   onLog: (event: LogEvent) => void;
 }
 
@@ -221,7 +216,7 @@ export async function execRun(
       providerKeys: opts.providerKeys,
       extraEnv: opts.extraEnv,
       mountPlan: opts.mountPlan,
-      opencodeSessionId: opts.opencodeSessionId ?? null,
+      piSessionId: opts.piSessionId ?? null,
       onLog: opts.onLog,
     });
     return result;

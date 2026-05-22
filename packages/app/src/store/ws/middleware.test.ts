@@ -6,7 +6,7 @@ import { api } from '../api'
 
 describe('applyEventToCache', () => {
   describe('message.log_appended parsing', () => {
-    it('treats OpenCode stdout JSON as a live structured event', () => {
+    it('treats pi stdout JSON as a live structured event', () => {
       expect(logEntryFromWsPayload({
         type: 'message.log_appended',
         payload: {
@@ -336,7 +336,7 @@ describe('applyEventToCache', () => {
           content: {
             type: 'events',
             log: [
-              { kind: 'stderr', line: '<path>/home/agent/.config/opencode/skills/desk-goal-app/SKILL.md</path> <type>file</type> <content>error handling notes</content>' },
+              { kind: 'stderr', line: '<path>/home/agent/.config/pi/skills/desk-goal-app/SKILL.md</path> <type>file</type> <content>error handling notes</content>' },
             ],
           },
           createdAt: new Date().toISOString(),

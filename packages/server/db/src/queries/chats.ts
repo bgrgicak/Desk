@@ -329,14 +329,12 @@ export async function updateMeta(
   if (data.agentId !== undefined) {
     sets.push(`agent_id = ?`);
     params.push(data.agentId);
-    // Atomically forget the opencode-serve session whenever the chat's
-    // agent changes. The session was bound to the old agent's
-    // providerID/modelID at creation time; opencode-serve ignores per-
-    // sendMessage overrides for those fields, so reusing the session
-    // would silently keep using the old model. Doing this in the same
-    // UPDATE removes the race where a concurrent run could read the
-    // new agent_id but still see the old session_id.
-    sets.push(`opencode_session_id = NULL`);
+    // Atomically forget the pi session whenever the chat's agent
+    // changes. The session was bound to the old agent's model at
+    // creation time; reusing it would silently keep that model.
+    // Doing this in the same UPDATE removes the race where a concurrent
+    // run could read the new agent_id but still see the old session_id.
+    sets.push(`pi_session_id = NULL`);
   }
   if (data.unread !== undefined) {
     sets.push(`unread = ?`);
@@ -365,68 +363,67 @@ export async function markRead(db: Pool, id: string): Promise<Chat | null> {
 }
 
 /**
- * Returns the opencode-serve session id bound to this chat, if any.
- * Each chat owns at most one session that turns are appended to. A null
- * return means the chat hasn't had its first turn yet under the new
- * runtime — the driver will create one and persist it via
- * `setOpencodeSessionId`.
+ * Returns the pi session id bound to this chat, if any. Each chat owns
+ * at most one session that turns are appended to. A null return means
+ * the chat hasn't had its first turn yet — the driver will create one
+ * and persist it via `setPiSessionId`.
  */
-export async function getOpencodeSessionId(
+export async function getPiSessionId(
   db: Pool,
   id: string,
 ): Promise<string | null> {
   const { rows } = await db.query(
-    "SELECT opencode_session_id FROM chats WHERE id = ?",
+    "SELECT pi_session_id FROM chats WHERE id = ?",
     [id],
   );
   if (rows.length === 0) return null;
-  const value = rows[0].opencode_session_id;
+  const value = rows[0].pi_session_id;
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 /**
- * Writes (or clears) the opencode-serve session bound to a chat. We
- * intentionally don't bump `updated_at` here — this is internal runtime
- * metadata, not a user-visible event, and bumping the chat would shuffle
- * the chat-list ordering on every turn.
+ * Writes (or clears) the pi session bound to a chat. We intentionally
+ * don't bump `updated_at` here — this is internal runtime metadata, not
+ * a user-visible event, and bumping the chat would shuffle the chat-list
+ * ordering on every turn.
  */
-export async function setOpencodeSessionId(
+export async function setPiSessionId(
   db: Pool,
   id: string,
   sessionId: string | null,
 ): Promise<void> {
   await db.query(
-    "UPDATE chats SET opencode_session_id = ? WHERE id = ?",
+    "UPDATE chats SET pi_session_id = ? WHERE id = ?",
     [sessionId, id],
   );
 }
 
 /**
- * Clear the opencode-serve session id from every chat using a given agent.
- * Used when the agent's model changes — the existing daemon session is
- * bound to the prior model and won't honor the new one on subsequent
- * turns. Forgetting the id makes the next turn create a fresh session
- * with the current agent.model bound from the start.
+ * Clear the pi session id from every chat using a given agent.
+ * Used when the agent's model changes — the existing session is bound
+ * to the prior model and won't honor the new one on subsequent turns.
+ * Forgetting the id makes the next turn create a fresh session with the
+ * current agent.model bound from the start.
  *
  * Returns the chat ids whose session was cleared so callers can
- * best-effort delete them on the daemon side too.
+ * best-effort tear them down server-side too.
  */
-export async function clearOpencodeSessionsForAgent(
+export async function clearPiSessionsForAgent(
   db: Pool,
   agentId: string,
 ): Promise<Array<{ chatId: string; previousSessionId: string }>> {
-  const { rows } = await db.query<{ id: string; opencode_session_id: string | null }>(
-    "SELECT id, opencode_session_id FROM chats WHERE agent_id = ? AND opencode_session_id IS NOT NULL",
+  const { rows } = await db.query<{ id: string; pi_session_id: string | null }>(
+    "SELECT id, pi_session_id FROM chats WHERE agent_id = ? AND pi_session_id IS NOT NULL",
     [agentId],
   );
   const cleared: Array<{ chatId: string; previousSessionId: string }> = [];
   for (const row of rows) {
-    if (typeof row.opencode_session_id !== "string" || row.opencode_session_id.length === 0) continue;
-    cleared.push({ chatId: row.id, previousSessionId: row.opencode_session_id });
+    if (typeof row.pi_session_id !== "string" || row.pi_session_id.length === 0) continue;
+    cleared.push({ chatId: row.id, previousSessionId: row.pi_session_id });
   }
   if (cleared.length > 0) {
     await db.query(
-      "UPDATE chats SET opencode_session_id = NULL WHERE agent_id = ?",
+      "UPDATE chats SET pi_session_id = NULL WHERE agent_id = ?",
       [agentId],
     );
   }
@@ -434,43 +431,43 @@ export async function clearOpencodeSessionsForAgent(
 }
 
 /**
- * Clear opencode-serve session ids for every chat owned by the user
- * (optionally scoped to a single workspace). Used when a user-level
- * connector or local source changes — the affected chats' sessions may
- * still be bound to the old auth/provider, so we forget the ids and let
- * the next turn create a fresh session against whatever is configured now.
+ * Clear pi session ids for every chat owned by the user (optionally
+ * scoped to a single workspace). Used when a user-level connector or
+ * local source changes — the affected chats' sessions may still be
+ * bound to the old auth/provider, so we forget the ids and let the
+ * next turn create a fresh session against whatever is configured now.
  *
  * Returns the chat ids whose session was cleared.
  */
-export async function clearOpencodeSessionsForUser(
+export async function clearPiSessionsForUser(
   db: Pool,
   userId: string,
   workspaceId?: string,
 ): Promise<Array<{ chatId: string; previousSessionId: string }>> {
-  const baseSelect = `SELECT c.id, c.opencode_session_id
+  const baseSelect = `SELECT c.id, c.pi_session_id
        FROM chats c
        JOIN workspaces w ON w.id = c.workspace_id
       WHERE w.user_id = ?
-        AND c.opencode_session_id IS NOT NULL`;
+        AND c.pi_session_id IS NOT NULL`;
   const params: unknown[] = [userId];
   let sql = baseSelect;
   if (workspaceId) {
     sql += " AND c.workspace_id = ?";
     params.push(workspaceId);
   }
-  const { rows } = await db.query<{ id: string; opencode_session_id: string | null }>(sql, params);
+  const { rows } = await db.query<{ id: string; pi_session_id: string | null }>(sql, params);
   const cleared: Array<{ chatId: string; previousSessionId: string }> = [];
   for (const row of rows) {
-    if (typeof row.opencode_session_id !== "string" || row.opencode_session_id.length === 0) continue;
-    cleared.push({ chatId: row.id, previousSessionId: row.opencode_session_id });
+    if (typeof row.pi_session_id !== "string" || row.pi_session_id.length === 0) continue;
+    cleared.push({ chatId: row.id, previousSessionId: row.pi_session_id });
   }
   if (cleared.length > 0) {
     const updateSql = workspaceId
-      ? `UPDATE chats SET opencode_session_id = NULL
+      ? `UPDATE chats SET pi_session_id = NULL
           WHERE id IN (SELECT c.id FROM chats c
                         JOIN workspaces w ON w.id = c.workspace_id
                        WHERE w.user_id = ? AND c.workspace_id = ?)`
-      : `UPDATE chats SET opencode_session_id = NULL
+      : `UPDATE chats SET pi_session_id = NULL
           WHERE id IN (SELECT c.id FROM chats c
                         JOIN workspaces w ON w.id = c.workspace_id
                        WHERE w.user_id = ?)`;

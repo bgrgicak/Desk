@@ -66,7 +66,7 @@ export interface MountSet {
 /**
  * Records the current-run → current-chat mapping and ensures the workspace
  * root exists (so the bind-mount has something to show). Returns the
- * MountSet the driver can pass to OpenCode via the system prompt / chat
+ * MountSet the driver can pass to pi via the system prompt / chat
  * context.
  */
 export async function projectMounts(
@@ -88,7 +88,7 @@ export async function projectMounts(
     mountSet.attachmentsInSandbox = `${SANDBOX_HOME}/.chats/${opts.chatId}/attachments`;
     // Pre-create notes/ so the agent stops reporting "no summaries dir" before
     // the first materializeSummary() call. The system prompt advertises this
-    // path in opencode.ts; matching it on disk keeps the two consistent.
+    // path in execRun.ts; matching it on disk keeps the two consistent.
     await fs.mkdir(summaryStorageDir(opts.home, opts.workspaceSlug, opts.chatId), { recursive: true });
   }
 
@@ -146,7 +146,7 @@ export type MountPlan = MountPlanEntry[];
 /**
  * Default mount plan — one rw bind of the workspace root onto the
  * container's $HOME, plus global Desk skills mounted read-only outside
- * $HOME and symlinked into OpenCode's skills path by the entrypoint. Custom
+ * $HOME and symlinked into pi's skills path by the entrypoint. Custom
  * plans can be built by callers that need to expose additional directories
  * (e.g. ~/Projects) alongside.
  *

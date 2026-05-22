@@ -1487,7 +1487,7 @@ describe("preemptChatRun", () => {
     //   2. insert a fresh agent_turn trigger
     //   3. fireMessage(newTrigger) — fire-and-forget
     //
-    // Each cancelled fire's execRunFn still resolves cleanly (opencode
+    // Each cancelled fire's execRunFn still resolves cleanly (pi
     // preserves session state on abort and exits 0). The success path
     // at the bottom of fireMessageImpl then reads the log and inserts a
     // child message — even though the row is already in 'cancelled'
@@ -1502,7 +1502,7 @@ describe("preemptChatRun", () => {
         onLog({ runId: id, seq: 0, kind: "stdout", payload: JSON.stringify({ type: "step_start", sessionID: "s1" }) });
         onLog({ runId: id, seq: 1, kind: "stdout", payload: JSON.stringify({ type: "text", part: { text: "duplicate reply" } }) });
         // Hold until the test has preempted the row, then exit cleanly —
-        // mirroring opencode returning Cancelled with exitCode=0 after
+        // mirroring pi returning Cancelled with exitCode=0 after
         // session.abort.
         await released;
         onLog({ runId: id, seq: 2, kind: "stdout", payload: JSON.stringify({ type: "step_finish" }) });

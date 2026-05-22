@@ -900,7 +900,7 @@ function ConnectionDetail({
 
           <Field
             label="Use in sandboxes"
-            help="When enabled, Desk forwards this source's auth/credentials to OpenCode so it can call its models from inside the sandbox."
+            help="When enabled, Desk forwards this source's auth/credentials into the sandbox so pi can call its models from there."
           >
             <div className="flex items-center gap-3">
               <Switch

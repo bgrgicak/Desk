@@ -65,7 +65,7 @@ describe("AgentSchema", () => {
       id: "agt_legacy",
       userId: "usr_abc",
       name: "Legacy",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
     });
     expect(parsed.enabled).toBe(true);
     expect(parsed.sortOrder).toBe(0);
@@ -235,7 +235,7 @@ describe("MessageSchema execution metadata", () => {
       ...base,
       role: "agent",
       content: { type: "text", text: "hello" },
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
     };
     expect(MessageSchema.parse(msg)).toEqual(msg);
   });

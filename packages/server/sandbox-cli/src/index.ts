@@ -2,7 +2,7 @@ import { writeErrorAndExit } from "./errors.js";
 import { COMMANDS } from "./commands.js";
 
 /**
- * `desk` — the in-sandbox CLI used by the OpenCode agent to call back into
+ * `desk` — the in-sandbox CLI used by the pi agent to call back into
  * the host desk-server. The only command today is `task schedule`; new
  * commands plug in through COMMANDS as additional `<group> <action>`
  * entries.

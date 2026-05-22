@@ -10,7 +10,7 @@ import {
 import type { WorkspaceScope } from "../workspace-scope.js";
 
 /**
- * Sandbox session tokens authenticate requests from inside an OpenCode run
+ * Sandbox session tokens authenticate requests from inside an pi run
  * back to the desk-server REST API. The runtime mints one token per run and
  * passes it into the container as `DESK_SANDBOX_TOKEN`. The `desk` CLI
  * forwards it as `X-Desk-Sandbox-Token` on each request.

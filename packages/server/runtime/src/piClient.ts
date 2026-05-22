@@ -3,7 +3,7 @@
  * container for a single turn and streams its JSON event output back to
  * the host driver.
  *
- * Architecture vs. the old opencode-serve daemon:
+ * Architecture vs. the old pi runtime:
  *
  *   - No long-lived daemon, no HTTP server, no SSE multiplexer, no port
  *     allocation, no MCP write lock, no env-digest restart, no auth wipe.
@@ -81,7 +81,7 @@ export interface PiRunOptions {
   /** Called once per stderr log line from pi (raw, not JSON-parsed). */
   onStderr: (line: string) => void | Promise<void>;
   /**
-   * Context threaded into every translated event. Mirrors the opencode
+   * Context threaded into every translated event. Mirrors the pi
    * surfacing of sessionID + model annotation on each event so the chat
    * log can answer "what model produced this step?" without an extra
    * DB lookup.

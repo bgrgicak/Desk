@@ -560,7 +560,7 @@ export function ChatInput({
     // Library items and folders mentioned via @ or the attach picker have
     // id === workspace-relative path (see toContextItem / toFolderList).
     // Forward both as UploadedFile entries with `path` set so the parent's
-    // onSend can build AttachmentRefs — opencode's `--file` flag accepts a
+    // onSend can build AttachmentRefs — pi's `--file` flag accepts a
     // directory path and surfaces its contents to the model, so folders ride
     // the same wire as files.
     const mentionedFiles: UploadedFile[] = attachedItems.map(i => ({

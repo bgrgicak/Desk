@@ -100,7 +100,7 @@ beforeAll(async () => {
     id: agentId,
     userId,
     name: "ScrollbackAgent",
-    model: "opencode/big-pickle",
+    model: "anthropic/claude-haiku-4-5",
   });
 
   const wsId = generateId("workspace");

@@ -37,7 +37,7 @@ describe("Desk skills", () => {
         expect(name).toMatch(/^desk-[a-z0-9-]+$/);
         expect(skill).toContain(`name: ${name}\n`);
         expect(skill).toMatch(/description: "?(Use when|Use before)/);
-        // No opencode-specific compatibility marker — pi uses the
+        // No pi-specific compatibility marker — pi uses the
         // standard Agent Skills frontmatter (name + description).
         expect(skill).not.toContain("compatibility:");
         expect(skill).toContain("metadata:\n  source: desk");
@@ -51,7 +51,7 @@ describe("Desk skills", () => {
     }
   });
 
-  it("splits long CLI reference sections into dedicated OpenCode skills", async () => {
+  it("splits long CLI reference sections into dedicated pi skills", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-runtime-skills-"));
     try {
       await writeDeskSkillFiles(home);

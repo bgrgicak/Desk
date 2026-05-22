@@ -1,7 +1,7 @@
 /**
  * Lightweight token counter for the messages-since-last-summary transcript.
  *
- * Goal: estimate, within ~5% of OpenCode/Anthropic accounting, how many
+ * Goal: estimate, within ~5% of pi/Anthropic accounting, how many
  * tokens a transcript consumes — enough precision to drive the
  * compaction trigger (Section 2 of the memory-system spec). This is not
  * a tokenizer; we use a character-based heuristic that has held up

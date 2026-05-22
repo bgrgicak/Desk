@@ -1,11 +1,11 @@
 /**
  * Integration test: invokes the production reflection callback against
- * the real `opencode` CLI on the host. Asserts the parsed result is
+ * the real `pi` CLI on the host. Asserts the parsed result is
  * shaped like the prompt asks for — non-empty journal, array of
  * memoryEdits — without locking us into a specific journal body the
  * model is free to vary.
  *
- * Skipped when `opencode` isn't on PATH, or when the local sandbox image is
+ * Skipped when `pi` isn't on PATH, or when the local sandbox image is
  * unavailable, so host-only test runs don't try to pull the private image.
  * The local `npm run ci:local` mirror builds the image before this suite.
  */
@@ -21,9 +21,9 @@ import { detectEngine } from "../../src/engine.js";
 import { sandboxImage } from "../../src/docker.js";
 import { productionReflectWorkspace } from "../../src/reflectFn.js";
 
-function opencodeAvailable(): boolean {
+function piAvailable(): boolean {
   try {
-    const result = spawnSync("opencode", ["--version"], { stdio: "ignore" });
+    const result = spawnSync("pi", ["--version"], { stdio: "ignore" });
     return result.status === 0;
   } catch {
     return false;
@@ -39,7 +39,7 @@ async function sandboxImageAvailable(): Promise<boolean> {
   }
 }
 
-const SKIP = !opencodeAvailable() || !(await sandboxImageAvailable());
+const SKIP = !piAvailable() || !(await sandboxImageAvailable());
 const describeIf = SKIP ? describe.skip : describe;
 
 let pool: Pool;
@@ -68,7 +68,7 @@ beforeAll(async () => {
     id: agentId,
     userId,
     name: "Workspace Reflector",
-    model: "opencode/big-pickle",
+    model: "anthropic/claude-haiku-4-5",
   });
   await queries.workspaces.insert(pool, {
     id: workspaceId,
@@ -85,7 +85,7 @@ afterAll(async () => {
   if (home) await fs.rm(home, { recursive: true, force: true });
 });
 
-describeIf("productionReflectWorkspace (real opencode)", () => {
+describeIf("productionReflectWorkspace (real pi)", () => {
   it("returns a non-empty journal and an array of memory edits", async () => {
     // 5-minute timeout: the gpt-5-nano free model is slow but free.
     const result = await productionReflectWorkspace({
@@ -96,7 +96,7 @@ describeIf("productionReflectWorkspace (real opencode)", () => {
       workspaceName: "Kanban",
       userId,
       userName: "reflector",
-      agent: { id: agentId, name: "Workspace Reflector", model: "opencode/big-pickle" },
+      agent: { id: agentId, name: "Workspace Reflector", model: "anthropic/claude-haiku-4-5" },
       date: "2026-05-05",
       priorJournals: [
         {
@@ -130,7 +130,7 @@ describeIf("productionReflectWorkspace (real opencode)", () => {
     // The reflection prompt asks for a journal entry summarizing the
     // activity. We don't pin the model to a specific format (markdown
     // headings, bullets, plain prose are all valid journal styles, and
-    // `opencode/big-pickle` is the free model so its output varies
+    // `anthropic/claude-haiku-4-5` is the free model so its output varies
     // turn-to-turn). The invariants we DO care about: it's a real
     // response — non-trivial length, and not the degraded
     // `(reflection failed: …)` placeholder the host emits when the

@@ -61,6 +61,23 @@ function normalizeGlobalAppPath(raw: string): { sandboxPath: string; insidePath:
   if (!/^[a-z][a-z0-9-]{0,62}\.app$/.test(appDir)) {
     throw new ValidationError(`Invalid built-in app directory: ${appDir}`);
   }
+  // Built-in apps are renderable in two shapes only: the app root
+  // (`<name>.app`) and a built fragment (`<name>.app/dist/fragments/<frag>`).
+  // The SPA's parseGlobalAppPath only routes those two; any other extant
+  // path inside the mounted source tree (e.g. raw `fragments/<frag>/`,
+  // `src/`, `vite.config.ts`) would attach successfully but render a blank
+  // "cannot display" panel. Reject those up front so the agent gets a
+  // clear error and follows the prompt's "fall back to Markdown" rule
+  // rather than silently storing an unrenderable ref.
+  if (segments.length > 1) {
+    const fragmentShape = /^[a-z][a-z0-9-]{0,62}\.app\/dist\/fragments\/[a-z][a-z0-9-]{0,62}(?:\/index\.html)?$/;
+    const distRootShape = /^[a-z][a-z0-9-]{0,62}\.app\/dist(?:\/index\.html)?$/;
+    if (!fragmentShape.test(inside) && !distRootShape.test(inside)) {
+      throw new ValidationError(
+        `Built-in app path must be ${GLOBAL_APP_SANDBOX_PREFIX}<name>.app or ${GLOBAL_APP_SANDBOX_PREFIX}<name>.app/dist/fragments/<fragment>; got: ${inside}`,
+      );
+    }
+  }
   return { sandboxPath: `${GLOBAL_APP_SANDBOX_PREFIX}${inside}`, insidePath: inside };
 }
 

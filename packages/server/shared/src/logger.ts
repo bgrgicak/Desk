@@ -47,15 +47,18 @@ const ALWAYS_REDACT_KEYS = new Set([
   // (to avoid redacting workspace_id, request_id, etc.). List the
   // exact name here so AWS auth pairs don't half-leak.
   "aws_access_key_id",
+  // Pi's per-invocation OAuth blob (base64-encoded JSON containing OpenAI
+  // OAuth tokens for Codex). Ends in `_base64`, which isn't a generic
+  // secret suffix, so list it explicitly.
+  "pi_auth_json_base64",
 ]);
 
 // Universal secret-name pattern: matches keys whose name ENDS in a
 // secret-shaped token. Case-insensitive. Covers every `*_API_KEY`,
 // `*_TOKEN`, `*_SECRET`, `*_PASSWORD` we've added or will add
 // (ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, GITHUB_TOKEN,
-// SLACK_BOT_TOKEN, AWS_SECRET_ACCESS_KEY, OPENCODE_SERVER_PASSWORD,
-// OPENCODE_AUTH_CONTENT, REFRESH_TOKEN, ACCESS_TOKEN, …) without an
-// explicit allowlist.
+// SLACK_BOT_TOKEN, AWS_SECRET_ACCESS_KEY, PI_AUTH_JSON_BASE64,
+// REFRESH_TOKEN, ACCESS_TOKEN, …) without an explicit allowlist.
 //
 // Why suffix-only (not prefix): `password_strength_score` and
 // `tokens_used` are counters / scores, not secrets. Anchoring to the

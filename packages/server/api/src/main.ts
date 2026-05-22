@@ -23,7 +23,6 @@ import {
   auditSandboxMounts,
   buildDaemonEnv,
   detectEngine,
-  killOpencodeDaemonsForOrphans,
   productionReflectWorkspace,
   pruneDriftedContainers,
   refreshSandboxConnections,
@@ -176,31 +175,6 @@ async function main(): Promise<void> {
     await ensureWorkspaceLayout(DESK_HOME, ws.path);
   }
 
-  // Kill `opencode serve` daemons that survived a previous desk-server
-  // (tsx-watch reload, hard crash). The daemon keeps `~/.local/share/
-  // opencode/opencode.db` exclusively open — a new desk-server's first
-  // `opencode serve` spawn would fail to acquire it and the chat would
-  // error out. Killing the orphan daemon lets the new server bring up a
-  // fresh one on the next request. Per workspace, one shot, best-effort.
-  const orphanRunRows = (await pool.query<{ run_id: string; workspace_id: string }>(
-    `SELECT m.id AS run_id, c.workspace_id
-       FROM messages m
-       JOIN chats c ON c.id = m.chat_id
-      WHERE m.state IN ('running', 'pending')
-        AND json_valid(m.content)
-        AND json_extract(m.content, '$.type') IN ('agent_turn', 'summary_request')`,
-  )).rows;
-  if (orphanRunRows.length > 0) {
-    const workspaceIds = Array.from(new Set(orphanRunRows.map((r) => r.workspace_id)));
-    const killResults = await killOpencodeDaemonsForOrphans(workspaceIds);
-    const actuallyKilled = killResults.filter((r: { killed: boolean }) => r.killed).length;
-    if (actuallyKilled > 0) {
-      log.info(
-        `killed orphaned opencode-serve daemon in ${actuallyKilled}/${workspaceIds.length} workspace(s) before requeue`,
-      );
-    }
-  }
-
   // Re-queue agent_turn / summary_request messages that were interrupted
   // by the previous server process (crash, hot-reload, etc.) so they are
   // retried rather than silently dropped. task_run orphans are failed so
@@ -279,7 +253,7 @@ async function main(): Promise<void> {
   );
   const broadcastUserId: string | undefined = rows[0]?.id;
 
-  const vault = new VaultStore(path.join(DESK_HOME, "vaults"));
+  const vault = new VaultStore(path.join(DESK_HOME, ".vaults"));
 
   // DESK_VAULT_PASSWORD is now opt-in (no longer auto-generated). When
   // set, boot auto-unlocks every existing vault with it and can
@@ -375,7 +349,7 @@ async function main(): Promise<void> {
     parseInt(process.env.DESK_SANDBOX_IDLE_SWEEP_INTERVAL_MS ?? "60000", 10),
   );
 
-  // Soft-tier daemon sweeper: kills the in-container opencode-serve
+  // Soft-tier daemon sweeper: kills the in-container pi
   // daemon for workspaces quiet for `DESK_SANDBOX_SOFT_IDLE_MS` (default
   // 10 min) but leaves the container running. Saves ~400 MB of warm-
   // daemon RSS per sandbox; the next message pays only the ~2-5 s

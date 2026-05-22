@@ -144,7 +144,7 @@ function compactContent(content: Message["content"]): Message["content"] {
   switch (content.type) {
     case "events": {
       // Reasoning and text parts can share a `part.id` when the agent emits
-      // both streams for the same opencode part. Suppress the text twin so
+      // both streams for the same pi event. Suppress the text twin so
       // the compact log doesn't duplicate the same content twice.
       const reasoningPartIds = new Set<string>();
       for (const entry of content.log) {

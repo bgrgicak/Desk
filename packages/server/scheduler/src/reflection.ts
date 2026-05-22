@@ -20,8 +20,8 @@ const log = withModule("scheduler/reflection");
  * plus any workspace memory edits the agent considers worth keeping.
  *
  * The AI call is abstracted as `ReflectFn` so unit tests can inject a
- * deterministic stub. Production should pass a real opencode-backed
- * implementation that calls the free `opencode/gpt-5-nano` model with
+ * deterministic stub. Production should pass a real pi-backed
+ * implementation that calls the free `anthropic/claude-haiku-4-5` model with
  * the reflection prompt.
  *
  * Output format conventions (driven by the reflection prompt):
@@ -243,7 +243,7 @@ export async function runWorkspaceReflection(
 
   // Run the requested model through the same resolver chat fires use.
   // The agent file the reflection sandbox writes ends up with this
-  // `model:` line, and opencode-serve caches the agent file's model at
+  // `model:` line, and pi caches the agent file's model at
   // daemon startup — feeding it the raw `codex/<name>` Desk relabel
   // would leave the daemon resolving against a provider it doesn't know
   // and 500 every reflection. The resolver also strips `OPENAI_API_KEY`

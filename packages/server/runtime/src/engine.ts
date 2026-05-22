@@ -217,11 +217,11 @@ export class ContainerRuntimeUnavailableError extends DeskError {
 
 /**
  * Builds a safe error message for a failed engine command. Hides the
- * `--env KEY=VALUE` pairs (which often carry provider keys, OAuth
- * tokens, and the per-spawn OPENCODE_SERVER_PASSWORD) but keeps the
- * engine name, subcommand, target id, exit code, and full stderr —
- * everything an operator needs to triage without leaking the secrets
- * that the chaos test surfaced were going through into chat messages.
+ * `--env KEY=VALUE` pairs (which often carry provider keys and OAuth
+ * tokens) but keeps the engine name, subcommand, target id, exit code,
+ * and full stderr — everything an operator needs to triage without
+ * leaking the secrets that the chaos test surfaced were going through
+ * into chat messages.
  *
  * Env values are replaced with `<REDACTED>`; the env *keys* stay
  * visible so the operator can still see "GITHUB_TOKEN was set" vs
@@ -282,7 +282,7 @@ export interface Engine {
    *
    * This is the auto-scale primitive: an `xs` sandbox that hits a busy
    * vite build can grow to `m` mid-run without restarting the in-flight
-   * opencode. We deliberately don't expose recreate as an alternative
+   * pi. We deliberately don't expose recreate as an alternative
    * because recreating mid-run kills the live tree we just promised to
    * keep alive in `cleanupRunProcessTree`.
    */
@@ -351,8 +351,8 @@ class CliEngine implements Engine {
       // Node's execFile reject sets `.message` to the full command line
       // including every `--env KEY=VALUE` pair we pass into `docker
       // exec`. Those env values frequently carry secrets — provider API
-      // keys, the per-spawn OPENCODE_SERVER_PASSWORD, the Codex/ChatGPT
-      // OAuth blob, GitHub PATs — and the message gets propagated up
+      // keys, the Codex/ChatGPT OAuth blob, GitHub PATs — and the
+      // message gets propagated up
       // into emitLog("stderr") in driver.ts, where it ends up in a chat
       // message visible to the user (and any log shipper that reads the
       // pino stream). Rewrite the message into a safe shape that keeps
@@ -674,8 +674,8 @@ class CliEngine implements Engine {
   async exec(spec: ExecSpec): Promise<ExecHandle> {
     // Intentionally NO `-i`: with `-i` the in-container process sees stdin
     // as an open pipe, and well-behaved CLIs that auto-detect a piped
-    // stdin (opencode, jq -s, etc.) block forever waiting for EOF that
-    // never comes (host stdin is /dev/null but the daemon doesn't
+    // stdin (pi, jq -s, etc.) block forever waiting for EOF that
+    // never comes (host stdin is /dev/null but the engine doesn't
     // forward EOF on its own). Closing stdin via the absence of `-i`
     // makes the in-container process see EOF immediately and proceed.
     const args = ["exec"];
@@ -694,8 +694,8 @@ class CliEngine implements Engine {
 
   async execDetached(spec: ExecDetachedSpec): Promise<void> {
     // `-d` returns the engine CLI immediately once the in-container
-    // process is spawned. Used for daemons that should outlive this
-    // engine call (e.g. `opencode serve`).
+    // process is spawned. Used for processes that should outlive this
+    // engine call (e.g. Xvfb).
     const args = ["exec", "-d"];
     if (spec.user) args.push("--user", spec.user);
     if (spec.cwd) args.push("--workdir", spec.cwd);
@@ -770,7 +770,7 @@ function wrapExecChild(child: ChildProcess): ExecHandle {
     };
     // `close`, unlike `exit`, waits until stdio is closed. The scheduler reads
     // the run log immediately after wait(), so returning on `exit` can drop the
-    // final stdout/stderr chunk from fast OpenCode runs.
+    // final stdout/stderr chunk from fast pi runs.
     child.on("close", done);
     child.on("error", () => done(1));
   });

@@ -129,7 +129,7 @@ async function insertAgent(userId: string, name: string): Promise<string> {
     id,
     userId,
     name,
-    model: "opencode/big-pickle",
+    model: "anthropic/claude-haiku-4-5",
   });
   return id;
 }

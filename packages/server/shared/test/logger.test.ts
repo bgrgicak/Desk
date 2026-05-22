@@ -138,10 +138,9 @@ describe("logger redaction depth coverage", () => {
         NOTION_SECRET: "secret_leak-5",
         SLACK_BOT_TOKEN: "xoxb-leak-6",
         AWS_SECRET_ACCESS_KEY: "leak-7",
-        OPENCODE_SERVER_PASSWORD: "leak-8",
-        OPENCODE_AUTH_CONTENT: "leak-9",
-        REFRESH_TOKEN: "leak-10",
-        bearerToken: "leak-11",
+        PI_AUTH_JSON_BASE64: "leak-8",
+        REFRESH_TOKEN: "leak-9",
+        bearerToken: "leak-10",
       },
       "msg",
     );
@@ -149,7 +148,7 @@ describe("logger redaction depth coverage", () => {
     for (const leak of [
       "sk-ant-leak-1", "sk-openai-leak-2", "gsk-leak-3", "sk_live_leak-4",
       "secret_leak-5", "xoxb-leak-6", "leak-7", "leak-8", "leak-9",
-      "leak-10", "leak-11",
+      "leak-10",
     ]) {
       expect(joined).not.toContain(leak);
     }
@@ -163,7 +162,6 @@ describe("logger redaction depth coverage", () => {
       "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "aws_session_token",
       "GITHUB_TOKEN", "GH_TOKEN", "SLACK_BOT_TOKEN", "BEARER_TOKEN",
       "REFRESH_TOKEN", "ACCESS_TOKEN", "ID_TOKEN", "SESSION_TOKEN",
-      "OPENCODE_SERVER_PASSWORD", "OPENCODE_AUTH_CONTENT",
       "STRIPE_API_KEY", "NOTION_SECRET", "WEBHOOK_SECRET",
       "Authorization", "cookie", "api_key", "apikey", "password",
       "passphrase", "client_secret", "credentials",

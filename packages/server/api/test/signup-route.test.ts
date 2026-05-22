@@ -66,7 +66,7 @@ beforeAll(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-signup-"));
   await ensureLayout(home);
   process.env.DESK_HOME = home;
-  vault = new VaultStore(path.join(home, "vaults"));
+  vault = new VaultStore(path.join(home, ".vaults"));
 
   server = createApp(appOpts());
   await new Promise<void>((resolve) => server.listen(0, resolve));
