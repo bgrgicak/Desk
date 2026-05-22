@@ -63,11 +63,9 @@ test("search palette returns server results", async ({
   // Type enough to trigger the server query.
   await loggedInPage.getByPlaceholder(/Ask a question or search/).fill("searchableMoose");
 
-  // Ask AI remains visible even while async search results are loading.
-  await expect(
-    loggedInPage.getByRole("option", { name: /Ask AI.*searchableMoose/i }),
-  ).toBeVisible();
-
+  // Server-backed search result for the seeded chat message must surface.
+  // (The previous "Ask AI" CommandGroup was intentionally removed from this
+  // palette; starting new chats now lives outside the search surface.)
   await expect(
     loggedInPage.getByRole("option", { name: /searchableMoose/i }).first(),
   ).toBeVisible();
