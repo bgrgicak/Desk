@@ -14,6 +14,23 @@ import type { AgentEvent, AgentLogEntry, AttachmentRef, ServerMessage } from '@/
 /** Distance from the top (px) at which we trigger loading older messages. */
 const SCROLL_TOP_THRESHOLD = 120
 
+// Consecutive same-role messages whose timestamps fall within this
+// window are treated as a single group: only the group's last message
+// surfaces the trailing actions row, and copying that row copies the
+// whole group (text + a reference for each artifact). 3 s is wide
+// enough to catch an agent's artifact card plus the follow-up sentence
+// it writes a beat later — together they read as one expression.
+const GROUP_WINDOW_MS = 3000
+
+export function sameMessageGroup(a: ServerMessage | undefined, b: ServerMessage | undefined): boolean {
+  return (
+    !!a &&
+    !!b &&
+    a.role === b.role &&
+    Math.abs(new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) <= GROUP_WINDOW_MS
+  )
+}
+
 /**
  * Finds the most recent failed `agent_turn` in the message list.
  * Returns the failed message, or `null` if the latest agent turn is not
@@ -722,31 +739,39 @@ export function ChatThread({
             )
           )}
           {messages.map((msg, i) => {
-            // Consecutive same-role messages sent within a 1-second
-            // window are treated as a single group: only the last one
-            // surfaces the actions row, and within the group the
-            // bubbles sit tight (just the inter-message `space-y-3`
-            // gap, no per-message actions reserved space). Artifact
+            // Consecutive same-role messages sent within GROUP_WINDOW_MS
+            // are treated as a single group: only the group's last
+            // message surfaces the actions row, so the bubbles sit
+            // tight (no per-message actions reserved space). Artifact
             // refs and event logs participate in groups too, so a
             // sequence like "text → file → text" sent in one breath
-            // reads as one expression. The 1-second threshold mirrors
-            // how rapid-fire follow-ups tend to be parts of one
-            // thought rather than separate turns.
-            const GROUP_WINDOW_MS = 1000
+            // reads as one expression.
             const prev: typeof msg | undefined = messages[i - 1]
             const next: typeof msg | undefined = messages[i + 1]
-            const sameGroupAs = (a: typeof msg | undefined, b: typeof msg | undefined) =>
-              !!a && !!b
-              && a.role === b.role
-              && Math.abs(new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) <= GROUP_WINDOW_MS
-            const isFirstInGroup = !sameGroupAs(prev, msg)
-            const isLastInGroup = !sameGroupAs(msg, next)
+            const isFirstInGroup = !sameMessageGroup(prev, msg)
+            const isLastInGroup = !sameMessageGroup(msg, next)
+            // The last message in a group carries the consolidated copy
+            // action, so hand it the whole group (walk back over the run
+            // of same-group messages) — copying then yields the group's
+            // combined text plus a reference to each artifact in it.
+            let groupMessages: ServerMessage[] | undefined
+            if (isLastInGroup && !isFirstInGroup) {
+              groupMessages = [msg]
+              for (let j = i; j > 0 && sameMessageGroup(messages[j - 1], messages[j]); j--) {
+                groupMessages.unshift(messages[j - 1])
+              }
+            }
             return (
             <div
               key={msg.id}
               className="min-w-0 max-w-full"
               data-message-id={msg.id}
               ref={getMessageRefCallback(msg.id)}
+              // Messages followed by a same-group sibling sit 12 px apart
+              // (vs the 24 px `space-y-6` gap between groups), so a group
+              // reads as one. Inline override beats the space-y utility's
+              // `margin-block-end` without an !important class.
+              style={!isLastInGroup ? { marginBlockEnd: '12px' } : undefined}
             >
               <div className={`min-w-0 ${typeof messageClassName === 'function' ? (messageClassName(msg) ?? '') : (messageClassName ?? '')}`}>
                 <MessageBubble
@@ -757,6 +782,7 @@ export function ChatThread({
                   agentName={agentName}
                   isFirstInGroup={isFirstInGroup}
                   isLastInGroup={isLastInGroup}
+                  groupMessages={groupMessages}
                   isNew={shouldShowNewAssistantBadge(msg, lastAssistantId, showNewBadge, failedAgentTurn)}
                   onAttachmentClick={onAttachmentClick}
                   agentHeaderClassName={agentHeaderClassName}

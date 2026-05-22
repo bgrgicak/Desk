@@ -386,6 +386,29 @@ export function AppShell({
       })
       return crumbs
     }
+    // Library detail opened on a chat-scoped file (e.g. a file's "Open"
+    // action or the preview panel's title link). These live under
+    // `.chats/{chatId}/…`, which isn't a real Library location — showing
+    // that raw path would leak an internal directory. Trace the file to
+    // its chat instead: Home / Room / {chat title} / {filename}.
+    if (activeView === 'context' && isDetailOpen) {
+      const itemPath = searchParams.get('item') ?? ''
+      const chatScopedMatch = /^\.chats\/([^/]+)\//.exec(itemPath)
+      if (chatScopedMatch) {
+        const chatId = chatScopedMatch[1]
+        const crumbs: TopBarCrumb[] = []
+        const chatTitle = chats.find(c => c.id === chatId)?.title?.trim()
+        if (chatTitle) {
+          crumbs.push({
+            label: chatTitle.length > 24 ? `${chatTitle.slice(0, 24)}…` : chatTitle,
+            to: activeWorkspaceId ? buildPath(activeWorkspaceId, activeView, { chat: chatId }) : undefined,
+          })
+        }
+        const leafName = libraryFileName ?? itemPath.split('/').filter(Boolean).pop() ?? itemPath
+        crumbs.push({ label: truncateFileName(leafName) })
+        return crumbs
+      }
+    }
     const sectionLabel = VIEW_LABELS[activeView]
     if (!sectionLabel) return []
     const crumbs: TopBarCrumb[] = [

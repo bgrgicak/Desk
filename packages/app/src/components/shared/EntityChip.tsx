@@ -1,6 +1,9 @@
+import type { MouseEvent } from 'react'
 import { MessageSquare, PanelTop, Zap, Sparkles, FileText, type LucideIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { buildPath } from '@/router/nav'
+import { useAppDispatch } from '@/store/hooks'
+import { openArtifact } from '@/store/slices/previewPanelSlice'
 
 export type EntityChipKind = 'chat' | 'workspace' | 'task' | 'artifact' | 'file'
 
@@ -39,6 +42,7 @@ function fallbackId(id: string): string {
 }
 
 export function EntityChip({ kind, id, title, workspaceId }: EntityChipProps) {
+  const dispatch = useAppDispatch()
   const Icon = ENTITY_ICON[kind]
   const label = compactTitle(title || fallbackId(id))
   const href = (() => {
@@ -51,6 +55,15 @@ export function EntityChip({ kind, id, title, workspaceId }: EntityChipProps) {
       case 'file': return buildPath(workspaceId, 'context', { item: id })
     }
   })()
+  // File chips open the in-chat preview panel on plain click instead of
+  // navigating to the Library detail page. Modifier clicks fall through
+  // to the <Link> so the file's detail page can still open in a new tab.
+  const handleClick = (e: MouseEvent<HTMLAnchorElement>) => {
+    if (kind !== 'file' || !workspaceId) return
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+    e.preventDefault()
+    dispatch(openArtifact({ workspaceId, path: id, name: title ?? (id.split('/').pop() || id) }))
+  }
   const chipTitle = title ? `${ENTITY_NOUN[kind]}: ${title} (${id})` : id
   const className = "inline-flex max-w-[18rem] items-center gap-1 rounded border border-border/50 bg-muted px-1.5 py-0.5 align-baseline text-xs font-medium text-foreground no-underline transition-colors hover:bg-muted/80 aria-disabled:cursor-default aria-disabled:opacity-70"
 
@@ -74,6 +87,7 @@ export function EntityChip({ kind, id, title, workspaceId }: EntityChipProps) {
   return (
     <Link
       to={href}
+      onClick={handleClick}
       title={chipTitle}
       className={className}
     >

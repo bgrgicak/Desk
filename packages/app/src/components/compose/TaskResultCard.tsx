@@ -77,7 +77,7 @@ export function TaskResultCard({
   if (task.schedule?.trim()) meta.push(describeCron(task.schedule.trim()))
 
   // Fall back to the owning chat's workspace when the caller didn't pass
-  // one explicitly (e.g. GlobalPaletteChat) so the card can still link.
+  // one explicitly so the card can still link.
   const wsId = workspaceId ?? chat?.workspaceId
   // On the Tasks view, clicking the card docks the task in the right
   // sidebar via `?task=<id>` (mirrors how TasksPage cards open). On

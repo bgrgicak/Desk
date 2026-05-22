@@ -161,7 +161,7 @@ function OpenAILogo({ className }: { className?: string }) {
 export type WorkspaceSettingsSection = 'workspace' | 'connections' | 'preferences'
 
 const NAV: { id: WorkspaceSettingsSection; label: string; icon: typeof Settings2 }[] = [
-  { id: 'workspace',   label: 'Workspace',   icon: Settings2 },
+  { id: 'workspace',   label: 'Details',     icon: Settings2 },
   { id: 'connections', label: 'Connections', icon: Plug      },
   { id: 'preferences', label: 'Preferences', icon: Sliders   },
 ]
@@ -1656,7 +1656,7 @@ export function SettingsModal({
         showCloseButton={false}
         style={{ height: 'min(620px, calc(100dvh - 1rem))' }}
       >
-        <DialogTitle className="sr-only">Workspace settings</DialogTitle>
+        <DialogTitle className="sr-only">Room settings</DialogTitle>
         <Button
           variant="ghost"
           size="icon"
