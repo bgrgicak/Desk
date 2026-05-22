@@ -49,7 +49,7 @@ One command, no clone:
 npx @roomy-ai/cli@alpha
 ```
 
-This downloads the `@roomy-ai/cli` package, boots `roomy-server` in the foreground, and opens the UI at <http://127.0.0.1:35138/>. Stop it with `Ctrl+C`.
+This downloads the [`@roomy-ai/cli`](https://www.npmjs.com/package/@roomy-ai/cli) package, boots `roomy-server` in the foreground, and opens the UI at <http://127.0.0.1:35138/>. Stop it with `Ctrl+C`.
 
 Prefer a persistent install:
 
@@ -142,6 +142,41 @@ See [packages/server/README.md](packages/server/README.md) for the full package 
 - **`docker` commands fail with permission denied (Linux)** — log out and back in once after `sudo usermod -aG docker $USER`, or wrap with `sg docker -c "..."`.
 - **Sandbox bind-mount writes fail under rootless docker** — the runtime detects rootless mode and runs the container as UID 0. If it doesn't, pin via `ROOMY_SANDBOX_USER=0:0`.
 - **`vite: command not found`** — run `npm install` at the repo root.
+
+### Publishing a release
+
+Maintainers only. Releases are cut with a single interactive script from a Linux or macOS dev box.
+
+**One-time prerequisites:**
+
+- `npm login` — your npm account must have publish access to the [`@roomy-ai`](https://www.npmjs.com/org/roomy-ai) scope.
+- `docker login` — your Docker Hub account must have push access to the sandbox image repo.
+- `gh auth login` — used to create the GitHub Release and trigger the desktop build workflow.
+- Node.js 23 (matches the `.nvmrc` pin).
+
+**Cut a release:**
+
+```sh
+git checkout trunk && git pull
+./scripts/publish-release.sh
+```
+
+The script walks you through it interactively:
+
+1. Pre-flight checks (clean tree, on `trunk`, all four logins above present).
+2. Pick a version — next alpha bump, next minor + `alpha.0`, or a custom string. Default tag is `alpha`.
+3. Bumps every public workspace (`packages/app`, `packages/cli`, `packages/ui`, `packages/server/*`) plus `packages/desktop` to the new version.
+4. Runs `npm install`, `npm run build`, and a `npm pack` smoke test.
+5. **Final confirm** — last chance to bail before anything is published.
+6. Commits `chore(release): vX.Y.Z`.
+7. `npm publish --workspaces --access public` (publishes under the `alpha` dist-tag).
+8. Builds and pushes the `roomy/sandbox` Docker image to Docker Hub as `:vX.Y.Z` and `:alpha`.
+9. Creates the `vX.Y.Z` git tag and pushes `trunk` + tag to `origin`. The tag push triggers [`.github/workflows/desktop-release.yml`](.github/workflows/desktop-release.yml), which builds the macOS DMG on a `macos-latest` runner and uploads it to the GitHub Release.
+10. Optionally `gh run watch`es the desktop workflow.
+
+**If a step fails mid-flight:** the version-bump commit stays, but the git tag is only created after npm + Docker both succeed, so the desktop workflow won't fire for a half-published release. Fix the issue, bump to a fresh version, and re-run.
+
+**Re-uploading desktop installers from a different host:** the macOS DMG ships from the CI runner automatically. If you want to attach a Linux or Windows installer to the same release, run `electron-builder --publish always` from that host against the existing tag.
 
 ### Contributing
 
