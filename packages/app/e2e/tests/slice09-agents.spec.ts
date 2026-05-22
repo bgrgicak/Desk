@@ -98,9 +98,19 @@ test("creating, renaming, and deleting an agent round-trips through the API", as
   // Open the inline create form.
   await dialog.getByRole("button", { name: "Add", exact: true }).click();
 
-  // Editor uses the default model; no need to touch the picker (which is
-  // empty in the e2e lane anyway).
+  // The redesigned form requires a credential before the "Add model"
+  // button is enabled (canSave gates on `credentialSecret.trim().length > 0`
+  // when the provider has no saved key — and the e2e lane starts with
+  // no provider keys). Pick the Anthropic connection explicitly + fill
+  // a dummy credential so the form is complete. The credential value
+  // never leaves the test agent because the server only validates shape,
+  // not whether the key works upstream.
+  await dialog.getByLabel("Connection").selectOption("anthropic");
   await dialog.getByPlaceholder("e.g. Daily driver").fill(initialName);
+  const credInput = dialog.getByTestId(
+    "model-provider-credential-ANTHROPIC_API_KEY",
+  );
+  await credInput.fill("sk-ant-test-1234567890abcdef".padEnd(44, "x"));
   await dialog.getByRole("button", { name: /^Add model$/i }).click();
 
   // New agent row is rendered from the invalidated GET /agents list.

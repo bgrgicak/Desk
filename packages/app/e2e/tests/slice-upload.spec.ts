@@ -630,14 +630,16 @@ test("clicking a pending 'Use in chat' file in the Files sidebar opens its libra
   await page.getByRole("button", { name: /^Files$/ }).first().click();
   await page.getByText(fileName, { exact: true }).first().click();
 
-  // Must navigate to the library context view showing the file's detail,
-  // not to the parent folder.
-  await page.waitForURL((url) => url.searchParams.has("item"), {
-    timeout: 10_000,
+  // After PR #143 a plain click on a file row in the chat right panel
+  // opens the in-chat preview side panel instead of navigating to the
+  // Library detail page (see `FileRow` in ChatRightPanel.tsx — modifier
+  // clicks still fall through to the RouterLink). Verify the panel
+  // landed on the right file.
+  const previewPanel = page.getByTestId("preview-panel");
+  await expect(previewPanel).toBeVisible({ timeout: 10_000 });
+  await expect(previewPanel.getByText(fileName, { exact: true })).toBeVisible({
+    timeout: 5_000,
   });
-  const url = new URL(page.url());
-  expect(url.pathname).toContain("/context");
-  expect(url.searchParams.get("item")).toBe(fileName);
 });
 
 test("drop-zone overlay appears while files are being dragged", async ({

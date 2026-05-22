@@ -1,10 +1,13 @@
 /**
  * Clicking a file or artifact in the Artifacts panel should open it in the
- * detail view, not stage it for attachment to the next message.
+ * in-chat preview side panel, not stage it for attachment to the next message
+ * and not navigate away to the Library detail page.
  *
  * The old behaviour was single-click → stage (debounced 250 ms), double-click
- * → open. The new behaviour is single-click → open; the paperclip icon in the
- * hover row still stages.
+ * → open. After PR #143 the behaviour is single-click → open the preview
+ * panel (data-testid="preview-panel") while the chat thread stays mounted.
+ * The paperclip icon in the hover row still stages; the kebab "Open" action
+ * (used by other tests) still navigates to the full Library detail page.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -142,13 +145,17 @@ test("clicking a chat artifact file opens it in the detail view", async ({
   const panelEntry = page.getByRole("link", { name: artifactName }).first();
   await expect(panelEntry).toBeVisible({ timeout: 10_000 });
 
-  // Single-click the file row — the new behaviour navigates to the
-  // context/library view with this artifact selected (see ArtifactsPanel in
-  // ChatView.tsx). The kebab menu rendered by ContextDetail confirms the
-  // detail pane opened.
+  // Single-click the file row — the new behaviour opens the in-chat
+  // preview side panel (see `handleAttachmentClick` in App.tsx, which
+  // dispatches `openArtifact` to the previewPanel slice). The chat thread
+  // stays in place; the URL does NOT change.
   await panelEntry.click();
-  await page.waitForURL(/\/context\?[^/]*\bitem=/, { timeout: 5_000 });
-  await expect(page.getByTestId("library-detail-more")).toBeVisible({
+  const previewPanel = page.getByTestId("preview-panel");
+  await expect(previewPanel).toBeVisible({ timeout: 5_000 });
+  // The panel header repeats the artifact filename so we can prove the
+  // right file landed in the panel — not just "any" panel that happened
+  // to open.
+  await expect(previewPanel.getByText(artifactName)).toBeVisible({
     timeout: 5_000,
   });
 });
