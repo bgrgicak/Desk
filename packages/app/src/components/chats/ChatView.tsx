@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
+import type { GoalKey } from '@agent-desk/shared'
 import type { UploadedFile, SendOptions } from '@/components/compose/ChatInput'
 import { ArtifactInlineCard } from '@/components/shared/ArtifactInlineCard'
 import { RoomTopBarActions } from '@/components/layout/RoomTopBarActions'
@@ -15,11 +15,15 @@ import { closeArtifact, selectPreviewArtifact, selectPreviewSplitRatio } from '@
 import { ChatThread } from '@/components/compose/ChatThread'
 import { MessageBubble } from '@/components/compose/MessageBubble'
 import { ChatInput } from '@/components/compose/ChatInput'
+import { EmptyChatGreeting } from '@/components/compose/EmptyChatGreeting'
+import { SuggestionPills } from '@/components/compose/SuggestionPills'
+import { toWorkspaceInfo } from '@/store/selectors/workspaces'
 import type { Chat, Artifact, ContextItem } from '@/data/ui-types'
 import {
   useDeleteChatAttachmentMutation,
   useGetAgentsQuery,
   useGetChatArtifactsQuery,
+  useGetChatMessagesQuery,
   useGetWorkspacesQuery,
   usePatchChatMutation,
   usePostChatMessageMutation,
@@ -37,12 +41,6 @@ import { usePersistedState } from '@/hooks/use-persisted-state'
 import { usePrefs } from '@/hooks/use-prefs'
 import { DESKTOP_SIDEBAR_BREAKPOINT, isSmallChatViewport, shouldOpenChatSidebarsByDefault } from './chatViewUtils'
 
-const STARTER_CHIPS = [
-  'Draft a project brief',
-  'Build an expense tracker',
-  'Summarise my notes',
-  'Design a color palette',
-]
 
 // max-w-4xl (896 px) gives the message column ~33 % more horizontal room than
 // the previous max-w-2xl (672 px) cap — comfortably over the 20 % minimum
@@ -151,6 +149,10 @@ export function ChatView({
   const [panelOpen, setPanelOpen] = usePersistedState<boolean>(rightPanelOpenKey, shouldOpenChatSidebarsByDefault())
   const isSmallViewport = useIsSmallScreen()
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined)
+  // Tools goal selected by a suggestion-pill click in the empty
+  // state. Cleared on send so the next composer interaction inherits
+  // the chat's persisted goal again.
+  const [pillGoal, setPillGoal] = useState<GoalKey | null>(null)
 
   const setPanelOpenFromUser = useCallback((open: boolean) => {
     setPanelOpen(open)
@@ -348,6 +350,18 @@ export function ChatView({
   // thread does. MessageBubble no longer subscribes on its own.
   const { data: workspacesForBubble } = useGetWorkspacesQuery()
   const workspacePathForAnchor = workspacesForBubble?.find(w => w.id === chat.workspaceId)?.path
+  // Workspace shown in the empty-state greeting's second avatar
+  // (chat header parity — the room's icon or initials on the room
+  // tint). Resolved from the same warm `/workspaces` cache.
+  const emptyStateWorkspace = workspacesForBubble?.find(w => w.id === chat.workspaceId)
+  // Shares the RTK Query cache ChatThread already uses, so this is a
+  // free read. Drives whether the empty-state greeting + suggestion
+  // pills are shown above the composer.
+  const { data: chatMessagesData } = useGetChatMessagesQuery(
+    { chatId: chat.id },
+    { skip: isNewChat || !chat.id || chat.id === NEW_CHAT_ID },
+  )
+  const isChatEmpty = isNewChat || (chatMessagesData?.items?.length ?? 0) === 0
 
   // Files actually parked in `.chats/{chatId}/`: user uploads + agent
   // artifact files/dirs. Uploads drive the Files-tab "In this chat" list;
@@ -437,7 +451,7 @@ export function ChatView({
           headerSlot={
             !isNewChat ? <ThreadParentChip chatId={chat.id} /> : null
           }
-          innerClassName={`transition-[padding] duration-300 ${isPreviewOpen ? CHAT_GUTTER_PREVIEW : panelOpen ? CHAT_GUTTER_OPEN : CHAT_GUTTER_CLOSED} pt-8 pb-16 space-y-3`}
+          innerClassName={`transition-[padding] duration-300 ${isPreviewOpen ? CHAT_GUTTER_PREVIEW : panelOpen ? CHAT_GUTTER_OPEN : CHAT_GUTTER_CLOSED} pt-8 pb-16 space-y-6`}
           messageClassName={message => {
             if (message.content.type !== 'artifactRef') return CHAT_COLUMN_CLASS
             return CHAT_COLUMN_CLASS
@@ -457,27 +471,18 @@ export function ChatView({
                 />
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center py-24 text-center">
-                <Sparkles className="mb-6 h-16 w-16 text-muted-foreground/20" strokeWidth={1} />
-                <h2 className="mb-2 text-xl font-semibold text-foreground">What would you like to create?</h2>
-                <p className="text-sm text-muted-foreground max-w-sm">
-                  Describe what you need and I'll build it for you. A document, an app, a design — just ask.
-                </p>
-                <div className="mt-6 flex flex-wrap justify-center gap-2">
-                  {STARTER_CHIPS.map((chip) => (
-                    <button
-                      key={chip}
-                      onClick={() => {
-                        if (isNewChat) onFirstMessage?.(chip, newChatAgentId ?? undefined)
-                        else void postMessageMutation({ chatId: chat.id, content: chip })
-                      }}
-                      className="rounded-full border bg-background px-3.5 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:border-foreground/20 transition-colors"
-                    >
-                      {chip}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              // Empty-chat greeting (Figma 747-8319). The avatar
+              // stack is suppressed here — the same pair already
+              // lives in the global TopBar overlay for room chats,
+              // so showing it again in the empty state would be
+              // redundant. Suggestion pills sit just above the
+              // composer below.
+              <EmptyChatGreeting
+                hideAvatars
+                workspace={
+                  emptyStateWorkspace ? toWorkspaceInfo(emptyStateWorkspace) : undefined
+                }
+              />
             )
           }
           lastAssistantSlot={artifacts.length > 0 ? () => (
@@ -500,7 +505,15 @@ export function ChatView({
               style={{ paddingRight: 'var(--chat-thread-scrollbar-width, 0px)' }}
             >
               <div className={`w-full min-w-0 transition-[padding] duration-300 ${isPreviewOpen ? CHAT_GUTTER_PREVIEW : panelOpen ? CHAT_GUTTER_OPEN : CHAT_GUTTER_CLOSED} pt-2 pb-6`}>
-                <div className={CHAT_COMPOSER_CLASS}>
+                <div className={`${CHAT_COMPOSER_CLASS} flex flex-col gap-3`}>
+                  {isChatEmpty && (
+                    <SuggestionPills
+                      onSelect={s => {
+                        setPrefillText(s.prompt)
+                        if (s.goal !== undefined) setPillGoal(s.goal)
+                      }}
+                    />
+                  )}
                   <ChatInput
                     focusRef={focusInputRef}
                     onSend={(msg, uploads, options) => {
@@ -562,11 +575,14 @@ export function ChatView({
                         })
                     }
                     setPrefillText(undefined)
+                    setPillGoal(null)
                   }}
                     placeholder={isNewChat ? 'Ask anything, start a task, build something…' : 'Continue the conversation...'}
                     compact={true}
                     showGoalPicker={true}
-                    goal={chat.goal ?? null}
+                    // Suggestion-pill goal wins while it's set; the
+                    // chat's persisted goal is the fallback.
+                    goal={pillGoal ?? chat.goal ?? null}
                     prefillValue={prefillText}
                     chatAgentId={isNewChat ? (newChatAgentId ?? undefined) : chat.agentId}
                     chatWorkspaceId={chat.workspaceId}

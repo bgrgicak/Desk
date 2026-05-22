@@ -4,7 +4,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogHeader,
   DialogTitle,
 } from '@agent-desk/ui'
 import { useCreateWorkspaceMutation } from '@/store/api'
@@ -73,12 +72,17 @@ export function CreateWorkspaceModal({
         className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] p-0 gap-0 sm:max-w-[640px] overflow-hidden"
         style={{ height: 'min(560px, calc(100dvh - 1rem))' }}
       >
-        <DialogHeader className="px-4 pt-4 pb-3 border-b">
-          <DialogTitle>Create a room</DialogTitle>
-          <DialogDescription>
+        {/* Header inlined (not <DialogHeader>) — the primitive bakes in
+            a `gap-2` on its flex column that twMerge respects but
+            still surprises visually when we want a very tight title
+            + description block. Writing the layout directly gives us
+            exact control over the gap and the bottom padding. */}
+        <div className="border-b px-4 pt-3 pb-2">
+          <DialogTitle className="leading-tight">Create a room</DialogTitle>
+          <DialogDescription className="text-xs leading-snug text-muted-foreground">
             A room keeps a workspace's chats, tasks and library together.
           </DialogDescription>
-        </DialogHeader>
+        </div>
 
         {/* Remount on open so a cancelled draft doesn't persist. */}
         {open && (

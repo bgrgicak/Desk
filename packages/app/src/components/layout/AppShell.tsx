@@ -29,6 +29,7 @@ import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 import { SettingsModal } from '@/components/settings/SettingsModal'
 import { MyAccountModal } from '@/components/account/MyAccountModal'
 import type { Chat, Artifact, InboxItem } from '@/data/ui-types'
+import { useChatHierarchy } from '@/store/selectors/threads'
 import { getArtifactIcon } from '@/data/ui-types'
 import { DRAG_TYPE_PINNED_ITEM } from '@/components/library/LibraryCard'
 import {
@@ -294,6 +295,7 @@ export function AppShell({
   // file name as the leaf when a file is open. Other routes get
   // nothing (workspace-only breadcrumb).
   const [searchParams] = useSearchParams()
+  const chatHierarchy = useChatHierarchy(chats, activeWorkspaceId)
   const trailingCrumbs: TopBarCrumb[] = (() => {
     // A chat can be opened from the Library list without the route's
     // `view` segment changing (chat nav only sets `?chat=`), so
@@ -303,9 +305,25 @@ export function AppShell({
     if (selectedChatId) {
       const chatTitle = chats.find(c => c.id === selectedChatId)?.title?.trim()
       if (!chatTitle) return []
-      return [{
+      const crumbs: TopBarCrumb[] = []
+      // When the open chat is a thread, insert the parent chat's title
+      // as an intermediate (clickable) crumb so the user can navigate
+      // back to it. `useChatHierarchy` resolves this from server-
+      // populated `parentChatId` once that lands, and from the existing
+      // `message.threadChatId` back-ref until then — see
+      // `packages/server/docs/plans/threads-nesting.md`.
+      const parent = chatHierarchy.parentOf(selectedChatId)
+      if (parent) {
+        const parentTitle = parent.title.trim()
+        crumbs.push({
+          label: parentTitle.length > 24 ? `${parentTitle.slice(0, 24)}…` : parentTitle,
+          to: activeWorkspaceId ? buildPath(activeWorkspaceId, activeView, { chat: parent.id }) : undefined,
+        })
+      }
+      crumbs.push({
         label: chatTitle.length > 24 ? `${chatTitle.slice(0, 24)}…` : chatTitle,
-      }]
+      })
+      return crumbs
     }
     const sectionLabel = VIEW_LABELS[activeView]
     if (!sectionLabel) return []

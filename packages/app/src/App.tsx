@@ -57,6 +57,7 @@ import {
   usePinChatMutation,
   useUnpinChatMutation,
   useCreateThreadMutation,
+  usePatchChatMutation,
 } from '@/store/api'
 import { useAppDispatch, useAppSelector, useAppStore } from '@/store/hooks'
 import {
@@ -78,6 +79,7 @@ import type { PinnedSidebarEntry } from '@/components/layout/RoomSidebar'
 import { buildPath, NEW_CHAT_ID, resolveRouteView, type RouteView } from '@/router/nav'
 import { getSessionToken, logout } from '@/auth/session'
 import { usePrefs } from '@/hooks/use-prefs'
+import { generateThreadTitle } from '@/lib/thread-title'
 import type { PrefsShape } from '@/components/settings/SettingsModal'
 import { getLastWorkspaceUrl, saveLastWorkspaceUrl } from '@/lib/workspace-last-url'
 import {
@@ -391,6 +393,7 @@ function AppInner() {
   const [deleteChatMutation] = useDeleteChatMutation()
   const [postMessageMutation] = usePostChatMessageMutation()
   const [createThreadMutation] = useCreateThreadMutation()
+  const [patchChatMutation] = usePatchChatMutation()
   const [pinChatLibraryRefMutation] = usePinChatLibraryRefMutation()
   const [saveChatAttachmentToLibraryMutation] = useSaveChatAttachmentToLibraryMutation()
 
@@ -609,10 +612,21 @@ function AppInner() {
     try {
       const result = await createThreadMutation({ chatId: sourceChatId, messageId: anchorMessageId, content }).unwrap()
       goTo({ chat: result.chat.id, startThread: null })
+      // Auto-title the thread from its first message. The server creates
+      // every thread with the placeholder `"Thread: {parent title}"`;
+      // once the backend ships AI summarisation (see
+      // `packages/server/docs/plans/threads-nesting.md`),
+      // `generateThreadTitle` will round-trip to it. Until then it's a
+      // deterministic local derivation. Fire-and-forget — title is
+      // cosmetic and shouldn't block navigation.
+      void generateThreadTitle(content).then(title => {
+        if (!title || title === result.chat.title) return
+        patchChatMutation({ id: result.chat.id, patch: { title } })
+      })
     } catch (err) {
       toast.error('Failed to create thread', { description: extractApiError(err) })
     }
-  }, [startThreadParam, createThreadMutation, goTo])
+  }, [startThreadParam, createThreadMutation, patchChatMutation, goTo])
 
   const handleDeleteChat = useCallback((chatId: string) => {
     void deleteChatMutation(chatId)

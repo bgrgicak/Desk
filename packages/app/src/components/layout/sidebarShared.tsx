@@ -87,7 +87,7 @@ export function SidebarAccountMenu({
             side="top"
             align="start"
             sideOffset={6}
-            className="w-[--radix-dropdown-menu-trigger-width] p-0"
+            className="w-[var(--radix-dropdown-menu-trigger-width)] p-0"
           >
             {/* Header row — the avatar + name + email block is the
                 primary affordance for opening My Account. A Settings2

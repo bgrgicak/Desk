@@ -137,6 +137,7 @@ import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'
 import { initialsOf } from '@/lib/initials'
 import { PreferenceRow } from '@/components/settings/shared'
 import { describeApiError } from '@/components/settings/errors'
+import { roomColor } from '@/components/rooms/roomColor'
 import { isVaultLockedError } from '@/lib/api-error'
 import { useAppDispatch } from '@/store/hooks'
 import { openVaultDialog } from '@/store/slices/uiSlice'
@@ -1585,7 +1586,7 @@ export function SettingsModal({
   const [activeSection, setActiveSection] = useState<NavSection>(initialSection ?? 'workspace')
   const isCompactViewport = useCompactViewport()
   const dispatch = useAppDispatch()
-  const workspaceIcon = useWorkspaceIconUrl(workspace.id)
+  const workspaceIconUrl = useWorkspaceIconUrl(workspace.id)
 
   useEffect(() => {
     if (open && initialSection) setActiveSection(initialSection)
@@ -2051,19 +2052,19 @@ export function SettingsModal({
           <div className={cn('shrink-0 flex flex-col bg-muted/30', isCompactViewport ? 'w-full border-b' : 'h-full w-52 border-r')}>
             <div className={cn('px-4', isCompactViewport ? 'pt-4 pb-2 pr-12' : 'pt-5 pb-3 pr-4')}>
               <div className="flex items-center gap-2">
-                {workspaceIcon ? (
+                {workspaceIconUrl ? (
                   <img
-                    src={workspaceIcon}
+                    src={workspaceIconUrl}
                     alt={workspace.name}
-                    className="h-7 w-7 shrink-0 rounded-lg object-cover"
+                    className="h-7 w-7 shrink-0 rounded-full object-cover"
                   />
                 ) : (
-                  <div
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-sm font-semibold text-white"
-                    style={{ backgroundColor: workspace.bg }}
+                  <span
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white select-none"
+                    style={{ backgroundColor: roomColor(workspace) }}
                   >
-                    {workspace.emoji || initialsOf(workspace.name)}
-                  </div>
+                    {initialsOf(workspace.name)}
+                  </span>
                 )}
                 <span className="text-sm font-semibold truncate">{workspace.name}</span>
               </div>
