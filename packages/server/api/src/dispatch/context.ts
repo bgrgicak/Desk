@@ -20,7 +20,14 @@ export interface DispatchContext {
   storage: StorageContext;
   vault: VaultStore;
   runManager: ReturnType<typeof createRunManager>;
-  emit: (event: WsEvent) => void;
+  /**
+   * Broadcast a WS event. Recipient is normally derived from the event
+   * payload (workspaceId/chatId/messageId → owning user). The optional
+   * `recipientUserId` is for events whose payload can't reveal the
+   * recipient — currently global `connection.changed` toggles, which
+   * carry no workspaceId.
+   */
+  emit: (event: WsEvent, recipientUserId?: string) => void;
   /** Hot-refresh callback for connector / local-source mutations. */
   refreshConnections: (
     userId: string,
