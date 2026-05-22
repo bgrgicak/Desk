@@ -268,9 +268,7 @@ export async function buildWorkspaceMountPlan(
     .map((grant) => grant.connectionId);
   const all = await queries.connectors.listConnections(pool, opts.userId, LOCAL_FILESYSTEM_PROVIDER_ID);
   const active = all.filter((connection) => connection.status === "active");
-  const selected = localGrantIds.length > 0
-    ? active.filter((connection) => localGrantIds.includes(connection.id))
-    : active;
+  const selected = active.filter((connection) => localGrantIds.includes(connection.id));
 
   const seenHomeNames = new Set<string>();
   for (const connection of selected) {

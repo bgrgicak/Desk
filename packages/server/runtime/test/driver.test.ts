@@ -4,7 +4,9 @@ import {
   buildPiEnv,
   isContainerGoneError,
   parseModelSpec,
+  piModelReference,
   buildPiPrompt,
+  modelAttemptSpecs,
   toSandboxPath,
 } from "../src/driver.js";
 import { SANDBOX_HOME } from "../src/mounts.js";
@@ -70,6 +72,34 @@ describe("parseModelSpec", () => {
     expect(parseModelSpec("claude-haiku-4-5")).toEqual({
       modelID: "claude-haiku-4-5",
     });
+  });
+});
+
+describe("modelAttemptSpecs", () => {
+  it("keeps the primary model first and de-duplicates fallback models", () => {
+    expect(modelAttemptSpecs("anthropic/fail", [
+      "anthropic/fail",
+      "openai-codex/gpt-5.5",
+      "openai/gpt-5.4",
+      "openai-codex/gpt-5.5",
+      "",
+    ])).toEqual([
+      "anthropic/fail",
+      "openai-codex/gpt-5.5",
+      "openai/gpt-5.4",
+    ]);
+  });
+
+  it("returns fallbacks when the primary model is omitted", () => {
+    expect(modelAttemptSpecs(undefined, ["openai/gpt-5.4"])).toEqual(["openai/gpt-5.4"]);
+  });
+});
+
+describe("piModelReference", () => {
+  it("normalizes Desk's codex provider prefix for pi model scopes", () => {
+    expect(piModelReference("codex/gpt-5.5")).toBe("openai-codex/gpt-5.5");
+    expect(piModelReference("openai/gpt-5.4")).toBe("openai/gpt-5.4");
+    expect(piModelReference("gpt-5.4")).toBe("gpt-5.4");
   });
 });
 

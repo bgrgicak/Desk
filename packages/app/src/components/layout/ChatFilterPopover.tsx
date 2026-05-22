@@ -1,6 +1,6 @@
 import {
   Zap, FileText, ImageIcon, Table, Globe, Play, ListTodo,
-  CalendarClock, ChevronDown, Shapes, type LucideIcon,
+  CalendarClock, ChevronDown, Search, Shapes, type LucideIcon,
 } from 'lucide-react'
 import {
   DropdownMenu,
@@ -35,6 +35,7 @@ const GOAL_ICONS: Record<ChatGoalKind, LucideIcon> = {
   data:      Table,
   site:      Globe,
   run:       Play,
+  search:    Search,
   task:      ListTodo,
   scheduled: CalendarClock,
 }
@@ -46,6 +47,7 @@ const GOAL_LABELS: Record<ChatGoalKind, string> = {
   data:      'Data',
   site:      'Site',
   run:       'Run',
+  search:    'Search',
   task:      'Task',
   scheduled: 'Scheduled',
 }

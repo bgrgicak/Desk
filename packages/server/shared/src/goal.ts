@@ -7,5 +7,6 @@ export const GOAL_KEYS = [
   "run",
   "task",
   "scheduled",
+  "search",
 ] as const;
 export type GoalKey = (typeof GOAL_KEYS)[number];

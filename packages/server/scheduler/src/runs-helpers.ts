@@ -93,6 +93,50 @@ export function resolveModelForRun(
   return { runtimeModel: model, providerKeys, reason: null };
 }
 
+export function resolveModelChainForRun(
+  models: string[],
+  providerKeys: Record<string, string>,
+  extraEnv?: Record<string, string>,
+): {
+  primary: ReturnType<typeof resolveModelForRun>;
+  runtimeModels: string[];
+  fallbackRuntimeModels: string[];
+  runtimeToRequestedModel: Map<string, string>;
+} {
+  const requestedModels: string[] = [];
+  const seenRequested = new Set<string>();
+  for (const model of models) {
+    const trimmed = model.trim();
+    if (!trimmed || seenRequested.has(trimmed)) continue;
+    seenRequested.add(trimmed);
+    requestedModels.push(trimmed);
+  }
+  if (requestedModels.length === 0) {
+    requestedModels.push("anthropic/claude-haiku-4-5");
+  }
+
+  const resolved = requestedModels.map((model) => ({
+    requestedModel: model,
+    ...resolveModelForRun(model, providerKeys, extraEnv),
+  }));
+  const runtimeModels: string[] = [];
+  const runtimeToRequestedModel = new Map<string, string>();
+  const seenRuntime = new Set<string>();
+  for (const item of resolved) {
+    if (seenRuntime.has(item.runtimeModel)) continue;
+    seenRuntime.add(item.runtimeModel);
+    runtimeModels.push(item.runtimeModel);
+    runtimeToRequestedModel.set(item.runtimeModel, item.requestedModel);
+  }
+
+  return {
+    primary: resolved[0],
+    runtimeModels,
+    fallbackRuntimeModels: runtimeModels.slice(1),
+    runtimeToRequestedModel,
+  };
+}
+
 export function computeNextRun(cronExpr: string): string {
   const next = new Cron(cronExpr).nextRun();
   if (!next) throw new Error(`cron expression "${cronExpr}" has no future occurrences`);

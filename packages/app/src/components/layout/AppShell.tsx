@@ -26,8 +26,8 @@ import { RoomAvatarStack } from '@/components/layout/RoomAvatarStack'
 import { SplitResizeHandle } from '@/components/shared/SplitResizeHandle'
 import { useSplitResize } from '@/components/shared/splitPane'
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
-import { SettingsModal } from '@/components/settings/SettingsModal'
-import { MyAccountModal } from '@/components/account/MyAccountModal'
+import { SettingsModal, type WorkspaceSettingsSection } from '@/components/settings/SettingsModal'
+import { MyAccountModal, type AccountSection } from '@/components/account/MyAccountModal'
 import type { Chat, Artifact, InboxItem } from '@/data/ui-types'
 import { getArtifactIcon } from '@/data/ui-types'
 import { DRAG_TYPE_PINNED_ITEM } from '@/components/library/LibraryCard'
@@ -41,7 +41,7 @@ import {
 import { useAvatarUrl } from '@/hooks/use-avatar'
 import { toWorkspaceInfo } from '@/store/selectors/workspaces'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
-import { setPendingSettingsSection, type SettingsSection } from '@/store/slices/uiSlice'
+import { setPendingSettingsSection } from '@/store/slices/uiSlice'
 import {
   PREVIEW_MIN_CHAT_WIDTH,
   PREVIEW_MIN_PANEL_WIDTH,
@@ -180,7 +180,6 @@ interface AppShellProps {
   todaySheetOpen?: boolean
   onTodaySheetClose?: () => void
   onSignOut?: () => void
-  onChatWithAgent?: (agentId: string) => void
   pinnedEntries?: PinnedSidebarEntry[]
   isPinnedLoading?: boolean
   onPinItem?: (path: string) => void
@@ -210,7 +209,6 @@ export function AppShell({
   todaySheetOpen = false,
   onTodaySheetClose,
   onSignOut,
-  onChatWithAgent,
   pinnedEntries = [],
   isPinnedLoading = false,
   onPinItem,
@@ -237,15 +235,21 @@ export function AppShell({
   const [selectedTodayItem, setSelectedTodayItem] = useState<InboxItem | null>(null)
   const [focusTodayInput, setFocusTodayInput] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection | undefined>(undefined)
+  const [settingsInitialSection, setSettingsInitialSection] = useState<WorkspaceSettingsSection | undefined>(undefined)
   const [myAccountOpen, setMyAccountOpen] = useState(false)
+  const [myAccountInitialSection, setMyAccountInitialSection] = useState<AccountSection | undefined>(undefined)
 
   const appDispatch = useAppDispatch()
   const pendingSettingsSection = useAppSelector(s => s.ui.pendingSettingsSection)
   useEffect(() => {
     if (!pendingSettingsSection) return
-    setSettingsInitialSection(pendingSettingsSection)
-    setSettingsOpen(true)
+    if (pendingSettingsSection === 'workspace' || pendingSettingsSection === 'connections') {
+      setSettingsInitialSection(pendingSettingsSection)
+      setSettingsOpen(true)
+    } else {
+      setMyAccountInitialSection(pendingSettingsSection as AccountSection)
+      setMyAccountOpen(true)
+    }
     appDispatch(setPendingSettingsSection(null))
   }, [pendingSettingsSection, appDispatch])
 
@@ -530,7 +534,10 @@ export function AppShell({
                 username={me?.username}
                 email={me?.email}
                 userAvatarUrl={userAvatarUrl}
-                onOpenMyAccount={() => setMyAccountOpen(true)}
+                onOpenMyAccount={() => {
+                  setMyAccountInitialSection('account')
+                  setMyAccountOpen(true)
+                }}
                 onSignOut={onSignOut}
               />
             </RoomSidebarSlot>
@@ -629,7 +636,6 @@ export function AppShell({
             },
           })
         }}
-        onChatWithAgent={onChatWithAgent}
         onDeleteWorkspace={() => {
           void deleteWorkspaceMutation(activeWorkspace.id).then(() => {
             const next = workspaces.filter(w => w.id !== activeWorkspace.id)
@@ -641,6 +647,7 @@ export function AppShell({
       <MyAccountModal
         open={myAccountOpen}
         onOpenChange={setMyAccountOpen}
+        initialSection={myAccountInitialSection}
       />
 
       {/* ── Chat search command palette ── */}
@@ -735,4 +742,3 @@ export function AppShell({
     </div>
   )
 }
-

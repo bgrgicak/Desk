@@ -41,9 +41,9 @@ caller.
 | GET    | /workspaces/{id}                     | Get workspace                        |
 | PATCH  | /workspaces/{id}                     | Update workspace                     |
 | DELETE | /workspaces/{id}                     | Delete workspace                     |
-| GET    | /workspaces/{id}/agents              | List agents enrolled in workspace    |
-| POST   | /workspaces/{id}/agents              | Enroll an agent in the workspace     |
-| DELETE | /workspaces/{id}/agents/{agentId}    | Remove an agent from the workspace   |
+| GET    | /workspaces/{id}/agents              | List active models available in workspace |
+| POST   | /workspaces/{id}/agents              | Enroll a model in the workspace      |
+| DELETE | /workspaces/{id}/agents/{agentId}    | Remove a model from the workspace    |
 
 ### POST /workspaces
 
@@ -69,17 +69,19 @@ background; when empty the client falls back to a palette hash of the id.
 
 ## Agents
 
-| Method | Path          | Description                    |
-|--------|---------------|--------------------------------|
-| GET    | /agents       | List the current user's agents |
-| POST   | /agents       | Create a new agent             |
-| GET    | /agents/{id}  | Get agent                      |
-| PATCH  | /agents/{id}  | Update agent                   |
+| Method | Path            | Description                         |
+|--------|-----------------|-------------------------------------|
+| GET    | /agents         | List the current user's models      |
+| POST   | /agents         | Create a new model                  |
+| PUT    | /agents/order   | Replace the global model order      |
+| GET    | /agents/{id}    | Get model                           |
+| PATCH  | /agents/{id}    | Update name, model id, or active flag |
 
-Agents are user-owned. A chat can only reference an agent that has been
-enrolled in its workspace (via `POST /workspaces/{id}/agents`). Creating a
-chat requires an explicit `agentId`; the client picks the first enrolled
-agent by default and lets the user change it from the compose bar.
+Agents/models are user-owned and ordered globally. The first active model is
+the default for new workspaces/chats; subsequent active models are forwarded to
+the runtime as fallbacks. `PATCH /agents/{id}` accepts `{ enabled: boolean }`.
+`PUT /agents/order` accepts `{ ids: string[] }` and the array must include each
+of the user's model ids exactly once.
 
 ## Chats
 
@@ -283,12 +285,15 @@ present in the body are left untouched. Unknown names return 400.
 
 The set of known names is `CONNECTION_ENV_VARS` in `@agent-desk/shared`. In
 dev, model-provider values seed from the repo's `.env` once per user (gated by
-`DESK_DEV=1`); in prod, the UI is the only way to populate them. A saved
+`DESK_DEV=1`); in prod, the UI is the only way to populate them. Model
+provider keys are global user settings. Non-model sandbox credentials such as
+`GITHUB_TOKEN` are only forwarded to a workspace when that workspace has a
+`workspace_connector_grants` row for the saved connection. A granted
 `GITHUB_TOKEN` is forwarded into sandboxes as `GITHUB_TOKEN`/`GH_TOKEN`, and
 OpenCode runs prepare non-interactive HTTPS git auth via `GIT_ASKPASS`.
-For GitHub, the Settings UI currently guides users to create a classic personal
-access token with the `repo` scope, plus `workflow` when agents should edit
-GitHub Actions workflow files.
+For GitHub, Workspace Settings → Connections currently guides users to create a
+classic personal access token with the `repo` scope, plus `workflow` when agents
+should edit GitHub Actions workflow files.
 
 ### GET /me/providers/local
 
@@ -344,9 +349,11 @@ CRUD operations work the same way. File identifiers are
 workspace-root-relative paths (`foo.pdf`, `notes/bar.md`,
 `.memory/workspace.md`). The `path` query parameter is url-encoded.
 
-Connected local-filesystem mounts surface as top-level folder entries
-on the root listing (e.g. `Downloads`); drilling into them resolves
-through to the host directory transparently.
+Workspace-granted local-filesystem mounts surface as top-level folder
+entries on the root listing (e.g. `Downloads`); drilling into them
+resolves through to the host directory transparently. Active local
+filesystem connection rows without a grant are hidden from that
+workspace.
 
 ### Links (`POST /library/link`)
 

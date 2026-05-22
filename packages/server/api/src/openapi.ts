@@ -403,19 +403,29 @@ export function generateOpenApiSpec(): OpenApiSpec {
         },
       },
       "/agents": {
-        get: { summary: "List the current user's agents", responses: { "200": { description: "Agent array" } } },
+        get: { summary: "List the current user's agents", description: "Returned in global model order. Agent objects include `enabled` and `sortOrder`.", responses: { "200": { description: "Agent array" } } },
         post: {
           summary: "Create an agent",
           requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, model: { type: "string" } }, required: ["name"] } } } },
           responses: { "201": { description: "Created agent" } },
         },
       },
+      "/agents/order": {
+        put: {
+          summary: "Replace the current user's global agent order",
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { ids: { type: "array", items: { type: "string" } } }, required: ["ids"] } } } },
+          responses: {
+            "200": { description: "Updated ordered agent array" },
+            "400": { description: "Order must include each owned agent exactly once" },
+          },
+        },
+      },
       "/agents/{id}": {
         get: { summary: "Get agent", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Agent" } } },
         patch: {
-          summary: "Update agent (name, model)",
+          summary: "Update agent (name, model, enabled)",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          requestBody: { content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, model: { type: "string" } } } } } },
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, model: { type: "string" }, enabled: { type: "boolean" } } } } } },
           responses: { "200": { description: "Updated agent" } },
         },
         delete: {

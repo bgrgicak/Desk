@@ -21,8 +21,19 @@
 
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import * as fsSync from "node:fs";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { Engine } from "./engine.js";
-import { readPiJsonEvents, translatePiEvent, type TranslateContext } from "./piEvents.js";
+import {
+  type PiJsonEvent,
+  readPiJsonEvents,
+  terminalAssistantMessage,
+  translatePiEvent,
+  translateTerminalAssistantText,
+  type TerminalAssistantMessage,
+  type TranslateContext,
+} from "./piEvents.js";
 import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("runtime/piClient");
 
@@ -38,10 +49,23 @@ export interface PiRunOptions {
    * turns, so subsequent turns automatically resume the prior context.
    */
   sessionId: string;
+  /**
+   * Host path to the bind-mounted pi session directory. Pi sometimes
+   * persists the terminal assistant message there without echoing the
+   * terminal event on stdout, leaving the CLI wrapper alive with MCP
+   * children. Watching this path lets Desk finish the run as soon as the
+   * authoritative session record says the turn is done.
+   */
+  hostSessionDir?: string;
   /** Provider id (anthropic, openai, openrouter, …). When omitted pi picks its default. */
   provider?: string;
   /** Model id (with or without provider prefix). When omitted pi picks its default. */
   model?: string;
+  /**
+   * Ordered model scope passed to pi's `--models` flag. Pi owns switching
+   * within this list; Desk only supplies the active global ordering.
+   */
+  models?: string[];
   /**
    * Env forwarded to pi. Provider keys (ANTHROPIC_API_KEY, …) land here.
    * Per-run env (sandbox token, DESK_API_URL) are also forwarded.
@@ -66,6 +90,8 @@ export interface PiRunResult {
   exitCode: number;
   /** True when cancel() ran (either via abort signal or external cancelRun). */
   aborted: boolean;
+  /** Runtime model id from pi's terminal assistant message, when available. */
+  model?: string;
 }
 
 /**
@@ -79,6 +105,21 @@ export interface PiHandle {
   done: Promise<PiRunResult>;
   cancel(): Promise<void>;
 }
+
+interface PiDrainState {
+  sawTextDelta: boolean;
+  pending: Promise<unknown>[];
+}
+
+interface PiSessionTerminalWatcher {
+  done: Promise<void>;
+  stop(): void;
+}
+
+type PiChildProcess = ReturnType<typeof spawn> & {
+  stdout: NodeJS.ReadableStream;
+  stderr: NodeJS.ReadableStream;
+};
 
 /**
  * Spawns pi as a foreground exec inside the container and returns a
@@ -173,29 +214,73 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
     "sh", "-c", shellScript,
   ];
 
-  const child = spawn(engine.name, dockerArgv, { stdio: ["ignore", "pipe", "pipe"] });
+  const drainState: PiDrainState = { sawTextDelta: false, pending: [] };
   let aborted = false;
   let killScheduled = false;
+  let terminalExitCode: number | undefined;
+  let terminalModel: string | undefined;
+  let terminalCleanupKillScheduled = false;
+  const child = spawn(engine.name, dockerArgv, { stdio: ["ignore", "pipe", "pipe"] }) as PiChildProcess;
 
+  const scheduleTerminalCleanupKill = () => {
+    if (terminalCleanupKillScheduled) return;
+    terminalCleanupKillScheduled = true;
+    setTimeout(() => {
+      try { child.kill("SIGTERM"); } catch {/* noop */}
+      void cleanupPiInvocation(engine, opts, agentDir);
+      setTimeout(() => {
+        try { child.kill("SIGKILL"); } catch {/* noop */}
+        void cleanupPiInvocation(engine, opts, agentDir, "KILL");
+      }, 2000).unref();
+    }, 100).unref();
+  };
+
+  const handleTerminal = (terminal: TerminalAssistantMessage) => {
+    terminalExitCode ??= terminal.exitCode;
+    if (terminal.model) {
+      terminalModel = `${terminal.model.providerID}/${terminal.model.modelID}`;
+    }
+    scheduleTerminalCleanupKill();
+  };
+  const sessionWatcher = opts.hostSessionDir
+    ? watchPiSessionTerminal(opts.hostSessionDir, (evt) => {
+        processPiJsonEvent(evt, opts, drainState, handleTerminal);
+      })
+    : null;
   const stderrPromise = drainStderr(child.stderr, opts.onStderr);
-  const stdoutPromise = drainStdoutEvents(child.stdout, opts);
+  const stdoutPromise = drainStdoutEvents(child.stdout, opts, drainState, handleTerminal);
 
   const done = new Promise<PiRunResult>((resolve) => {
     child.on("exit", async (code, signal) => {
+      sessionWatcher?.stop();
       try {
-        await Promise.all([stdoutPromise, stderrPromise]);
+        await Promise.all([
+          stdoutPromise,
+          stderrPromise,
+          ...(sessionWatcher ? [sessionWatcher.done] : []),
+          ...drainState.pending,
+        ]);
       } catch (err) {
         log.warn({ err: (err as Error)?.message }, "piClient: drain failed");
       }
-      const exitCode = typeof code === "number" ? code : signal ? 130 : 1;
-      resolve({ exitCode, aborted });
+      await cleanupPiInvocation(engine, opts, agentDir).catch((err) => {
+        log.warn({ err: (err as Error)?.message }, "piClient: cleanup failed");
+      });
+      const exitCode = terminalExitCode ?? (typeof code === "number" ? code : signal ? 130 : 1);
+      resolve({ exitCode, aborted, ...(terminalModel ? { model: terminalModel } : {}) });
     });
     child.on("error", async (err) => {
+      sessionWatcher?.stop();
       try {
-        await Promise.all([stdoutPromise, stderrPromise]);
+        await Promise.all([
+          stdoutPromise,
+          stderrPromise,
+          ...(sessionWatcher ? [sessionWatcher.done] : []),
+          ...drainState.pending,
+        ]);
       } catch {/* noop */}
       await opts.onStderr(`pi spawn failed: ${err.message}`);
-      resolve({ exitCode: 1, aborted });
+      resolve({ exitCode: 1, aborted, ...(terminalModel ? { model: terminalModel } : {}) });
     });
   });
 
@@ -207,20 +292,43 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
     // a best-effort in-container pkill brings it down so the next turn
     // doesn't race against a zombie.
     try { child.kill("SIGTERM"); } catch {/* noop */}
+    void cleanupPiInvocation(engine, opts, agentDir);
     setTimeout(() => {
       try { child.kill("SIGKILL"); } catch {/* noop */}
+      void cleanupPiInvocation(engine, opts, agentDir, "KILL");
     }, 2000).unref();
-    try {
-      const killHandle = await engine.exec({
-        containerId: opts.containerId,
-        user: opts.user,
-        cmd: ["sh", "-c", "pkill -TERM -f 'pi ' 2>/dev/null || true; sleep 0.5; pkill -KILL -f 'pi ' 2>/dev/null || true; exit 0"],
-      });
-      await killHandle.wait();
-    } catch {/* best-effort */}
   };
 
   return { containerId: opts.containerId, done, cancel };
+}
+
+async function cleanupPiInvocation(
+  engine: Engine,
+  opts: PiRunOptions,
+  agentDir: string,
+  signal: "TERM" | "KILL" = "TERM",
+): Promise<void> {
+  const script = [
+    "set +e",
+    "targets=''",
+    "for envfile in /proc/[0-9]*/environ; do",
+    "  pid=${envfile#/proc/}; pid=${pid%/environ}",
+    "  if tr '\\0' '\\n' < \"$envfile\" 2>/dev/null | grep -Fxq \"PI_CODING_AGENT_DIR=$PI_TARGET_AGENT_DIR\"; then",
+    "    targets=\"$targets $pid\"",
+    "  fi",
+    "done",
+    "if [ -n \"$targets\" ]; then",
+    `  kill -${signal} $targets 2>/dev/null || true`,
+    "fi",
+    "exit 0",
+  ].join("\n");
+  const cleanup = await engine.exec({
+    containerId: opts.containerId,
+    user: opts.user,
+    env: [`PI_TARGET_AGENT_DIR=${agentDir}`],
+    cmd: ["sh", "-c", script],
+  });
+  await cleanup.wait();
 }
 
 /** POSIX-quote `s` for safe inclusion inside `sh -c '…'`. */
@@ -246,6 +354,7 @@ function buildPiArgv(opts: PiRunOptions): string[] {
   }
   if (opts.provider) argv.push("--provider", opts.provider);
   if (opts.model) argv.push("--model", opts.model);
+  if (opts.models?.length) argv.push("--models", opts.models.join(","));
   argv.push(opts.prompt);
   return argv;
 }
@@ -253,21 +362,238 @@ function buildPiArgv(opts: PiRunOptions): string[] {
 async function drainStdoutEvents(
   stdout: NodeJS.ReadableStream,
   opts: PiRunOptions,
+  state: PiDrainState,
+  onTerminal?: (message: TerminalAssistantMessage) => void,
 ): Promise<void> {
-  const pending: Promise<unknown>[] = [];
   for await (const evt of readPiJsonEvents(stdout as unknown as AsyncIterable<Uint8Array>, {
     onParseError: (raw, err) => {
       void opts.onStderr(`pi: unparseable JSON event: ${raw.slice(0, 200)} (${(err as Error).message})`);
     },
   })) {
-    for (const line of translatePiEvent(evt, opts.translate)) {
-      const ret = opts.onEvent(line);
-      if (ret && typeof (ret as Promise<unknown>).then === "function") {
-        pending.push((ret as Promise<unknown>).catch(() => {}));
+    processPiJsonEvent(evt, opts, state, onTerminal);
+  }
+}
+
+function processPiJsonEvent(
+  evt: PiJsonEvent,
+  opts: PiRunOptions,
+  state: PiDrainState,
+  onTerminal?: (message: TerminalAssistantMessage) => void,
+): void {
+  const translated = translatePiEvent(evt, opts.translate);
+  if (translated.some((line) => {
+    try {
+      return (JSON.parse(line) as { type?: unknown }).type === "text";
+    } catch {
+      return false;
+    }
+  })) {
+    state.sawTextDelta = true;
+  }
+  const terminal = terminalAssistantMessage(evt);
+  if (terminal) {
+    if (terminal.errorMessage) {
+      trackAsync(state, opts.onStderr(terminal.errorMessage));
+    } else if (!state.sawTextDelta) {
+      translated.push(...translateTerminalAssistantText(evt, opts.translate));
+      state.sawTextDelta = terminal.text.length > 0;
+    }
+    onTerminal?.(terminal);
+  }
+  for (const line of translated) {
+    trackAsync(state, opts.onEvent(line));
+  }
+}
+
+function trackAsync(state: PiDrainState, ret: void | Promise<void>): void {
+  if (ret && typeof (ret as Promise<unknown>).then === "function") {
+    state.pending.push((ret as Promise<unknown>).catch(() => {}));
+  }
+}
+
+export function watchPiSessionTerminal(
+  sessionDir: string,
+  onTerminalEvent: (evt: PiJsonEvent) => void | Promise<void>,
+  opts: {
+    pollMs?: number;
+    successGraceMs?: number;
+    errorGraceMs?: number;
+  } = {},
+): PiSessionTerminalWatcher {
+  const pollMs = opts.pollMs ?? 250;
+  const successGraceMs = opts.successGraceMs ?? 250;
+  const errorGraceMs = opts.errorGraceMs
+    ?? parseInt(process.env.DESK_PI_TERMINAL_ERROR_GRACE_MS ?? "12000", 10);
+  const offsets = new Map<string, number>();
+  let stopped = false;
+  let timer: NodeJS.Timeout | null = null;
+  let polling = false;
+  let pendingTerminal: { evt: PiJsonEvent; dueAt: number } | null = null;
+  let resolveDone: () => void = () => {};
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve;
+  });
+
+  const stop = (): void => {
+    if (stopped) return;
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    timer = null;
+    resolveDone();
+  };
+
+  const emit = async (evt: PiJsonEvent): Promise<void> => {
+    if (stopped) return;
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    timer = null;
+    try {
+      await onTerminalEvent(evt);
+    } finally {
+      resolveDone();
+    }
+  };
+
+  const schedule = (): void => {
+    if (stopped || polling) return;
+    timer = setTimeout(() => {
+      timer = null;
+      void poll();
+    }, pollMs);
+    timer.unref?.();
+  };
+
+  const poll = async (): Promise<void> => {
+    if (stopped || polling) return;
+    polling = true;
+    try {
+      const now = Date.now();
+      const files = await listJsonlFiles(sessionDir);
+      for (const file of files) {
+        const stat = await fs.stat(file).catch(() => null);
+        if (!stat) continue;
+        const prev = offsets.get(file) ?? 0;
+        const offset = stat.size < prev ? 0 : prev;
+        offsets.set(file, stat.size);
+        if (stat.size <= offset) continue;
+        const chunk = await readFileSlice(file, offset, stat.size - offset).catch(() => "");
+        for (const line of chunk.split(/\r?\n/)) {
+          const evt = parseSessionJsonLine(line);
+          if (!evt) continue;
+          const terminal = terminalAssistantMessage(evt);
+          if (!terminal) {
+            // A later event means pi is still active after a transient
+            // error record, so let its own retry loop continue.
+            if (pendingTerminal?.evt && isErrorTerminal(pendingTerminal.evt)) {
+              pendingTerminal = null;
+            }
+            continue;
+          }
+          const graceMs = terminal.exitCode === 0 ? successGraceMs : errorGraceMs;
+          pendingTerminal = { evt, dueAt: Date.now() + graceMs };
+        }
+      }
+      if (pendingTerminal && now >= pendingTerminal.dueAt) {
+        await emit(pendingTerminal.evt);
+        return;
+      }
+    } catch (err) {
+      log.warn({ err: (err as Error)?.message, sessionDir }, "piClient: session terminal watcher failed");
+      stop();
+      return;
+    } finally {
+      polling = false;
+    }
+    schedule();
+  };
+
+  for (const file of listJsonlFilesSync(sessionDir)) {
+    const stat = safeStatSync(file);
+    if (stat) offsets.set(file, stat.size);
+  }
+  schedule();
+
+  return { done, stop };
+}
+
+function isErrorTerminal(evt: PiJsonEvent): boolean {
+  const terminal = terminalAssistantMessage(evt);
+  return terminal?.exitCode === 1;
+}
+
+async function listJsonlFiles(dir: string): Promise<string[]> {
+  const out: string[] = [];
+  async function walk(current: string): Promise<void> {
+    const entries = await fs.readdir(current, { withFileTypes: true }).catch((err: NodeJS.ErrnoException) => {
+      if (err.code === "ENOENT") return [];
+      throw err;
+    });
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full);
+      } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+        out.push(full);
       }
     }
   }
-  if (pending.length > 0) await Promise.all(pending);
+  await walk(dir);
+  return out.sort();
+}
+
+function listJsonlFilesSync(dir: string): string[] {
+  const out: string[] = [];
+  function walk(current: string): void {
+    let entries: fsSync.Dirent[];
+    try {
+      entries = fsSync.readdirSync(current, { withFileTypes: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw err;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+        out.push(full);
+      }
+    }
+  }
+  walk(dir);
+  return out.sort();
+}
+
+function safeStatSync(file: string): fsSync.Stats | null {
+  try {
+    return fsSync.statSync(file);
+  } catch {
+    return null;
+  }
+}
+
+async function readFileSlice(file: string, start: number, length: number): Promise<string> {
+  const handle = await fs.open(file, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, start);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+function parseSessionJsonLine(line: string): PiJsonEvent | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return parsed && typeof parsed === "object" && typeof (parsed as { type?: unknown }).type === "string"
+      ? parsed as PiJsonEvent
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 async function drainStderr(

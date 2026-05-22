@@ -24,6 +24,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import * as path from "node:path";
 import { SANDBOX_HOME, type MountPlan } from "./mounts.js";
 import { managedConnectionDefinitions } from "@agent-desk/shared";
 import { connectionEnvNames } from "./docker.js";
@@ -71,6 +72,11 @@ export interface RunOptions {
    */
   model?: string;
   /**
+   * Ordered fallback model ids. The driver passes the primary plus these
+   * fallbacks to pi as its model scope; pi owns any model switching.
+   */
+  modelFallbacks?: string[];
+  /**
    * Provider API keys forwarded into the pi process env. Per-turn, so a
    * provider change in Settings reaches the next turn without any
    * supervisor restart.
@@ -102,6 +108,8 @@ export interface ExecResult {
    * Always populated unless the run failed before pi was invoked.
    */
   opencodeSessionId?: string;
+  /** Runtime model id that handled the successful attempt, or the last failed attempt. */
+  model?: string;
 }
 
 export interface SandboxDriver {
@@ -146,6 +154,7 @@ function createFakeDriver(): SandboxDriver {
       return {
         exitCode: 0,
         opencodeSessionId: opts.opencodeSessionId ?? `fake_session_${runId}`,
+        model: opts.model,
       };
     },
 
@@ -178,6 +187,26 @@ export function parseModelSpec(model: string): { providerID?: string; modelID: s
     providerID: provider === "codex" ? "openai-codex" : provider,
     modelID: model.slice(slash + 1),
   };
+}
+
+export function modelAttemptSpecs(
+  model?: string,
+  modelFallbacks?: string[],
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of [model, ...(modelFallbacks ?? [])]) {
+    const trimmed = candidate?.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+export function piModelReference(model: string): string {
+  const parsed = parseModelSpec(model);
+  return parsed.providerID ? `${parsed.providerID}/${parsed.modelID}` : parsed.modelID;
 }
 
 /**
@@ -237,19 +266,6 @@ function createRealDriver(): SandboxDriver {
           opts.extraEnv,
         );
 
-      // createOrReuse can throw with a container-gone error if the
-      // container is removed during its waitForEntrypointReady poll
-      // (reaper / drift recreate / parallel fire / rm -f). A single
-      // retry covers the race; persistent failures still bubble up.
-      let handle: Awaited<ReturnType<typeof acquireHandle>>;
-      try {
-        handle = await acquireHandle();
-      } catch (err) {
-        const msg = (err as Error).message ?? String(err);
-        if (!isContainerGoneError(msg)) throw err;
-        handle = await acquireHandle();
-      }
-
       const user = await sandboxUser(engine);
       const piEnv = buildPiEnv({
         providerKeys: opts.providerKeys,
@@ -257,14 +273,32 @@ function createRealDriver(): SandboxDriver {
         apiUrl: opts.apiUrl,
       });
 
-      // Write the per-run sandbox token to the fixed in-container path
-      // before invoking pi. The in-sandbox `desk-agent` CLI reads from
-      // this path when DESK_SANDBOX_TOKEN isn't set in its env.
-      if (opts.sandboxToken) {
-        await writeSandboxTokenFile(engine, handle.containerId, user, opts.sandboxToken).catch(
-          (err) => log.warn({ runId: opts.runId, err: (err as Error)?.message }, "sandbox token write failed"),
-        );
-      }
+      const acquireReadyHandle = async (): Promise<Awaited<ReturnType<typeof acquireHandle>>> => {
+        // createOrReuse can throw with a container-gone error if the
+        // container is removed during its waitForEntrypointReady poll
+        // (reaper / drift recreate / parallel fire / rm -f). A single
+        // retry covers the race; persistent failures still bubble up.
+        let nextHandle: Awaited<ReturnType<typeof acquireHandle>>;
+        try {
+          nextHandle = await acquireHandle();
+        } catch (err) {
+          const msg = (err as Error).message ?? String(err);
+          if (!isContainerGoneError(msg)) throw err;
+          nextHandle = await acquireHandle();
+        }
+
+        // Write the per-run sandbox token to the fixed in-container path
+        // before invoking pi. The in-sandbox `desk-agent` CLI reads from
+        // this path when DESK_SANDBOX_TOKEN isn't set in its env.
+        if (opts.sandboxToken) {
+          await writeSandboxTokenFile(engine, nextHandle.containerId, user, opts.sandboxToken).catch(
+            (err) => log.warn({ runId: opts.runId, err: (err as Error)?.message }, "sandbox token write failed"),
+          );
+        }
+        return nextHandle;
+      };
+
+      const handle = await acquireReadyHandle();
 
       const sessionId = opts.opencodeSessionId ?? opts.chatId ?? randomUUID();
 
@@ -277,11 +311,10 @@ function createRealDriver(): SandboxDriver {
         }
       };
 
-      // Single-attempt: pi runs once with the configured model. Provider-
-      // shaped failures (rate limit, no-auth, etc.) surface directly so
-      // the user can act on them, rather than being papered over by a
-      // Desk-side fallback cascade.
-      const parsed = opts.model ? parseModelSpec(opts.model) : { providerID: undefined, modelID: undefined };
+      const modelScope = modelAttemptSpecs(opts.model, opts.modelFallbacks)
+        .map(piModelReference);
+      const primaryModel = modelScope[0];
+      const parsed = primaryModel ? parseModelSpec(primaryModel) : { providerID: undefined, modelID: undefined };
       const { providerID, modelID } = parsed;
 
       try {
@@ -290,8 +323,12 @@ function createRealDriver(): SandboxDriver {
           user,
           cwd: SANDBOX_HOME,
           sessionId,
+          hostSessionDir: opts.home
+            ? path.join(opts.home, opts.workspaceSlug, ".pi", "agent", "sessions", sessionId)
+            : undefined,
           provider: providerID,
           model: modelID,
+          models: modelScope.length > 0 ? modelScope : undefined,
           env: piEnv,
           prompt: buildPiPrompt({ prompt: opts.prompt, attachments: opts.attachments }),
           onEvent: (line) => emitLog("event", line),
@@ -305,13 +342,14 @@ function createRealDriver(): SandboxDriver {
           },
         });
         activeRuns.set(opts.runId, { containerId: handle.containerId, sessionId, handle: piHandle });
-        const lastResult = await piHandle.done;
+        const result = await piHandle.done;
         activeRuns.delete(opts.runId);
-
+        const exitCode = result.aborted ? 130 : result.exitCode;
         await Promise.all(pendingLogs);
         return {
-          exitCode: lastResult.aborted ? 130 : lastResult.exitCode,
+          exitCode,
           opencodeSessionId: sessionId,
+          model: result.model ?? primaryModel,
         };
       } finally {
         activeRuns.delete(opts.runId);

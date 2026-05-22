@@ -87,7 +87,7 @@ export async function writeAgentFile(
  * workspace `enable_playwright` setting — not a list of every goal that
  * *might* occasionally want it.
  */
-const BROWSER_GOALS: ReadonlySet<GoalKey> = new Set(["site", "app"]);
+const BROWSER_GOALS: ReadonlySet<GoalKey> = new Set(["site", "app", "search"]);
 
 export function chatNeedsBrowser(goal: GoalKey | null | undefined): boolean {
   if (!goal) return false;

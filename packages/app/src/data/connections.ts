@@ -10,6 +10,12 @@ export type ConnectionKind =
   | 'claude' | 'chatgpt' | 'codex'
   | 'notion' | 'github' | 'slack' | 'figma' | 'linear' | 'web-clipper' | typeof LOCAL_FILESYSTEM_CONNECTION_KIND
 
+export const MODEL_CONNECTION_KINDS = ['claude', 'chatgpt', 'codex'] as const satisfies readonly ConnectionKind[]
+
+export function isModelConnectionKind(kind: ConnectionKind): boolean {
+  return (MODEL_CONNECTION_KINDS as readonly string[]).includes(kind)
+}
+
 export interface ConnectionMeta {
   name: string
   description: string
@@ -77,8 +83,19 @@ export const CONNECTOR_PROVIDER_BY_KIND: Partial<Record<ConnectionKind, string>>
   [LOCAL_FILESYSTEM_CONNECTION_KIND]: LOCAL_FILESYSTEM_PROVIDER_ID,
 }
 
+export const WORKSPACE_CONNECTION_PROVIDER_BY_KIND: Partial<Record<ConnectionKind, string>> = {
+  ...CONNECTOR_PROVIDER_BY_KIND,
+  ...(PROVIDER_KEY_BY_KIND.github ? { github: PROVIDER_KEY_BY_KIND.github } : {}),
+}
+
+export function workspaceConnectionProviderForKind(kind: ConnectionKind): string | undefined {
+  if (isModelConnectionKind(kind)) return undefined
+  return WORKSPACE_CONNECTION_PROVIDER_BY_KIND[kind]
+}
+
 export function allowsMultipleConnections(kind: ConnectionKind): boolean {
   if (kind === LOCAL_FILESYSTEM_CONNECTION_KIND) return false
+  if (WORKSPACE_CONNECTION_PROVIDER_BY_KIND[kind] !== undefined) return false
   return CONNECTOR_PROVIDER_BY_KIND[kind] !== undefined
 }
 
@@ -112,5 +129,7 @@ export interface Connection {
   kind: ConnectionKind
   name: string
   enabled: boolean
+  connectionId?: string
+  providerId?: string
   externalAccountId?: string
 }

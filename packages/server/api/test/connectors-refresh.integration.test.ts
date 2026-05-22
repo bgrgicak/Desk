@@ -164,6 +164,17 @@ async function makeChatWithSession(sessionId: string): Promise<string> {
   return chatId;
 }
 
+async function grantDefaultConnectionToWorkspace(providerId: string): Promise<void> {
+  const listed = await request("GET", `/me/connections?providerId=${encodeURIComponent(providerId)}`, token);
+  const connection = (listed.body.connections as Array<{ id: string; providerId: string; isDefault: boolean }>).find((c) => c.isDefault)
+    ?? listed.body.connections[0];
+  expect(connection).toBeDefined();
+  const granted = await request("PUT", `/workspaces/${workspaceId}/connections`, token, {
+    grants: [{ connectionId: connection.id, providerId, grantedCapabilities: [], isDefault: true }],
+  });
+  expect(granted.status).toBe(200);
+}
+
 /** A tiny WS-like collector that the registry will treat as an open socket. */
 class CapturingWs {
   readyState = 1;
@@ -313,20 +324,30 @@ describe("connection-mutation refresh wiring", () => {
  *     broadcast).
  */
 describe("legacy /me/providers — sandbox env propagation", () => {
-  it("makes GITHUB_TOKEN visible to resolveProviderKeys after PUT /me/providers", async () => {
+  it("keeps GITHUB_TOKEN workspace-local until the workspace grants the saved connection", async () => {
     const put = await request("PUT", "/me/providers", token, {
       providers: { GITHUB_TOKEN: "ghp_legacy_resolves" },
     });
     expect(put.status).toBe(200);
+    const oldGlobalDisable = await request("PUT", "/me/providers/meta", token, {
+      meta: { GITHUB_TOKEN: { enabled: false } },
+    });
+    expect(oldGlobalDisable.status).toBe(200);
 
-    const resolved = await resolveProviderKeys(pool, vault, userId, workspaceId);
-    expect(resolved.GITHUB_TOKEN).toBe("ghp_legacy_resolves");
+    const beforeGrant = await resolveProviderKeys(pool, vault, userId, workspaceId);
+    expect(beforeGrant.GITHUB_TOKEN).toBeUndefined();
+
+    await grantDefaultConnectionToWorkspace("GITHUB_TOKEN");
+
+    const afterGrant = await resolveProviderKeys(pool, vault, userId, workspaceId);
+    expect(afterGrant.GITHUB_TOKEN).toBe("ghp_legacy_resolves");
   });
 
   it("buildDaemonEnv mirrors GITHUB_TOKEN to the GH_TOKEN alias the GitHub CLI reads", async () => {
     await request("PUT", "/me/providers", token, {
       providers: { GITHUB_TOKEN: "ghp_alias_value" },
     });
+    await grantDefaultConnectionToWorkspace("GITHUB_TOKEN");
 
     const providerKeys = await resolveProviderKeys(pool, vault, userId, workspaceId);
     const env = buildDaemonEnv({ providerKeys });
