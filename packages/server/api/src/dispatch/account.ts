@@ -76,7 +76,8 @@ export async function dispatchAccount(
     return true;
   }
   if (path === "/auth/signup-status" && method === "GET") {
-    sendJson(res, 200, { enabled: authRoutes.isSignupEnabled() });
+    const { available, firstRun } = await authRoutes.isSignupAvailable(pool);
+    sendJson(res, 200, { enabled: available, firstRun });
     return true;
   }
   if (path === "/auth/logout" && method === "POST") {

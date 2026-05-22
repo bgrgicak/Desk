@@ -27,7 +27,7 @@ async function openModelsTab(page: import("@playwright/test").Page) {
 }
 
 async function openGitHubConnection(page: import("@playwright/test").Page) {
-  await page.getByRole("button", { name: /Customize/ }).click();
+  await page.getByRole("button", { name: /Settings/ }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Connections$/i }).click();
   await dialog.getByRole("button", { name: "Add", exact: true }).click();

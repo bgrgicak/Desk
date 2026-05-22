@@ -88,7 +88,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/auth/signup": {
         post: {
           summary: "Register a new user",
-          description: "Disabled by default. Operators opt in via the DESK_ENABLE_SIGNUP=1 env var; otherwise this endpoint returns 400 and the SPA hides the link. When enabled, creates a user row, bootstraps a hub workspace, sets up the per-user vault if DESK_VAULT_PASSWORD is set, and returns a session token. Rate-limited per IP (5/minute).",
+          description: "Disabled by default. Operators opt in via the DESK_ENABLE_SIGNUP=1 env var; otherwise this endpoint returns 400 and the SPA hides the link. The SPA's signup wizard collects account, optional first room, and (optionally) a vault password across local steps and submits them in a single request — nothing is written until the user finishes the wizard, which prevents an abandoned signup from leaving an orphan user that locks the username space. The server creates the user row, mints a session, bootstraps a hub workspace, optionally creates the first room, and optionally sets up the per-user vault. Vault-setup failure rolls back the user (so the wizard can be retried with the same credentials); first-room failure is best-effort and keeps the account. Rate-limited per IP (5/minute).",
           security: [],
           requestBody: {
             required: true,
@@ -100,6 +100,19 @@ export function generateOpenApiSpec(): OpenApiSpec {
                     username: { type: "string", description: "3–32 chars: letters, digits, underscore, dash" },
                     email: { type: "string", format: "email" },
                     password: { type: "string", description: "≥ 12 chars; must not equal the documented seed password" },
+                    vaultPassword: {
+                      type: "string",
+                      description: "Optional. When present, sets up the per-user vault inline with the signup. Same policy as the account password: ≥ 12 chars, rejects the seed password. Omit to skip vault setup (the VaultDialog owns first-time setup later).",
+                    },
+                    workspace: {
+                      type: "object",
+                      description: "Optional first room created alongside the hub. Empty-name objects are treated as 'skip'. Best-effort: a slug collision on this workspace does not roll back the account.",
+                      properties: {
+                        name: { type: "string" },
+                        description: { type: "string" },
+                        color: { type: "string" },
+                      },
+                    },
                   },
                   required: ["username", "email", "password"],
                 },
@@ -126,8 +139,11 @@ export function generateOpenApiSpec(): OpenApiSpec {
                 "application/json": {
                   schema: {
                     type: "object",
-                    properties: { enabled: { type: "boolean" } },
-                    required: ["enabled"],
+                    properties: {
+                      enabled: { type: "boolean" },
+                      firstRun: { type: "boolean" },
+                    },
+                    required: ["enabled", "firstRun"],
                   },
                 },
               },

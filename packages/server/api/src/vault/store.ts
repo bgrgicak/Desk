@@ -193,6 +193,19 @@ export class VaultStore {
     }
   }
 
+  /**
+   * Locks the vault and deletes its on-disk KDBX file. Used by the
+   * signup endpoint to roll back a partial account creation when a
+   * later step fails — the unwanted vault must not survive past the
+   * failed signup, or the next attempt with the same username would
+   * land on a vault we don't have the password to.
+   */
+  async destroy(userId: string): Promise<void> {
+    this.lock(userId);
+    const p = this.vaultPath(userId);
+    await fs.rm(p, { force: true });
+  }
+
   isLocked(userId: string): boolean {
     return !this.unlocked.has(userId);
   }

@@ -514,6 +514,28 @@ export function createApp(opts: AppOptions): Server {
       return;
     }
 
+    // Preview-list using a candidate API key the user is typing in the
+    // add-model form — no vault write. Lets the model picker populate
+    // dynamically once the user enters their key, before they commit by
+    // saving the model.
+    if (path === "/tools/models/preview" && method === "POST") {
+      const body = await parseBody(req) as {
+        provider?: string;
+        providerKeys?: Record<string, unknown>;
+      };
+      const providerKeys: Record<string, string> = {};
+      for (const [name, value] of Object.entries(body.providerKeys ?? {})) {
+        if (typeof value === "string") providerKeys[name] = value;
+      }
+      const result = await toolRoutes.previewModels(pool, {
+        provider: body.provider,
+        providerKeys,
+        userId,
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+
     // Search
     if (path === "/search" && method === "GET") {
       const q = query.get("q") ?? "";

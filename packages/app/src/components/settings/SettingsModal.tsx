@@ -129,6 +129,7 @@ import { roomColor } from '@/components/rooms/roomColor'
 import { isVaultLockedError } from '@/lib/api-error'
 import { useAppDispatch } from '@/store/hooks'
 import { openVaultDialog } from '@/store/slices/uiSlice'
+import type { ConnectionsFocus as RouterConnectionsFocus } from '@/router/nav'
 
 // ── Brand marks ─────────────────────────────────────────────────────────────
 
@@ -1238,9 +1239,13 @@ interface SettingsModalProps {
   canDeleteWorkspace: boolean
   onUpdateWorkspace: (ws: WorkspaceInfo) => void
   onDeleteWorkspace: () => void
-  /** Optional section to focus when the modal opens. Re-applied on every
-   * open so deep-links from the global palette land on the right page. */
-  initialSection?: WorkspaceSettingsSection
+  /** Active settings section. Controlled — the parent owns this so the URL
+   * can be the source of truth for the open page. */
+  activeSection: WorkspaceSettingsSection
+  onChangeSection: (next: WorkspaceSettingsSection) => void
+  /** Connections sub-state (picker / new / edit). Null means the list view. */
+  connectionsFocus: RouterConnectionsFocus
+  onChangeConnectionsFocus: (next: RouterConnectionsFocus) => void
 }
 
 export function SettingsModal({
@@ -1250,16 +1255,15 @@ export function SettingsModal({
   canDeleteWorkspace,
   onUpdateWorkspace,
   onDeleteWorkspace,
-  initialSection,
+  activeSection,
+  onChangeSection,
+  connectionsFocus: connectionsFocusProp,
+  onChangeConnectionsFocus,
 }: SettingsModalProps) {
-  const [activeSection, setActiveSection] = useState<WorkspaceSettingsSection>(initialSection ?? 'workspace')
+  const setActiveSection = onChangeSection
   const isCompactViewport = useCompactViewport()
   const dispatch = useAppDispatch()
   const workspaceIconUrl = useWorkspaceIconUrl(workspace.id)
-
-  useEffect(() => {
-    if (open && initialSection) setActiveSection(initialSection)
-  }, [open, initialSection])
 
   // ── Connections state ─────────────────────────────────────────────────────
   // The connection list merges legacy API-key providers, generic
@@ -1323,7 +1327,20 @@ export function SettingsModal({
   // workspace without disabling the user's global model providers.
   const connectionsView = workspaceConnections
 
-  const [connectionsFocus, setConnectionsFocus]               = useState<ConnectionsFocus>(null)
+  // Validate the URL-derived focus against the known connection
+  // catalog. An unrecognised kind (e.g. someone hand-edited the URL or
+  // a kind that has since been removed) falls back to the list view
+  // instead of throwing on `CONNECTION_CATALOG[kind].name`.
+  const connectionsFocus: ConnectionsFocus = useMemo(() => {
+    const focus = connectionsFocusProp
+    if (!focus) return null
+    if (focus.mode === 'new') {
+      if (!(focus.kind in CONNECTION_CATALOG)) return null
+      return { mode: 'new', kind: focus.kind as ConnectionKind }
+    }
+    return focus
+  }, [connectionsFocusProp])
+  const setConnectionsFocus = onChangeConnectionsFocus
   const [connectionsSearch, setConnectionsSearch]             = useState('')
   const [connectionsStatusFilter, setConnectionsStatusFilter] = useState<StatusFilter>('all')
 

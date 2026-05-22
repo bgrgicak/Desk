@@ -1,39 +1,21 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { Button, Input } from '@agent-desk/ui'
 import { setSessionToken } from '@/auth/session'
+import { BackgroundBlobs } from '@/components/layout/BackgroundBlobs'
 
 interface LoginScreenProps {
+  // The signup-status probe lives in UnauthenticatedRoot so it can
+  // pick the initial screen (signup vs login) before mount. LoginScreen
+  // is handed the result so it doesn't duplicate the fetch.
+  signupEnabled?: boolean
   onSignUp?: () => void
 }
 
-export function LoginScreen({ onSignUp }: LoginScreenProps = {}) {
-  const [signupEnabled, setSignupEnabled] = useState(false)
-
-  // Probe the server's signup gate once so the SPA can render either
-  // the live "Sign up" link or the "coming soon" placeholder. Falls
-  // back to disabled silently — if the probe fails the user can still
-  // log in and the worst case is a missing link, not a broken screen.
-  useEffect(() => {
-    let cancelled = false
-    fetch('/api/auth/signup-status')
-      .then((res) => (res.ok ? res.json() : Promise.reject(res)))
-      .then((body: { enabled: boolean }) => {
-        if (!cancelled) setSignupEnabled(body.enabled === true)
-      })
-      .catch(() => {
-        if (!cancelled) setSignupEnabled(false)
-      })
-    return () => { cancelled = true }
-  }, [])
-
+export function LoginScreen({ signupEnabled = false, onSignUp }: LoginScreenProps = {}) {
   return (
     <div className="relative flex min-h-screen items-center justify-center">
-      {/* Full-screen background */}
-      <div
-        className="absolute inset-0 bg-cover bg-center"
-        style={{ backgroundImage: 'url(/background2.jpg)' }}
-      />
+      <BackgroundBlobs />
 
       <motion.div
         initial={{ opacity: 0, scale: 0.97 }}
@@ -141,10 +123,10 @@ function LoginCard({ signupEnabled, onSignUp }: { signupEnabled: boolean; onSign
         </Button>
       </form>
 
-      {/* Sign-up link — live when DESK_ENABLE_SIGNUP=1 on the server,
-          a "coming soon" placeholder otherwise so single-user installs
-          don't get a confusing dead link. */}
-      {signupEnabled && onSignUp ? (
+      {/* Sign-up link only renders when the server reports signup is
+          open — DESK_ENABLE_SIGNUP=1, or first-run with no users yet.
+          Single-user installs see no signup affordance at all. */}
+      {signupEnabled && onSignUp && (
         <p className="text-center text-sm text-muted-foreground" data-testid="signup-link">
           Don&apos;t have an account?{' '}
           <button
@@ -154,13 +136,6 @@ function LoginCard({ signupEnabled, onSignUp }: { signupEnabled: boolean; onSign
           >
             Sign up
           </button>
-        </p>
-      ) : (
-        <p className="text-center text-sm text-muted-foreground" data-testid="signup-coming-soon">
-          Don&apos;t have an account?{' '}
-          <span className="text-muted-foreground/70 font-medium" title="Account signup is disabled — set DESK_ENABLE_SIGNUP=1 on the server to enable">
-            Sign up — coming soon
-          </span>
         </p>
       )}
     </div>

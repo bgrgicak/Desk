@@ -81,6 +81,7 @@ export {
   listLocalSourceStatuses,
   loadLocalSourceEnv,
   resolveLocalSourceEnv,
+  resolveAvailableLocalSourceEnv,
 } from "./localSources/index.js";
 export type {
   LocalSource,

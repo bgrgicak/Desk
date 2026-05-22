@@ -16,9 +16,6 @@ import { ensureDailyReflectionTasks } from "@agent-desk/scheduler";
 import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("api/routes/workspaces");
 
-const DEFAULT_AGENT_NAME = "Desk";
-const DEFAULT_AGENT_MODEL = "anthropic/claude-haiku-4-5";
-
 const HUB_NAME = "Hub";
 const HUB_DESCRIPTION = "Your home base across all workspaces.";
 
@@ -37,16 +34,16 @@ export async function listWorkspaces(pool: Pool, userId?: string) {
   return rows.filter((w) => w.kind !== "hub");
 }
 
-async function ensureWorkspaceAgent(pool: Pool, workspaceId: string, userId: string) {
-  let activeAgents = await queries.agents.listActiveByUser(pool, userId);
-  if (activeAgents.length === 0) {
-    activeAgents = [await queries.agents.insert(pool, {
-      id: generateId("agent"),
-      userId,
-      name: DEFAULT_AGENT_NAME,
-      model: DEFAULT_AGENT_MODEL,
-    })];
-  }
+/**
+ * Enrolls the user's existing active agents into the workspace. Does NOT
+ * create an agent when the user has none — a fresh user must explicitly
+ * add a model through the onboarding "Add AI providers" step. Auto-creating
+ * here would render in onboarding as if the user already configured a
+ * provider, which misleads them about what credentials/state exists on
+ * their behalf.
+ */
+async function enrollExistingAgents(pool: Pool, workspaceId: string, userId: string) {
+  const activeAgents = await queries.agents.listActiveByUser(pool, userId);
   for (const agent of activeAgents) {
     await queries.workspaceAgents.addToWorkspace(pool, workspaceId, agent.id);
   }
@@ -84,7 +81,7 @@ export async function createHub(
       path: slug,
       kind: "hub",
     });
-    await ensureWorkspaceAgent(pool, ws.id, userId);
+    await enrollExistingAgents(pool, ws.id, userId);
   }
 
   if ((process.env.DESK_DAILY_REFLECTION ?? "on").toLowerCase() !== "off") {
@@ -145,7 +142,7 @@ export async function getOrCreateAskAiChat(pool: Pool, userId: string): Promise<
   const existing = await queries.chats.findByWorkspaceAndTitle(pool, hub.id, ASK_AI_CHAT_TITLE);
   if (existing) return existing;
 
-  const memberships = await ensureWorkspaceAgent(pool, hub.id, userId);
+  const memberships = await enrollExistingAgents(pool, hub.id, userId);
   const agentId = memberships[0]?.agentId;
   if (!agentId) throw new NotFoundError("No agent available for hub workspace");
 
@@ -158,10 +155,12 @@ export async function getOrCreateAskAiChat(pool: Pool, userId: string): Promise<
 }
 
 /**
- * Creates a workspace and ensures it has at least one enrolled agent. If the
- * caller has no agents yet, creates a default pi-backed agent first.
- * Without this, chat creation would 400 on every agentId in the new workspace.
- * Users can override the enrollment via the Agent access settings panel.
+ * Creates a workspace and enrolls the user's existing active agents. If the
+ * caller has no agents yet, the workspace starts empty — chat creation in
+ * that workspace will 400 until the user adds a model through the global
+ * Models settings tab. This is by design: silently provisioning an agent
+ * here would render in onboarding as a pre-configured provider the user
+ * didn't add.
  *
  * The workspace's on-disk directory at `~/Desk/{slug}/` is
  * created before the DB insert so every successful insert has a matching
@@ -192,7 +191,7 @@ export async function createWorkspace(
     path,
     ...data,
   });
-  await ensureWorkspaceAgent(pool, ws.id, userId);
+  await enrollExistingAgents(pool, ws.id, userId);
   if ((process.env.DESK_DAILY_REFLECTION ?? "on").toLowerCase() !== "off") {
     await ensureDailyReflectionTasks({
       pool,
@@ -291,7 +290,7 @@ export async function deleteWorkspace(
 export async function listWorkspaceAgents(pool: Pool, workspaceId: string) {
   const ws = await queries.workspaces.findById(pool, workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${workspaceId}`);
-  const memberships = await ensureWorkspaceAgent(pool, workspaceId, ws.userId);
+  const memberships = await enrollExistingAgents(pool, workspaceId, ws.userId);
   const agents = await Promise.all(
     memberships.map(async (m) => {
       const agent = await queries.agents.findById(pool, m.agentId);

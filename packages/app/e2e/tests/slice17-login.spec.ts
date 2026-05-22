@@ -43,7 +43,10 @@ test("login form rejects bad credentials and accepts good ones", async ({ page }
   await expect(page.getByTestId('account-avatar')).toBeVisible({ timeout: 10_000 });
 });
 
-test("signup is disabled with a 'coming soon' affordance", async ({ page }) => {
+test("signup affordance is hidden when DESK_ENABLE_SIGNUP is off", async ({ page }) => {
   await simulateSignedOut(page);
-  await expect(page.getByTestId('signup-coming-soon')).toBeVisible();
+  // Login form must still render, but neither signup affordance.
+  await expect(page.getByTestId('login-submit')).toBeVisible();
+  await expect(page.getByTestId('signup-link')).toHaveCount(0);
+  await expect(page.getByTestId('signup-coming-soon')).toHaveCount(0);
 });

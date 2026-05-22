@@ -76,7 +76,7 @@ import { toContextItem, toFolderList } from '@/store/selectors/library'
 import { iconForItem } from '@/data/file-kind'
 import { getChatIcon } from '@/data/chat-icons'
 import type { PinnedSidebarEntry } from '@/components/layout/RoomSidebar'
-import { buildPath, NEW_CHAT_ID, resolveRouteView, type RouteView } from '@/router/nav'
+import { buildPath, mergeSearch, NEW_CHAT_ID, resolveRouteView, type RouteView } from '@/router/nav'
 import { getSessionToken, logout } from '@/auth/session'
 import { usePrefs } from '@/hooks/use-prefs'
 import { generateThreadTitle } from '@/lib/thread-title'
@@ -121,14 +121,47 @@ const NEW_CHAT_STUB: Chat = {
 }
 
 function UnauthenticatedRoot() {
-  const [view, setView] = useState<'login' | 'signup'>('login')
+  // Probe the signup gate once. `firstRun` is true when the DB has no
+  // users yet — fresh installs no longer pre-seed a default `desk`
+  // account, so the only way in is signup. We render the signup screen
+  // by default in that state instead of dumping the user on a login
+  // form that no credential can satisfy.
+  const [signupEnabled, setSignupEnabled] = useState(false)
+  const [view, setView] = useState<'login' | 'signup' | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/auth/signup-status')
+      .then((res) => (res.ok ? res.json() : Promise.reject(res)))
+      .then((body: { enabled: boolean; firstRun: boolean }) => {
+        if (cancelled) return
+        setSignupEnabled(body.enabled === true)
+        setView(body.firstRun === true ? 'signup' : 'login')
+      })
+      .catch(() => {
+        if (cancelled) return
+        setSignupEnabled(false)
+        setView('login')
+      })
+    return () => { cancelled = true }
+  }, [])
+
+  if (view === null) {
+    return (
+      <div className="h-dvh w-full flex items-center justify-center bg-muted/40">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground/60" />
+      </div>
+    )
+  }
   return view === 'signup' ? (
     <SignupScreen
       onSignIn={() => setView('login')}
       onComplete={() => window.location.reload()}
     />
   ) : (
-    <LoginScreen onSignUp={() => setView('signup')} />
+    <LoginScreen
+      signupEnabled={signupEnabled}
+      onSignUp={() => setView('signup')}
+    />
   )
 }
 
@@ -220,6 +253,37 @@ function MustChangeGate({ children }: { children: React.ReactNode }) {
   if (me?.mustChangePassword) {
     return <ForcedPasswordChangeScreen />
   }
+  return <AutoOpenProvidersGate>{children}</AutoOpenProvidersGate>
+}
+
+/**
+ * Once the user has cleared MustChangeGate, if they don't have a
+ * single agent / model configured yet, deep-link them straight into
+ * the AI providers settings page. The app is unusable without one, so
+ * this is the first thing they should set up. Fires once per mount
+ * (so the user can dismiss the modal and still navigate), but every
+ * reload re-checks — until at least one model exists this keeps
+ * nagging them.
+ */
+function AutoOpenProvidersGate({ children }: { children: React.ReactNode }) {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams] = useSearchParams()
+  const { data: agents, isSuccess: agentsLoaded } = useGetAgentsQuery()
+  const autoOpenedRef = useRef(false)
+
+  useEffect(() => {
+    if (autoOpenedRef.current) return
+    if (!agentsLoaded) return
+    if ((agents?.length ?? 0) > 0) return
+    if (searchParams.get('account') || searchParams.get('settings')) return
+    autoOpenedRef.current = true
+    navigate(
+      `${location.pathname}${mergeSearch(location.search, { account: 'models' })}${location.hash}`,
+      { replace: true },
+    )
+  }, [agentsLoaded, agents, searchParams, navigate, location.pathname, location.search, location.hash])
+
   return <>{children}</>
 }
 
@@ -227,7 +291,9 @@ function MustChangeGate({ children }: { children: React.ReactNode }) {
 // page (room picker). Anything unrecognised also lands here.
 function AppBoot() {
   const { data: serverWorkspaces } = useGetWorkspacesQuery()
-  const { loaded: prefsLoaded } = usePrefs()
+  const { defaultView, loaded: prefsLoaded } = usePrefs()
+  const navigate = useNavigate()
+  const dispatch = useAppDispatch()
   // Loading state: queries still in flight. Render a centered spinner
   // instead of an empty div — an empty <div className="h-dvh"/> looks
   // identical to a crashed app, and any tab-switch / WS-reconnect that
@@ -247,7 +313,34 @@ function AppBoot() {
   return (
     <TooltipProvider>
       <Toaster position="bottom-right" />
-      <HomePage />
+      <GlobalPaletteProvider>
+        <GlobalPalette
+          onNavigatePage={(t) => {
+            if (t.goHome) {
+              navigate('/')
+              return
+            }
+            if (t.openMyAccount) {
+              dispatch(setPendingMyAccountOpen(true))
+            }
+            // `t.view` is workspace-scoped — ignored here since no
+            // workspace is active on the landing route.
+          }}
+          onNavigateSettings={(t) => {
+            dispatch(setPendingSettingsSection(t.section))
+          }}
+          onNavigateWorkspace={(wsId) => {
+            navigate(getLastWorkspaceUrl(wsId) ?? buildDefaultViewPath(wsId, defaultView))
+          }}
+          onSelectChat={({ id, workspaceId }) => {
+            navigate(buildPath(workspaceId, 'tasks', { chat: id }))
+          }}
+          onSelectFile={({ path, workspaceId }) => {
+            navigate(buildPath(workspaceId, 'context', { item: path }))
+          }}
+        />
+        <HomePage />
+      </GlobalPaletteProvider>
     </TooltipProvider>
   )
 }
@@ -269,16 +362,17 @@ function AppInner() {
   const activeWorkspaceId = wsId
 
   // `/w/<id>/settings` is a deep link to the Settings modal pre-opened
-  // at the workspace section. The view itself behaves as `tasks` (the
-  // sidebar's active row matches whichever view is rendered behind the
-  // modal), but the modal opens automatically via the shared pending-
-  // section channel and the URL replaces to `/tasks` so a back/forward
-  // doesn't reopen it.
+  // at the workspace section. We replace it with the canonical
+  // `/w/<id>/tasks?settings=workspace` form so the URL reflects the open
+  // modal state — reloads keep the page open and back/forward navigates
+  // through it like any other URL transition.
   useEffect(() => {
     if (viewParam !== 'settings') return
-    dispatch(setPendingSettingsSection('workspace'))
-    navigate(buildPath(wsId || activeWorkspaceId, 'tasks'), { replace: true })
-  }, [viewParam, wsId, activeWorkspaceId, dispatch, navigate])
+    navigate(
+      buildPath(wsId || activeWorkspaceId, 'tasks', { settings: 'workspace' }),
+      { replace: true },
+    )
+  }, [viewParam, wsId, activeWorkspaceId, navigate])
   const { defaultView } = usePrefs()
   const selectedChatId = searchParams.get('chat')
   const selectedArtifactPath = searchParams.get('artifact')
