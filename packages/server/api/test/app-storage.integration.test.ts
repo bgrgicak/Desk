@@ -199,7 +199,9 @@ async function appCookie(appName: string): Promise<string> {
   expect(issue.status).toBe(201);
   const data = issue.bodyJson as { url: string; cookieName: string };
   const bootstrap = await httpRaw("GET", data.url);
-  expect(bootstrap.status).toBe(302);
+  // Bootstrap now serves the index inline (200) instead of 302-redirecting.
+  // The Set-Cookie still rides along — see apps.ts for the rationale.
+  expect(bootstrap.status).toBe(200);
   const cookie = pickSetCookie(bootstrap.headers, data.cookieName);
   if (!cookie) throw new Error(`No cookie set for ${appName}`);
   return cookie;
@@ -216,7 +218,7 @@ async function libraryAppCookie(appName: string): Promise<{ cookie: string; setC
   const distIndex = data.url.indexOf("/dist");
   const appBasePath = distIndex === -1 ? data.url.split("?")[0] : data.url.slice(0, distIndex);
   const bootstrap = await httpRaw("GET", data.url);
-  expect(bootstrap.status).toBe(302);
+  expect(bootstrap.status).toBe(200);
   const cookie = pickSetCookie(bootstrap.headers, data.cookieName);
   if (!cookie) throw new Error(`No cookie set for ${appName}`);
   const raw = bootstrap.headers["set-cookie"] ?? [];
@@ -421,6 +423,9 @@ describe("per-app storage CRUD (PR-H)", () => {
       JSON.stringify({ name: RENAME_APP, capabilities: ["storage.read", "storage.write"] }),
       "utf8",
     );
+    // Bootstrap now serves dist/index.html inline (previously it 302'd
+    // before any file lookup); these storage-only fixtures need a stub.
+    await fs.writeFile(path.join(appRoot, "dist", "index.html"), "<!doctype html><html></html>", "utf8");
 
     const cookie = await appCookie(RENAME_APP);
 
@@ -448,6 +453,7 @@ describe("per-app storage CRUD (PR-H)", () => {
       JSON.stringify({ name: RENAME_APP, capabilities: ["storage.read", "storage.write"] }),
       "utf8",
     );
+    await fs.writeFile(path.join(appRoot, "dist", "index.html"), "<!doctype html><html></html>", "utf8");
 
     // Issue a fresh session for the new inode (the old session may
     // still be valid, but a real PR-G replace would issue anew via
@@ -495,6 +501,7 @@ describe("per-app storage CRUD (PR-H)", () => {
       JSON.stringify({ name: PAGE_APP, capabilities: ["storage.read", "storage.write"] }),
       "utf8",
     );
+    await fs.writeFile(path.join(appRoot, "dist", "index.html"), "<!doctype html><html></html>", "utf8");
     const cookie = await appCookie(PAGE_APP);
 
     // Insert 5 docs.
@@ -569,6 +576,7 @@ describe("per-app storage CRUD (PR-H)", () => {
       JSON.stringify({ name: SYMLINK_APP, capabilities: ["storage.read", "storage.write"] }),
       "utf8",
     );
+    await fs.writeFile(path.join(appRoot, "dist", "index.html"), "<!doctype html><html></html>", "utf8");
     const cookie = await appCookie(SYMLINK_APP);
 
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), "desk-storage-escape-"));
@@ -596,6 +604,7 @@ describe("per-app storage CRUD (PR-H)", () => {
       JSON.stringify({ name: SYMLINK_ROOT_APP, capabilities: ["storage.read", "storage.write"] }),
       "utf8",
     );
+    await fs.writeFile(path.join(appRoot, "dist", "index.html"), "<!doctype html><html></html>", "utf8");
     const cookie = await appCookie(SYMLINK_ROOT_APP);
 
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), "desk-app-root-escape-"));

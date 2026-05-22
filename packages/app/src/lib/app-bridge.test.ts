@@ -112,6 +112,66 @@ describe('app bridge', () => {
     )).rejects.toThrow('Invalid storage collection')
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  // Library-scope fragments rendered inline inside a chat (e.g. a
+  // chat-forms fragment attached via a workspace-relative library path)
+  // need to be able to post chat messages too. Previously the bridge
+  // hardcoded chat scope as the only chat.sendMessage source, so
+  // library-scope iframes silently failed when their wizard tried to
+  // post the user's answers — exactly the "I submitted but nothing
+  // happened" bug.
+  it('routes chat.sendMessage to the target chat for library scope when chatId is provided', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => (
+      new Response(JSON.stringify({ id: 'msg_1' }), { status: 200 })
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('sessionStorage', {
+      getItem: () => 'fake-session-token',
+      setItem: () => undefined,
+      removeItem: () => undefined,
+      clear: () => undefined,
+      key: () => null,
+      length: 0,
+    })
+
+    await expect(handleAppBridgeRequest(
+      {
+        scope: 'library',
+        chatId: 'cht_target',
+        appName: 'chat-forms',
+        appBasePath: '/apps/library/wks_x/chat-forms',
+        capabilities: ['chats.write'],
+      },
+      request('chat.sendMessage', { text: 'yes' }),
+    )).resolves.toEqual({ id: 'msg_1' })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/chats/cht_target/messages',
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
+  it('rejects chat.sendMessage from library scope without a chatId', async () => {
+    vi.stubGlobal('sessionStorage', {
+      getItem: () => 'fake-session-token',
+      setItem: () => undefined,
+      removeItem: () => undefined,
+      clear: () => undefined,
+      key: () => null,
+      length: 0,
+    })
+
+    await expect(handleAppBridgeRequest(
+      {
+        scope: 'library',
+        chatId: '',
+        appName: 'chat-forms',
+        appBasePath: '/apps/library/wks_x/chat-forms',
+        capabilities: ['chats.write'],
+      },
+      request('chat.sendMessage', { text: 'yes' }),
+    )).rejects.toThrow('chat.sendMessage requires a chat scope')
+  })
 })
 
 function request(method: AppBridgeRequest['method'], params: unknown): AppBridgeRequest {

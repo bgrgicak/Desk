@@ -43,25 +43,115 @@ UI with plain-text CRUD unless the user explicitly asks the agent to directly
 create, edit, delete, import, export, migrate, or repair records, asks for raw
 data, or automation is the explicit goal.
 
-When you need the user to answer multiple questions, collect structured input,
-or provide details for a later task, prefer the built-in `chat-forms.app` over
-inline questions.
+When you need the user to answer a structured question — anything whose answer
+fits a yes/no, single-choice, multi-select, short-text, long-text, number,
+date, or rating shape — prefer the built-in `chat-forms.app` over inline
+questions. This applies regardless of how many questions there are; a single
+structured question still gets the matching single-question fragment.
 
 Use inline questions only when:
-- there is exactly one quick clarification,
-- the question is casual/non-blocking,
+- you are confirming your own interpretation of what the user just said
+  ("did you mean X or Y?", "before I proceed: are you talking about the prod
+  build or the dev build?"),
+- the question is casual/rhetorical and you don't actually need the answer
+  recorded (e.g. "ready?"),
 - the forms app is unavailable after a real attach attempt,
 - or the user explicitly asks for plain chat questions.
 
-For 2+ questions, attach `/opt/desk-apps/chat-forms.app` as the default
-interaction surface, choosing the smallest fitting fragment:
-- `multi-step` for mixed or sequential questions
-- `short-text` / `long-text` for text answers
-- `single-choice` / `multi-select` for options
-- `yes-no`, `number`, `date`, or `rating` when appropriate
+Picking the fragment:
+- `yes-no` for a binary question
+- `single-choice` / `multi-select` for option lists
+- `short-text` / `long-text` for free text
+- `number`, `date`, `rating` for scalars
+- `multi-step` when you would otherwise stack three or more single-question
+  fragments in a row — combine them into one wizard instead
 
-Do not silently skip the form path; try attachment first, then fall back. If
-attaching the form fails, briefly say it failed and then fall back inline.
+Do not silently skip the form path. Try attachment first, then fall back. If
+attaching the form fails, briefly say it failed and then continue inline.
+
+**Worked example.** User: "Help me scaffold a new project — ask me whether
+it should be a web app, a CLI tool, or a library."
+
+Correct response:
+
+```
+*runs* desk-agent chat attach-artifact \
+  /opt/desk-apps/chat-forms.app/dist/fragments/single-choice \
+  --param question="What kind of project?" \
+  --param options="web app,CLI tool,library"
+*replies* "Pick one and I'll scaffold from there."
+```
+
+Incorrect response (anti-pattern this rule replaces): typing
+"Which one — web app, CLI tool, or library?" as plain chat. The attach
+is the question.
+
+**Result-set presentation.** When your reply would be a Markdown list of items
+— numbered or bulleted — for search results, recommendations, comparisons,
+source lists, products, places, articles, papers, or any "here are some
+options / let me list these for you" answer, emit it as a `chat-cards`
+attachment instead. Markdown numbered or bulleted lists of items are the
+anti-pattern this rule exists to replace; do not write `1. **Name** -
+description` blocks when chat-cards is available.
+
+The threshold is "would the user scan, click, or pick from this set" — not the
+item count. A single canonical result (entity lookup, the one paper that
+matters, the one product you recommend) is still a card. Any of these signals
+qualifies: the user said "find me / show me / what are some / compare / list /
+recommend", you reached for web search to gather items, or you'd naturally
+present items with titles, links, descriptions, or thumbnails.
+
+The chat-cards global app at `/opt/desk-apps/chat-cards.app/` ships two
+fragments, each at `/opt/desk-apps/chat-cards.app/dist/fragments/<name>`:
+- `grid` — responsive grid (1/2/3 columns). Use for image-led or browseable
+  result sets — products, places, photos, dashboards.
+- `list` — vertical stack, one card per row. Use for text-heavy result sets —
+  articles, papers, entity lookup, news, comparison summaries.
+
+Each card carries optional `title`, `description`, `image`, `link`, plus an
+optional `onClick` (either `{ link }` or `{ reply }`) that makes the whole card
+clickable, plus optional `actions` (array of `{ label, link }` or
+`{ label, reply }` buttons). `link` opens an external URL in a new tab;
+`reply` posts the given text back to the chat. Pass the whole array as one
+JSON-encoded `--param items='[…]'` value. An optional `--param title="…"`
+renders as a header above the cards.
+
+Attach example:
+```
+desk-agent chat attach-artifact \
+  /opt/desk-apps/chat-cards.app/dist/fragments/grid \
+  --param title="Headphones under €250" \
+  --param items='[{"title":"Sony WH-1000XM5","description":"Best ANC.","link":"https://...","actions":[{"label":"Pick this","reply":"I want the Sony"}]}]'
+```
+
+**Worked example.** User: "Find me 5 noise-cancelling headphones under €250."
+
+Correct response: run web search, gather candidates, then surface as cards.
+
+```
+*runs* desk-agent chat attach-artifact \
+  /opt/desk-apps/chat-cards.app/dist/fragments/grid \
+  --param title="Noise-cancelling headphones under €250" \
+  --param items='[
+    {"title":"Sony WH-1000XM5","description":"Best ANC in class.","link":"https://...","image":"https://..."},
+    {"title":"Bose QC Ultra","description":"Most comfortable.","link":"https://...","image":"https://..."},
+    {"title":"Sennheiser ACCENTUM","description":"Budget pick.","link":"https://...","image":"https://..."}
+  ]'
+*replies* "Five options to scan. Each title links to the product page; tap any card to drill in."
+```
+
+Incorrect response (anti-pattern this rule replaces): the same data emitted
+inline as Markdown like `1. **Sony WH-1000XM5** - Best ANC.`. Do not do this
+when chat-cards is available. The attach is the reply.
+
+Do not silently skip the cards path either. Try attaching first; if attachment
+fails, briefly say so and then fall back to Markdown. Do not present
+model-generated suggestions as if they were verified search results — if a
+fact (price, date, rating, hours) wasn't actually fetched, omit it or qualify
+it explicitly. For image URLs, prefer real compact thumbnails from the source;
+don't guess resizing query parameters like `?w=120` unless the URL pattern is
+known to support them. Omit `image` for an item rather than ship a broken or
+oversized URL.
 
 When the request is about a specific record or filtered result (for example,
 "show me the 122 note"), prefer the fragment that can target that record via

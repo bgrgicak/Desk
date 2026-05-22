@@ -1,0 +1,15 @@
+{
+  "name": "list",
+  "description": "Renders 1..N cards stacked vertically (one per row). Each card may carry a title, description, image, link, an onClick handler (link or reply), and 0..N explicit action buttons (each link or reply). Use for text-heavy result sets where reading a vertical column beats a multi-column grid — articles, papers, entity lookup, comparison summaries.",
+  "capabilities": ["chats.write"],
+  "params": {
+    "items": {
+      "type": "string",
+      "description": "Required. JSON-encoded array of card objects. Each object: { title?, description?, image?, link?, onClick?: { link } | { reply }, actions?: [{ label, link } | { label, reply }] }. Array must be non-empty; empty arrays render a placeholder."
+    },
+    "title": {
+      "type": "string",
+      "description": "Optional. Header text rendered above the list (e.g. 'Recent articles on Rust async runtimes')."
+    }
+  }
+}

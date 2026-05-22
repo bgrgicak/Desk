@@ -1,0 +1,15 @@
+{
+  "name": "grid",
+  "description": "Renders 1..N cards in a responsive grid (1 column on narrow widths, 2 on small breakpoints, 3 on large). Each card may carry a title, description, image, link, an onClick handler (link or reply), and 0..N explicit action buttons (each link or reply). Use for image-led or browseable result sets where the visual layout helps scanning.",
+  "capabilities": ["chats.write"],
+  "params": {
+    "items": {
+      "type": "string",
+      "description": "Required. JSON-encoded array of card objects. Each object: { title?, description?, image?, link?, onClick?: { link } | { reply }, actions?: [{ label, link } | { label, reply }] }. Array must be non-empty; empty arrays render a placeholder."
+    },
+    "title": {
+      "type": "string",
+      "description": "Optional. Header text rendered above the grid (e.g. 'Headphones under €250')."
+    }
+  }
+}

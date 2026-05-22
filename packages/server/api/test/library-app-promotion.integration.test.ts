@@ -286,26 +286,25 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
     expect(issued.cookieName.startsWith("desk_libapp_")).toBe(true);
     expect(issued.url).toMatch(new RegExp(`^/apps/library/${workspaceId}/[a-f0-9]{64}/${APP_NAME}\\.app/dist/\\?t=`));
 
+    // Bootstrap now serves index inline (200); see apps.ts for why the
+    // old 302-redirect path was killed.
     const bootstrap = await httpRaw("GET", issued.url);
-    expect(bootstrap.status, bootstrap.body).toBe(302);
+    expect(bootstrap.status, bootstrap.body).toBe(200);
     const cookie = pickSetCookie(bootstrap.headers, issued.cookieName);
     expect(cookie).toBeTruthy();
 
-    const cleanPath = bootstrap.headers["location"]!;
     const setCookie = String(bootstrap.headers["set-cookie"]?.[0] ?? "");
     const cookiePath = /Path=([^;]+)/.exec(setCookie)?.[1] ?? "";
-    expect(String(cleanPath).startsWith(cookiePath)).toBe(true);
-    const indexResp = await httpRaw("GET", cleanPath, {
-      headers: { Cookie: cookie! },
-    });
-    expect(indexResp.status).toBe(200);
-    expect(indexResp.body).toContain("window.desk");
-    expect(indexResp.body).toContain(`"name":"${APP_NAME}"`);
-    expect(indexResp.body).toContain('./assets/index.js');
+    const issuedPath = issued.url.split("?")[0];
+    expect(issuedPath.startsWith(cookiePath)).toBe(true);
+
+    expect(bootstrap.body).toContain("window.desk");
+    expect(bootstrap.body).toContain(`"name":"${APP_NAME}"`);
+    expect(bootstrap.body).toContain('./assets/index.js');
     // Library scope: chatId is the empty string in the bridge payload so
     // app code can branch on whether it's running standalone or in a
     // chat context.
-    expect(indexResp.body).toContain('"chatId":""');
+    expect(bootstrap.body).toContain('"chatId":""');
   });
 
   it("issues and serves a nested library app from the requested workspace path", async () => {
@@ -339,20 +338,18 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
     const issued = issue.bodyJson as { url: string; cookieName: string };
     expect(issued.url).toMatch(new RegExp(`^/apps/library/${workspaceId}/[a-f0-9]{64}/Projects/Q2/nested-app\\.app/dist/\\?t=`));
 
-    const bootstrap = await httpRaw("GET", issued.url.replace("/dist/", "/dist/fragments/list/"));
-    expect(bootstrap.status, bootstrap.body).toBe(302);
+    const fragmentUrl = issued.url.replace("/dist/", "/dist/fragments/list/");
+    const bootstrap = await httpRaw("GET", fragmentUrl);
+    expect(bootstrap.status, bootstrap.body).toBe(200);
     const cookie = pickSetCookie(bootstrap.headers, issued.cookieName);
     expect(cookie).toBeTruthy();
     const setCookie = String(bootstrap.headers["set-cookie"]?.[0] ?? "");
     const cookiePath = /Path=([^;]+)/.exec(setCookie)?.[1] ?? "";
-    expect(String(bootstrap.headers.location).startsWith(cookiePath)).toBe(true);
+    expect(fragmentUrl.split("?")[0].startsWith(cookiePath)).toBe(true);
 
-    const fragment = await httpRaw("GET", String(bootstrap.headers.location), {
-      headers: { Cookie: cookie! },
-    });
-    expect(fragment.status).toBe(200);
-    expect(fragment.body).toContain("Nested fragment");
-    expect(fragment.body).toContain("window.desk");
+    // Bootstrap response is the fragment HTML inline (no 302 round-trip).
+    expect(bootstrap.body).toContain("Nested fragment");
+    expect(bootstrap.body).toContain("window.desk");
   });
 
   it("serves library app JS assets without cookies for opaque sandbox subresource loads", async () => {
@@ -362,9 +359,11 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
       { bearer: authToken },
     );
     const issued = issue.bodyJson as { url: string };
-    const bootstrap = await httpRaw("GET", issued.url);
-    const cleanPath = String(bootstrap.headers["location"]);
-    const assetRootMatch = cleanPath.match(new RegExp(`^(/apps/library/${workspaceId}/[a-f0-9]{64}/${APP_NAME}\\.app/dist/)`));
+    // Bootstrap now serves 200 inline, so derive the asset root from the
+    // issued URL (strip the `?t=` query) rather than the removed Location.
+    await httpRaw("GET", issued.url);
+    const issuedPath = issued.url.split("?")[0];
+    const assetRootMatch = issuedPath.match(new RegExp(`^(/apps/library/${workspaceId}/[a-f0-9]{64}/${APP_NAME}\\.app/dist/)`));
     expect(assetRootMatch).toBeTruthy();
     const assetRoot = assetRootMatch![1];
 
