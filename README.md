@@ -37,13 +37,67 @@ Roomy is a personal AI platform for people who use AI every day to do real work 
 
 Roomy is open source software you run yourself — on your own laptop, or on a server you control if you want it reachable from anywhere. No accounts to sign up for, no vendor in the middle. Where Roomy lives, your data lives.
 
-## Download
+## Install
 
-Pre-built macOS desktop app releases are available on the [releases page](https://github.com/bgrgicak/Desk/releases/tag/desktop-latest) (Apple Silicon · arm64). New builds are published weekly.
+Two ways to run Roomy. Pick one — you don't need both.
+
+### Option 1 — Run from npm (macOS, Linux, Windows WSL)
+
+One command, no clone:
+
+```sh
+npx @roomy-ai/cli@alpha
+```
+
+This downloads the [`@roomy-ai/cli`](https://www.npmjs.com/package/@roomy-ai/cli) package, boots `roomy-server` in the foreground, and opens the UI at <http://127.0.0.1:35138/>. Stop it with `Ctrl+C`.
+
+Prefer a persistent install:
+
+```sh
+npm install -g @roomy-ai/cli@alpha
+roomy            # same as `roomy start`
+```
+
+**Requirements:** Node.js ≥ 22 and Docker (or nerdctl) running locally — Roomy uses a sandboxed container to run AI agents.
+
+**Run in the background** as a system service (launchd on macOS, systemd-user on Linux, Task Scheduler on Windows):
+
+```sh
+roomy service install        # register + start
+roomy service status         # check it's running
+roomy service stop           # stop without removing
+roomy service uninstall      # remove the service entry
+```
+
+**Uninstall everything:**
+
+```sh
+roomy uninstall                       # remove service + sandbox container images
+roomy uninstall --remove-roomy-files  # also delete ~/Roomy (your data)
+npm uninstall -g @roomy-ai/cli        # remove the CLI itself
+```
+
+Your conversations, files, and vault live in `~/Roomy/` — back that up to move between machines.
+
+### Option 2 — macOS desktop app
+
+Pre-built DMG releases (Apple Silicon · arm64) are on the [releases page](https://github.com/bgrgicak/Desk/releases/tag/desktop-latest). New builds are published weekly. Same data directory (`~/Roomy/`), same server underneath — just wrapped in an Electron shell.
+
+### First-run setup
+
+The first time you open Roomy:
+
+1. Create your owner account and a vault password (used to encrypt your API keys at rest).
+2. Open **Settings → AI providers** and paste an Anthropic and/or OpenAI API key. Roomy routes between providers; you bring the keys.
+3. Start a chat.
+
+On every server restart the vault locks — re-enter the vault password through the dialog. Set `ROOMY_AUTO_LOGIN=off` if you want to force the manual login screen instead of auto-signing in as the owner.
 
 ---
 
 ## For developers
+
+Only needed if you want to contribute or hack on Roomy itself. End users should use one of the [install options](#install) above.
 
 ### Quick start
 
@@ -54,7 +108,7 @@ npm install
 npm run dev
 ```
 
-`npm run dev` boots `roomy-server` (tsx watch) and Vite together, and rebuilds the `roomy/sandbox:v1` Docker image when its inputs change; one `Ctrl+C` stops both. Open <http://localhost:5173/>. Roomy auto-signs in to the local owner account in both dev and production builds; set `ROOMY_AUTO_LOGIN=off` if you need to force the manual login screen.
+`npm run dev` boots `roomy-server` (tsx watch) and Vite together, and rebuilds the `roomy/sandbox:v1` Docker image when its inputs change; one `Ctrl+C` stops both. Open <http://localhost:5173/>.
 
 ### Prerequisites
 
@@ -88,6 +142,41 @@ See [packages/server/README.md](packages/server/README.md) for the full package 
 - **`docker` commands fail with permission denied (Linux)** — log out and back in once after `sudo usermod -aG docker $USER`, or wrap with `sg docker -c "..."`.
 - **Sandbox bind-mount writes fail under rootless docker** — the runtime detects rootless mode and runs the container as UID 0. If it doesn't, pin via `ROOMY_SANDBOX_USER=0:0`.
 - **`vite: command not found`** — run `npm install` at the repo root.
+
+### Publishing a release
+
+Maintainers only. Releases are cut with a single interactive script from a Linux or macOS dev box.
+
+**One-time prerequisites:**
+
+- `npm login` — your npm account must have publish access to the [`@roomy-ai`](https://www.npmjs.com/org/roomy-ai) scope.
+- `docker login` — your Docker Hub account must have push access to the sandbox image repo.
+- `gh auth login` — used to create the GitHub Release and trigger the desktop build workflow.
+- Node.js 23 (matches the `.nvmrc` pin).
+
+**Cut a release:**
+
+```sh
+git checkout trunk && git pull
+./scripts/publish-release.sh
+```
+
+The script walks you through it interactively:
+
+1. Pre-flight checks (clean tree, on `trunk`, all four logins above present).
+2. Pick a version — next alpha bump, next minor + `alpha.0`, or a custom string. Default tag is `alpha`.
+3. Bumps every public workspace (`packages/app`, `packages/cli`, `packages/ui`, `packages/server/*`) plus `packages/desktop` to the new version.
+4. Runs `npm install`, `npm run build`, and a `npm pack` smoke test.
+5. **Final confirm** — last chance to bail before anything is published.
+6. Commits `chore(release): vX.Y.Z`.
+7. `npm publish --workspaces --access public` (publishes under the `alpha` dist-tag).
+8. Builds and pushes the `roomy/sandbox` Docker image to Docker Hub as `:vX.Y.Z` and `:alpha`.
+9. Creates the `vX.Y.Z` git tag and pushes `trunk` + tag to `origin`. The tag push triggers [`.github/workflows/desktop-release.yml`](.github/workflows/desktop-release.yml), which builds the macOS DMG on a `macos-latest` runner and uploads it to the GitHub Release.
+10. Optionally `gh run watch`es the desktop workflow.
+
+**If a step fails mid-flight:** the version-bump commit stays, but the git tag is only created after npm + Docker both succeed, so the desktop workflow won't fire for a half-published release. Fix the issue, bump to a fresh version, and re-run.
+
+**Re-uploading desktop installers from a different host:** the macOS DMG ships from the CI runner automatically. If you want to attach a Linux or Windows installer to the same release, run `electron-builder --publish always` from that host against the existing tag.
 
 ### Contributing
 

@@ -196,6 +196,13 @@ async function cmdStartPublished({ home }) {
     ROOMY_API_URL: `http://127.0.0.1:${PORT}`,
     ROOMY_SERVE_APP: "1",
     ROOMY_APP_DIST: appDist,
+    // Point the runtime at the registry-published sandbox image. The
+    // server's docker.ts default of `roomy/sandbox:v1` is fine for a
+    // monorepo dev checkout (where `npm run dev` builds it locally) but
+    // useless for `npx @roomy-ai/cli` users — they have no local image
+    // to fall back on. Pulls from Docker Hub on first sandbox start.
+    // Set ROOMY_SANDBOX_IMAGE to override (e.g. point at your own fork).
+    ROOMY_SANDBOX_IMAGE: process.env.ROOMY_SANDBOX_IMAGE ?? "bgrgicak/roomy-ai:alpha",
   };
 
   log(`roomy-server → http://127.0.0.1:${PORT}/  (serves API + SPA)`);

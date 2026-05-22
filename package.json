@@ -19,6 +19,7 @@
     "build:server": "npm -w @roomy-ai/shared run build && npm -w @roomy-ai/db run build && npm -w @roomy-ai/storage run build && npm -w @roomy-ai/ui run build && npm -w @roomy-ai/apps run build && npm -w @roomy-ai/runtime run build && npm -w @roomy-ai/scheduler run build && npm -w @roomy-ai/api run build && npm -w @roomy-ai/sandbox-cli run build",
     "build:packages": "npm run build:server && npm -w @roomy-ai/app-scaffold run build && npm -w @roomy-ai/app run build",
     "ci:local": "scripts/ci-local.sh",
+    "release": "scripts/publish-release.sh",
     "openapi": "npm run openapi:dump --workspace=@roomy-ai/api",
     "typecheck": "npm run build:server && npm -ws --if-present run typecheck",
     "test": "vitest run --passWithNoTests",
