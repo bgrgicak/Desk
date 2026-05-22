@@ -5,8 +5,8 @@
  * (we send it as an Authorization header, not a cookie), lower XSS blast
  * radius than localStorage for a local prototype.
  */
-const KEY = "desk.session.token";
-const AUTO_LOGIN_DISABLED_KEY = "desk.session.autologin.disabled";
+const KEY = "roomy.session.token";
+const AUTO_LOGIN_DISABLED_KEY = "roomy.session.autologin.disabled";
 
 export function getSessionToken(): string | null {
   try {

@@ -29,16 +29,16 @@ function linkUrlToSandboxPath(url: string): string | null {
 
 export function sandboxToUserPath(sandboxPath: string, workspacePath: string): string {
   if (sandboxPath.startsWith('~/')) {
-    // ~/foo  →  ~/Desk/<slug>/foo
-    return `~/Desk/${workspacePath}/` + sandboxPath.slice(2)
+    // ~/foo  →  ~/Roomy/<slug>/foo
+    return `~/Roomy/${workspacePath}/` + sandboxPath.slice(2)
   }
-  return sandboxPath.replace(SANDBOX_HOME, `~/Desk/${workspacePath}`)
+  return sandboxPath.replace(SANDBOX_HOME, `~/Roomy/${workspacePath}`)
 }
 
 function makePathLink(sandboxPath: string, workspacePath: string): Link {
   return {
     type: 'link',
-    url: `desk-path:${encodeURIComponent(sandboxPath)}`,
+    url: `roomy-path:${encodeURIComponent(sandboxPath)}`,
     title: null,
     children: [{ type: 'text', value: sandboxToUserPath(sandboxPath, workspacePath) }],
   }
@@ -46,7 +46,7 @@ function makePathLink(sandboxPath: string, workspacePath: string): Link {
 
 /**
  * Remark plugin that transforms sandbox paths in agent message text into link
- * nodes with a desk-path: URL. MarkdownContent renders these as PathChip
+ * nodes with a roomy-path: URL. MarkdownContent renders these as PathChip
  * components. Handles both /home/agent/... and ~/... path forms.
  */
 export function remarkSandboxPaths(workspacePath: string) {
@@ -68,7 +68,7 @@ export function remarkSandboxPaths(workspacePath: string) {
     visit(tree, 'link', (node: Link) => {
       const sandboxPath = linkUrlToSandboxPath(node.url)
       if (!sandboxPath) return
-      node.url = `desk-path:${encodeURIComponent(sandboxPath)}`
+      node.url = `roomy-path:${encodeURIComponent(sandboxPath)}`
       node.children = [{ type: 'text', value: sandboxToUserPath(sandboxPath, workspacePath) }]
       return SKIP
     })

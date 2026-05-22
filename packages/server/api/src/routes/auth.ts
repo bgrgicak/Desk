@@ -1,7 +1,7 @@
-import { hashPassword, type Pool } from "@agent-desk/db";
-import { queries } from "@agent-desk/db";
-import { ConflictError, generateId, UnauthorizedError, ValidationError } from "@agent-desk/shared";
-import { withModule } from "@agent-desk/shared/logger";
+import { hashPassword, type Pool } from "@roomy-ai/db";
+import { queries } from "@roomy-ai/db";
+import { ConflictError, generateId, UnauthorizedError, ValidationError } from "@roomy-ai/shared";
+import { withModule } from "@roomy-ai/shared/logger";
 import { hashToken, issueSession, revokeSession } from "../auth/sessions.js";
 import type { VaultStore } from "../vault/store.js";
 import { createHub, createWorkspace } from "./workspaces.js";
@@ -12,9 +12,9 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export async function handleLogin(
   pool: Pool,
-  body: { username: string; password: string },
+  body: { email: string; password: string },
 ): Promise<{ token: string }> {
-  const user = await queries.users.login(pool, body.username, body.password);
+  const user = await queries.users.login(pool, body.email, body.password);
   if (!user) throw new UnauthorizedError("Invalid credentials");
 
   const token = await issueSession(pool, user.id);
@@ -22,20 +22,20 @@ export async function handleLogin(
 }
 
 /**
- * Auto-login for the local Desk owner. This is intentionally not tied to
+ * Auto-login for the local Roomy owner. This is intentionally not tied to
  * Vite/dev mode: production desktop/static-server builds need the same
  * no-friction boot path as `npm run dev`.
  *
- * Set DESK_AUTO_LOGIN=off to force the manual LoginScreen instead.
+ * Set ROOMY_AUTO_LOGIN=off to force the manual LoginScreen instead.
  */
 export async function handleAutoLogin(
   pool: Pool,
 ): Promise<{ token: string }> {
-  if ((process.env.DESK_AUTO_LOGIN ?? "on").toLowerCase() === "off") {
+  if ((process.env.ROOMY_AUTO_LOGIN ?? "on").toLowerCase() === "off") {
     throw new UnauthorizedError("Auto-login is disabled");
   }
 
-  const preferredUsername = process.env.DESK_SEED_USERNAME ?? "desk";
+  const preferredUsername = process.env.ROOMY_SEED_USERNAME ?? "roomy";
   const preferred = await queries.users.findByUsername(pool, preferredUsername);
   let userId = preferred?.id;
 
@@ -53,11 +53,11 @@ export async function handleAutoLogin(
 }
 
 /**
- * Signup is normally gated by the DESK_ENABLE_SIGNUP env var. Desk is
+ * Signup is normally gated by the ROOMY_ENABLE_SIGNUP env var. Roomy is
  * single-user-per-host by default and exposing a public registration
  * endpoint on a misconfigured deployment would let anyone create
  * accounts. Operators who want multi-user mode opt in explicitly with
- * `DESK_ENABLE_SIGNUP=1`.
+ * `ROOMY_ENABLE_SIGNUP=1`.
  *
  * When enabled, this creates the user row, bootstraps a hub workspace,
  * and returns a session token. The per-user vault is NOT created here —
@@ -65,14 +65,14 @@ export async function handleAutoLogin(
  * they store an API key, so the master never lives in the server .env.
  */
 export function isSignupEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.DESK_ENABLE_SIGNUP === "1";
+  return env.ROOMY_ENABLE_SIGNUP === "1";
 }
 
 /**
  * First-run check: returns true when no user rows exist. Used to
  * automatically unlock the signup endpoint on a fresh install — without
  * this, the only way to bootstrap an account would be the env-gated
- * DESK_ENABLE_SIGNUP flag, which the install UX shouldn't require.
+ * ROOMY_ENABLE_SIGNUP flag, which the install UX shouldn't require.
  */
 async function isFirstRun(pool: Pool): Promise<boolean> {
   const { rows } = await pool.query<{ c: number }>(
@@ -94,7 +94,12 @@ export async function isSignupAvailable(
   return { available: isSignupEnabled(env) || firstRun, firstRun };
 }
 
-const USERNAME_PATTERN = /^[a-zA-Z0-9_-]{3,32}$/;
+// `username` is now a display name the agent uses to address the user.
+// It is no longer a login identifier (email is), so the rules are
+// human-friendly: any non-empty trimmed string up to 80 characters,
+// no control characters.
+const DISPLAY_NAME_MAX = 80;
+const CONTROL_CHAR_PATTERN = /\p{Cc}/u;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export interface SignupContext {
@@ -146,10 +151,13 @@ export async function handleSignup(
   const email = typeof body.email === "string" ? body.email.trim() : "";
   const password = typeof body.password === "string" ? body.password : "";
 
-  if (!USERNAME_PATTERN.test(username)) {
+  if (username.length === 0 || username.length > DISPLAY_NAME_MAX) {
     throw new ValidationError(
-      "Username must be 3–32 characters of letters, digits, underscore, or dash",
+      `Name must be 1–${DISPLAY_NAME_MAX} characters`,
     );
+  }
+  if (CONTROL_CHAR_PATTERN.test(username)) {
+    throw new ValidationError("Name must not contain control characters");
   }
   if (!EMAIL_PATTERN.test(email)) {
     throw new ValidationError("Email must be a valid address");
@@ -159,32 +167,22 @@ export async function handleSignup(
   const vaultPassword = parseOptionalVaultPassword(body.vaultPassword);
   const workspace = parseOptionalWorkspace(body.workspace);
 
-  // Single non-specific 409 for both username and email collisions. A
-  // distinct message would be a user/email enumeration oracle for
-  // anyone who can reach /auth/signup (rate-limited but observable).
-  // The SPA shows the generic message and asks the user to try a
-  // different combination.
-  //
-  // Run both lookups in parallel so the response time doesn't reveal
-  // which one matched — short-circuiting would let an attacker
-  // distinguish "username taken" (1 DB query) from "email taken" or
-  // "neither taken" (2 queries) by timing alone.
-  const [existingByUsername, existingByEmail] = await Promise.all([
-    queries.users.findByUsername(ctx.pool, username),
-    queries.users.findByEmail(ctx.pool, email),
-  ]);
-  if (existingByUsername || existingByEmail) {
+  // Email is the login identifier and is UNIQUE; the display name
+  // ("username" column) is no longer unique, so collisions only matter
+  // on email. Generic 409 avoids confirming whether a given email is
+  // already registered.
+  const existingByEmail = await queries.users.findByEmail(ctx.pool, email);
+  if (existingByEmail) {
     throw new ConflictError("Account could not be created with the supplied credentials");
   }
 
   const id = generateId("user");
   const passwordHash = await hashPassword(password);
-  // Race window: between the parallel findByUsername/findByEmail
-  // above and this insert, another concurrent signup with the same
-  // credentials could have committed.  Catch the UNIQUE-constraint
-  // error and map it to the same generic 409 the preflight emits —
-  // otherwise the SECOND request bubbles a 500 instead of a clean
-  // collision response.
+  // Race window: between the email preflight above and this insert,
+  // another concurrent signup with the same email could have
+  // committed. Catch the UNIQUE-constraint error and map it to the
+  // same generic 409 the preflight emits — otherwise the SECOND
+  // request bubbles a 500 instead of a clean collision response.
   try {
     await queries.users.insert(ctx.pool, { id, username, passwordHash, email });
   } catch (err) {
@@ -286,8 +284,6 @@ export async function handleSignup(
 
   // When no vaultPassword is provided the per-user vault simply
   // doesn't exist yet — the VaultDialog owns first-time setup later.
-  // DESK_VAULT_PASSWORD still drives boot-time auto-unlock for
-  // pre-existing vaults (so dev/CI restarts don't lose state).
 
   return { token };
 }

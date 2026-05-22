@@ -12,10 +12,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -27,18 +27,16 @@ let home: string;
 let dbPath: string;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-lib-ws-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-lib-ws-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "testuser";
-  process.env.DESK_SEED_PASSWORD = "test-pass-1234";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "test-pass-1234" });
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-lib-ws-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-lib-ws-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const storage = { pool, home };
   const runManager = createRunManager({
@@ -103,7 +101,7 @@ async function uploadFile(
   filename: string,
   content: string,
 ): Promise<string> {
-  const boundary = `----desk-test-${crypto.randomBytes(8).toString("hex")}`;
+  const boundary = `----roomy-test-${crypto.randomBytes(8).toString("hex")}`;
   const body = Buffer.concat([
     Buffer.from(
       `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: text/plain\r\n\r\n`,
@@ -303,7 +301,7 @@ async function getContentWithEtag(
 
 describe("library ETag conflict detection", () => {
   it("GET /library/content returns an ETag header", async () => {
-    const loginRes = await request("POST", "/auth/login", undefined, { username: "testuser", password: "test-pass-1234" });
+    const loginRes = await request("POST", "/auth/login", undefined, { email: "testuser@roomy.local", password: "test-pass-1234" });
     const token = (loginRes.body as { token: string }).token;
     const workspacesRes = await request("GET", "/workspaces", token);
     const workspaceId = (workspacesRes.body as Array<{ id: string }>)[0].id;
@@ -315,7 +313,7 @@ describe("library ETag conflict detection", () => {
   });
 
   it("PUT with matching If-Match succeeds", async () => {
-    const loginRes = await request("POST", "/auth/login", undefined, { username: "testuser", password: "test-pass-1234" });
+    const loginRes = await request("POST", "/auth/login", undefined, { email: "testuser@roomy.local", password: "test-pass-1234" });
     const token = (loginRes.body as { token: string }).token;
     const workspacesRes = await request("GET", "/workspaces", token);
     const workspaceId = (workspacesRes.body as Array<{ id: string }>)[0].id;
@@ -328,7 +326,7 @@ describe("library ETag conflict detection", () => {
   });
 
   it("PUT with stale If-Match returns 409 and the current server content", async () => {
-    const loginRes = await request("POST", "/auth/login", undefined, { username: "testuser", password: "test-pass-1234" });
+    const loginRes = await request("POST", "/auth/login", undefined, { email: "testuser@roomy.local", password: "test-pass-1234" });
     const token = (loginRes.body as { token: string }).token;
     const workspacesRes = await request("GET", "/workspaces", token);
     const workspaceId = (workspacesRes.body as Array<{ id: string }>)[0].id;
@@ -349,7 +347,7 @@ describe("library ETag conflict detection", () => {
 describe("library WebSocket events", () => {
   it("PUT /library/content emits library.changed with op=updated and the file path", async () => {
     const loginRes = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     const token = (loginRes.body as { token: string }).token;

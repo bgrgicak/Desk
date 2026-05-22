@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useGetMeQuery } from '@/store/api'
 import { loadPrefs, type PrefsShape } from '@/components/settings/SettingsModal'
 
-const PREFS_CHANGED_EVENT = 'desk:prefs-changed'
+const PREFS_CHANGED_EVENT = 'roomy:prefs-changed'
 
 export function notifyPrefsChanged(): void {
   window.dispatchEvent(new CustomEvent(PREFS_CHANGED_EVENT))

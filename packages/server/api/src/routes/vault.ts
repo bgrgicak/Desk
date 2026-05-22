@@ -2,7 +2,7 @@ import {
   ConflictError,
   UnauthorizedError,
   ValidationError,
-} from "@agent-desk/shared";
+} from "@roomy-ai/shared";
 import {
   type SecretEntry,
   type SecretSummary,

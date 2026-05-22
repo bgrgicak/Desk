@@ -1,11 +1,11 @@
 /**
  * Local sources are model providers the user already has running on their
  * own machine — Codex (ChatGPT-subscription tokens), LM Studio (HTTP API),
- * Ollama, etc. Desk detects them on the host and bridges them into the
+ * Ollama, etc. Roomy detects them on the host and bridges them into the
  * sandbox via env vars; no API key is required.
  *
  * Cloud sources (Anthropic, OpenAI, Gemini, …) live on the other path:
- * the user pastes an API key, Desk stores it in the per-user KDBX vault,
+ * the user pastes an API key, Roomy stores it in the per-user KDBX vault,
  * and the connection machinery forwards it as a named env var.
  */
 

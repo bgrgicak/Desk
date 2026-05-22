@@ -7,7 +7,7 @@
  * test locks the contract independent of any HTTP fixture.
  */
 import { describe, expect, it } from "vitest";
-import { ValidationError } from "@agent-desk/shared";
+import { ValidationError } from "@roomy-ai/shared";
 import {
   enforcePasswordPolicy,
   PASSWORD_MIN_LENGTH,

@@ -1,4 +1,4 @@
-import { MessageSchema, type Message } from "@agent-desk/shared";
+import { MessageSchema, type Message } from "@roomy-ai/shared";
 import type { Pool } from "../pool.js";
 import {
   eventHasUserVisibleDiagnostic,

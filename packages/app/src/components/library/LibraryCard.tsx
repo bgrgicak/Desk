@@ -11,7 +11,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuTrigger,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import type { ContextItem } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 import { iconForItem } from '@/data/file-kind'
@@ -55,7 +55,7 @@ interface LibraryCardProps {
 }
 
 /**
- * Unified card used for both Library and Desk surfaces. Folders are not
+ * Unified card used for both Library and Roomy surfaces. Folders are not
  * rendered here — callers handle folder rows separately because their
  * navigation semantics differ from leaf items.
  */

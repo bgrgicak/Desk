@@ -1,7 +1,7 @@
-import { DeskError } from "@agent-desk/shared";
+import { RoomyError } from "@roomy-ai/shared";
 
-/** Maps DeskError codes to HTTP status codes. */
-export function errorToStatus(err: DeskError): number {
+/** Maps RoomyError codes to HTTP status codes. */
+export function errorToStatus(err: RoomyError): number {
   switch (err.code) {
     case "NOT_FOUND": return 404;
     case "UNAUTHORIZED": return 401;

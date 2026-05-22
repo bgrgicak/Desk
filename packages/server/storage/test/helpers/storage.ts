@@ -1,9 +1,9 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { generateId } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
+import { generateId } from "@roomy-ai/shared";
 import { ensureLayout, ensureWorkspaceLayout } from "../../src/layout.js";
 
 export interface TestStorageContext {
@@ -18,15 +18,13 @@ export interface TestStorageContext {
 
 export async function setupTestStorage(): Promise<TestStorageContext> {
   // Per-test-file SQLite file so workers don't collide on the same DB.
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-storage-test-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-storage-test-db-"));
   const dbPath = path.join(dbDir, "test.sqlite3");
   const pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
   // Seed default data
-  process.env.DESK_SEED_USERNAME = "testuser";
-  process.env.DESK_SEED_PASSWORD = "testpass";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "testpass" });
 
   // Get workspace and create a chat for tests
   const { rows: wsRows } = await pool.query("SELECT id, path FROM workspaces LIMIT 1");
@@ -51,7 +49,7 @@ export async function setupTestStorage(): Promise<TestStorageContext> {
   );
 
   // Create temp home directory
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-storage-test-"));
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-storage-test-"));
   await ensureLayout(home);
   await ensureWorkspaceLayout(home, workspaceSlug);
 

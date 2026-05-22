@@ -2,16 +2,17 @@ import { describe, it, expect, afterEach, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { hashPassword, runMigrations, queries } from "@agent-desk/db";
-import { generateId } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { hashPassword, runMigrations, queries } from "@roomy-ai/db";
+import { generateId } from "@roomy-ai/shared";
 import {
   issueSession,
   revokeSession,
   verifySession,
   clearSessions,
 } from "../src/auth/sessions.js";
-import { handleAutoLogin } from "../src/routes/auth.js";
+import { handleAutoLogin, handleLogin } from "../src/routes/auth.js";
+import { UnauthorizedError } from "@roomy-ai/shared";
 
 let pool: Pool;
 let userId: string;
@@ -19,7 +20,7 @@ let dbPath: string;
 
 beforeAll(async () => {
   // Per-test-file SQLite file so workers don't collide.
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-auth-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-auth-"));
   dbPath = path.join(tmpDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
@@ -37,8 +38,8 @@ beforeAll(async () => {
 afterEach(async () => {
   await clearSessions(pool);
   await pool.query("DELETE FROM users WHERE username = ?", ["second-user"]);
-  delete process.env.DESK_AUTO_LOGIN;
-  delete process.env.DESK_SEED_USERNAME;
+  delete process.env.ROOMY_AUTO_LOGIN;
+  delete process.env.ROOMY_SEED_USERNAME;
 });
 
 afterAll(async () => {
@@ -46,9 +47,83 @@ afterAll(async () => {
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
 });
 
+describe("password login (handleLogin)", () => {
+  it("authenticates by email + password and returns a session token", async () => {
+    const id = generateId("user");
+    await queries.users.insert(pool, {
+      id,
+      username: "Login Tester",
+      passwordHash: await hashPassword("correct-horse-battery-staple"),
+      email: "login-tester@example.com",
+    });
+
+    const { token } = await handleLogin(pool, {
+      email: "login-tester@example.com",
+      password: "correct-horse-battery-staple",
+    });
+
+    expect(token).toMatch(/^ses_/);
+    expect(await verifySession(pool, token)).toBe(id);
+
+    await pool.query("DELETE FROM users WHERE id = ?", [id]);
+  });
+
+  it("rejects an unknown email with 401", async () => {
+    await expect(
+      handleLogin(pool, { email: "nobody@example.com", password: "whatever" }),
+    ).rejects.toBeInstanceOf(UnauthorizedError);
+  });
+
+  it("rejects a wrong password with 401", async () => {
+    const id = generateId("user");
+    await queries.users.insert(pool, {
+      id,
+      username: "wrong-pw",
+      passwordHash: await hashPassword("right-pass"),
+      email: "wrong-pw@example.com",
+    });
+
+    await expect(
+      handleLogin(pool, { email: "wrong-pw@example.com", password: "not-it" }),
+    ).rejects.toBeInstanceOf(UnauthorizedError);
+
+    await pool.query("DELETE FROM users WHERE id = ?", [id]);
+  });
+
+  it("two users with the same display name can each log in by their own email", async () => {
+    const aliceId = generateId("user");
+    const bobId = generateId("user");
+    await queries.users.insert(pool, {
+      id: aliceId,
+      username: "Alex",
+      passwordHash: await hashPassword("alice-pw-1234"),
+      email: "alice@example.com",
+    });
+    await queries.users.insert(pool, {
+      id: bobId,
+      username: "Alex",
+      passwordHash: await hashPassword("bob-pw-1234"),
+      email: "bob@example.com",
+    });
+
+    const a = await handleLogin(pool, {
+      email: "alice@example.com",
+      password: "alice-pw-1234",
+    });
+    const b = await handleLogin(pool, {
+      email: "bob@example.com",
+      password: "bob-pw-1234",
+    });
+    expect(await verifySession(pool, a.token)).toBe(aliceId);
+    expect(await verifySession(pool, b.token)).toBe(bobId);
+
+    await pool.query("DELETE FROM users WHERE id IN (?, ?)", [aliceId, bobId]);
+  });
+});
+
 describe("auto-login", () => {
   it("issues a session for the configured local user without a password", async () => {
-    process.env.DESK_SEED_USERNAME = "auth-test";
+    process.env.ROOMY_SEED_USERNAME = "auth-test";
 
     const { token } = await handleAutoLogin(pool);
 
@@ -57,15 +132,15 @@ describe("auto-login", () => {
   });
 
   it("falls back to the first local user when the configured seed user is absent", async () => {
-    process.env.DESK_SEED_USERNAME = "missing-user";
+    process.env.ROOMY_SEED_USERNAME = "missing-user";
 
     const { token } = await handleAutoLogin(pool);
 
     expect(await verifySession(pool, token)).toBe(userId);
   });
 
-  it("can be disabled with DESK_AUTO_LOGIN=off", async () => {
-    process.env.DESK_AUTO_LOGIN = "off";
+  it("can be disabled with ROOMY_AUTO_LOGIN=off", async () => {
+    process.env.ROOMY_AUTO_LOGIN = "off";
 
     await expect(handleAutoLogin(pool)).rejects.toThrow("Auto-login is disabled");
   });
@@ -78,7 +153,7 @@ describe("auto-login", () => {
       passwordHash: await hashPassword("unused"),
       email: "second-user@example.com",
     });
-    process.env.DESK_SEED_USERNAME = "second-user";
+    process.env.ROOMY_SEED_USERNAME = "second-user";
 
     const { token } = await handleAutoLogin(pool);
 

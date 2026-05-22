@@ -44,7 +44,7 @@ describe('previewBlobFor', () => {
     const previewBlob = await previewBlobFor('html', blob, 'preview.html', 'preview.html', blob.type)
 
     expect(previewBlob.type).toBe('text/html')
-    expect(await previewBlob.text()).toContain('desk.preview.resize')
+    expect(await previewBlob.text()).toContain('roomy.preview.resize')
   })
 
   it('serves SVG image previews with image/svg+xml even when the source blob is text/plain', async () => {

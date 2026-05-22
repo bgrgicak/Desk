@@ -1,7 +1,7 @@
-import type { Pool } from "@agent-desk/db";
-import type { StorageContext } from "@agent-desk/storage";
-import type { createRunManager } from "@agent-desk/scheduler";
-import type { WsEvent } from "@agent-desk/shared";
+import type { Pool } from "@roomy-ai/db";
+import type { StorageContext } from "@roomy-ai/storage";
+import type { createRunManager } from "@roomy-ai/scheduler";
+import type { WsEvent } from "@roomy-ai/shared";
 import type { VaultStore } from "../vault/store.js";
 
 /**

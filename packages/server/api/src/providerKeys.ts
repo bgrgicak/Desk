@@ -1,8 +1,8 @@
-import { type Pool, queries } from "@agent-desk/db";
-import { CONNECTION_ENV_VARS, SANDBOX_CONNECTION_ENV_VARS } from "@agent-desk/shared";
+import { type Pool, queries } from "@roomy-ai/db";
+import { CONNECTION_ENV_VARS, SANDBOX_CONNECTION_ENV_VARS } from "@roomy-ai/shared";
 import type { VaultStore } from "./vault/store.js";
 import { readCredentials } from "./connectors/credentialStore.js";
-import { withModule } from "@agent-desk/shared/logger";
+import { withModule } from "@roomy-ai/shared/logger";
 const log = withModule("api/providerKeys");
 
 /**
@@ -95,7 +95,7 @@ export async function resolveProviderKeys(
 /**
  * Built once per resolve call. Today the registry is fully derived from
  * `CONNECTION_ENV_VARS` — adding a new LLM key (extend `PROVIDER_KEY_VARS`
- * in `@agent-desk/shared`) or a new tool token (extend
+ * in `@roomy-ai/shared`) or a new tool token (extend
  * `SANDBOX_CONNECTION_ENV_VARS`) automatically makes it resolvable here
  * with zero changes to this file. The matching DB row is written by
  * `PUT /me/providers` with `providerId = <env-var-name>` and credentials

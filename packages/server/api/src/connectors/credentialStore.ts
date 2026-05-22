@@ -1,4 +1,4 @@
-import { VaultLockedError } from "@agent-desk/shared";
+import { VaultLockedError } from "@roomy-ai/shared";
 import type { VaultStore } from "../vault/store.js";
 
 /**

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Readable } from "node:stream";
-import { NotFoundError, ValidationError } from "@agent-desk/shared";
+import { NotFoundError, ValidationError } from "@roomy-ai/shared";
 import {
   uploadArtifact,
   readFile,
@@ -52,7 +52,7 @@ describe("uploadArtifact (FS-backed, no DB)", () => {
     expect(file.mime).toBe("text/markdown");
     expect(file.size).toBe("library content".length);
 
-    const hostPath = path.join(ctx.home, "desk", file.path);
+    const hostPath = path.join(ctx.home, "roomy", file.path);
     const content = await fs.readFile(hostPath, "utf-8");
     expect(content).toBe("library content");
   });
@@ -103,8 +103,8 @@ describe("uploadArtifact (FS-backed, no DB)", () => {
 
   it("rejects files exceeding MAX_UPLOAD_BYTES", async () => {
     vi.resetModules();
-    vi.doMock("@agent-desk/shared", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("@agent-desk/shared")>()),
+    vi.doMock("@roomy-ai/shared", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("@roomy-ai/shared")>()),
       MAX_UPLOAD_BYTES: 8,
     }));
 
@@ -120,7 +120,7 @@ describe("uploadArtifact (FS-backed, no DB)", () => {
         }),
       ).rejects.toMatchObject({ code: "VALIDATION" });
     } finally {
-      vi.doUnmock("@agent-desk/shared");
+      vi.doUnmock("@roomy-ai/shared");
       vi.resetModules();
     }
   });
@@ -188,7 +188,7 @@ describe("deleteFile (moves to trash)", () => {
       stream: makeStream("bye"),
     });
 
-    const hostPath = path.join(ctx.home, "desk", uploaded.path);
+    const hostPath = path.join(ctx.home, "roomy", uploaded.path);
     await fs.access(hostPath);
 
     await deleteFile(ctx, ctx.workspaceSlug,uploaded.path);
@@ -310,7 +310,7 @@ describe("moveFile (symlink-on-move)", () => {
     const moved = await moveFile(ctx, ctx.workspaceSlug,uploaded.path, newRel);
     expect(moved.path).toBe(newRel);
 
-    const oldAbs = path.join(ctx.home, "desk", uploaded.path);
+    const oldAbs = path.join(ctx.home, "roomy", uploaded.path);
     const lstat = await fs.lstat(oldAbs);
     expect(lstat.isSymbolicLink()).toBe(true);
 

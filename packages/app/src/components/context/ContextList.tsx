@@ -63,7 +63,7 @@ import {
   RadioGroupItem,
   Skeleton,
   useIsMobile,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { TopBarActions, TopBarContentActions } from '@/components/layout/TopBar'
 import { useContentAreaInsets } from '@/components/shared/splitPane'
 import type { ContextItem, Folder } from '@/data/ui-types'
@@ -142,8 +142,8 @@ export function ContextList({ onItemClick, onCompose, onPinItem, onUnpinItem, on
   const isMobile = useIsMobile()
 
   const [searchQuery, setSearchQuery] = useState('')
-  const [typeFilter, setTypeFilter] = usePersistedState<TypeFilter>('desk.context.typeFilter', 'all')
-  const [viewMode, setViewMode] = usePersistedState<ViewMode>('desk.context.viewMode', 'list')
+  const [typeFilter, setTypeFilter] = usePersistedState<TypeFilter>('roomy.context.typeFilter', 'all')
+  const [viewMode, setViewMode] = usePersistedState<ViewMode>('roomy.context.viewMode', 'list')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   const { developerMode, loaded: prefsLoaded } = usePrefs()

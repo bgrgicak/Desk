@@ -20,14 +20,14 @@ function makeEntityLink(id: string): Link | null {
   if (!kind) return null
   return {
     type: 'link',
-    url: `desk-entity:${kind}:${encodeURIComponent(id)}`,
+    url: `roomy-entity:${kind}:${encodeURIComponent(id)}`,
     title: null,
     children: [{ type: 'text', value: id }],
   }
 }
 
 /**
- * Converts Desk chat/workspace ids in message text into internal links so the
+ * Converts Roomy chat/workspace ids in message text into internal links so the
  * renderer can display navigable title chips instead of raw ids.
  */
 export function remarkEntityIds() {

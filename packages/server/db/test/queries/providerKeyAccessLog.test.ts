@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { type Pool } from "../../src/pool.js";
-import { generateId } from "@agent-desk/shared";
+import { generateId } from "@roomy-ai/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as providerKeyAccessLog from "../../src/queries/providerKeyAccessLog.js";
 import * as users from "../../src/queries/users.js";

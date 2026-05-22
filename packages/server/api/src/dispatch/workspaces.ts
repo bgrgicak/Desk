@@ -1,6 +1,6 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
-import { ValidationError, type PinKind } from "@agent-desk/shared";
-import { withModule } from "@agent-desk/shared/logger";
+import { ValidationError, type PinKind } from "@roomy-ai/shared";
+import { withModule } from "@roomy-ai/shared/logger";
 import * as accountRoutes from "../routes/account.js";
 import * as agentRoutes from "../routes/agents.js";
 import * as chatRoutes from "../routes/chats.js";

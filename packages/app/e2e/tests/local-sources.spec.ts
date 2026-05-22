@@ -1,9 +1,9 @@
 /**
  * Settings → Connections → Local sources.
  *
- * Local sources are model providers Desk auto-detects on the host (Codex
+ * Local sources are model providers Roomy auto-detects on the host (Codex
  * today; LM Studio, Ollama, … later). The user opt-ins via /me/providers/local
- * and Desk forwards the source's env vars (PI_AUTH_JSON_BASE64 for Codex,
+ * and Roomy forwards the source's env vars (PI_AUTH_JSON_BASE64 for Codex,
  * base URLs for HTTP servers) into every sandbox exec.
  *
  * This spec drives the API end of the contract. The picker/detail UI is

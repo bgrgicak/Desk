@@ -1,5 +1,5 @@
 import { Sparkles } from 'lucide-react'
-import { cn } from '@agent-desk/ui'
+import { cn } from '@roomy-ai/ui'
 
 /** Tool selected when the suggestion is clicked. Matches the
  *  `GoalKey` values the composer's Tools picker recognises. */

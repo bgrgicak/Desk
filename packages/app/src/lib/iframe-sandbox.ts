@@ -1,6 +1,6 @@
 /**
  * Generated previews are untrusted agent/user-authored HTML. Let scripts run
- * for realistic rendering, but do not grant same-origin access to Desk's
+ * for realistic rendering, but do not grant same-origin access to Roomy's
  * sessionStorage, localStorage, cookies, or parent DOM.
  *
  * `allow-popups` lets fragments open external links via `<a target="_blank">`

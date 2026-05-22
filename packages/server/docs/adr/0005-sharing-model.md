@@ -6,16 +6,16 @@
 ## Context
 
 The private-beta requirement: a user shares an artifact with a
-colleague without inviting them to Desk. Three mechanisms:
+colleague without inviting them to Roomy. Three mechanisms:
 
 1. **Signed URLs**: artifact URL embeds a token, expires at a
    timestamp, recipient hits the URL with no login.
 2. **Per-resource ACLs**: artifact rows learn a `shared_with`
-   column; recipient must have a Desk account to view.
+   column; recipient must have a Roomy account to view.
 3. **Workspace invites**: recipient gets full workspace access.
 
 The roadmap calls for all three, but the unblocker for the beta
-is (1) — colleagues are unlikely to install Desk just to read
+is (1) — colleagues are unlikely to install Roomy just to read
 one document.
 
 ## Decision

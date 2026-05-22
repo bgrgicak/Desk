@@ -1,7 +1,7 @@
-import { type Pool } from "@agent-desk/db";
-import { queries } from "@agent-desk/db";
-import { generateId, NotFoundError, ValidationError } from "@agent-desk/shared";
-import { withModule } from "@agent-desk/shared/logger";
+import { type Pool } from "@roomy-ai/db";
+import { queries } from "@roomy-ai/db";
+import { generateId, NotFoundError, ValidationError } from "@roomy-ai/shared";
+import { withModule } from "@roomy-ai/shared/logger";
 const log = withModule("api/routes/agents");
 
 export async function listAgents(pool: Pool, userId: string) {
@@ -37,7 +37,7 @@ export interface PatchAgentResult {
    * True when `data.model` was provided and differs from the stored value.
    * The route handler uses this to decide whether to restart the per-
    * workspace pi runtimes: pi caches each agent
-   * file's `model:` field at startup, so a Desk-side model change does
+   * file's `model:` field at startup, so a Roomy-side model change does
    * NOT propagate to a running daemon until it's restarted, even though
    * we rewrite the agent file each turn. Clearing sessions alone is not
    * enough — a freshly-created session in the same daemon still inherits

@@ -8,7 +8,7 @@ You receive memory from three scopes:
   overrides user memory on workspace-specific topics.
 - **Chat memory** — the latest summary plus the current transcript. Use
   `search_chat_messages` when you need recall from other chats; load
-  `desk-cli-chat-search-messages` if you need command details.
+  `roomy-cli-chat-search-messages` if you need command details.
 
 Use memory to serve the user, not to explain the memory system. When the user
 says "remember," "learn," "keep in mind," or similar, respond naturally and

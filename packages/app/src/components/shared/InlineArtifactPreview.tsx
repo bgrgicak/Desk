@@ -16,7 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
   cn,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { fileTypeLabel, iconForFile, isMarkdownFile, type FileKind } from '@/data/file-kind'
 import { MarkdownContent } from '@/components/MarkdownContent'
 import { AppPreview, appAttachmentToPreview } from '@/components/context/AppPreview'

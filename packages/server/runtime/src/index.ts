@@ -46,12 +46,12 @@ export type { AgentFileInput } from "./agentFile.js";
 export { renderPromptBody, loadAndSub } from "./prompt.js";
 export type { RenderPromptInput } from "./prompt.js";
 export {
-  writeDeskSkillFiles,
+  writeRoomySkillFiles,
   writeGoalSkillFiles,
-  DESK_SKILLS_SANDBOX_DIR,
+  ROOMY_SKILLS_SANDBOX_DIR,
   GOAL_SKILLS_SANDBOX_DIR,
-  DESK_SKILL_PREFIX,
-  DESK_GOAL_SKILL_PREFIX,
+  ROOMY_SKILL_PREFIX,
+  ROOMY_GOAL_SKILL_PREFIX,
   goalSkillName,
 } from "./goalSkills.js";
 export { createDriver, buildDaemonEnv, buildPiEnv, hasActiveRunForContainer, isContainerGoneError } from "./driver.js";

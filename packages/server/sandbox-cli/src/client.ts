@@ -3,25 +3,25 @@ import { URL } from "node:url";
 import { CliError } from "./errors.js";
 
 function resolveTarget(pathname: string): URL {
-  const apiUrl = process.env.DESK_API_URL;
+  const apiUrl = process.env.ROOMY_API_URL;
   if (!apiUrl) {
-    throw new CliError("NO_ENDPOINT", "DESK_API_URL is not set");
+    throw new CliError("NO_ENDPOINT", "ROOMY_API_URL is not set");
   }
   return new URL(pathname, apiUrl);
 }
 
 function requireToken(): string {
   // Direct env path: caller already wired the token in. Trunk-shaped.
-  const direct = process.env.DESK_SANDBOX_TOKEN;
+  const direct = process.env.ROOMY_SANDBOX_TOKEN;
   if (direct) return direct;
   // File path: the host runtime writes the per-run token to a known
-  // file before each turn and exposes DESK_SANDBOX_TOKEN_PATH on the
+  // file before each turn and exposes ROOMY_SANDBOX_TOKEN_PATH on the
   // daemon's stable env. The daemon's child tool processes (this CLI)
   // inherit that env and read the freshest token off disk. This keeps
   // the daemon's process env stable across runs (the env-digest stays
   // the same so the daemon doesn't restart per turn) while preserving
   // per-run token rotation semantics.
-  const tokenPath = process.env.DESK_SANDBOX_TOKEN_PATH;
+  const tokenPath = process.env.ROOMY_SANDBOX_TOKEN_PATH;
   if (tokenPath) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -34,7 +34,7 @@ function requireToken(): string {
   }
   throw new CliError(
     "NO_TOKEN",
-    "DESK_SANDBOX_TOKEN is not set and DESK_SANDBOX_TOKEN_PATH did not yield a token",
+    "ROOMY_SANDBOX_TOKEN is not set and ROOMY_SANDBOX_TOKEN_PATH did not yield a token",
   );
 }
 
@@ -74,9 +74,9 @@ function handleResponse(
 }
 
 /**
- * Posts to the host-side desk-server REST API. Resolves the API URL from
- * `DESK_API_URL` and authenticates with the per-run sandbox session token
- * in `DESK_SANDBOX_TOKEN` — both injected by the runtime when pi is
+ * Posts to the host-side roomy-server REST API. Resolves the API URL from
+ * `ROOMY_API_URL` and authenticates with the per-run sandbox session token
+ * in `ROOMY_SANDBOX_TOKEN` — both injected by the runtime when pi is
  * started for a run.
  */
 export async function postJson(
@@ -97,7 +97,7 @@ export async function postJson(
         protocol: target.protocol,
         headers: {
           "Content-Type": "application/json",
-          "X-Desk-Sandbox-Token": token,
+          "X-Roomy-Sandbox-Token": token,
           "Content-Length": Buffer.byteLength(json),
         },
       },
@@ -125,7 +125,7 @@ export async function getJson(pathname: string): Promise<unknown> {
         path: target.pathname + target.search,
         protocol: target.protocol,
         headers: {
-          "X-Desk-Sandbox-Token": token,
+          "X-Roomy-Sandbox-Token": token,
         },
       },
       (res) => handleResponse(res, resolve, reject),

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { generateId } from "@agent-desk/shared";
+import { generateId } from "@roomy-ai/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as userSettings from "../../src/queries/userSettings.js";
 import * as users from "../../src/queries/users.js";

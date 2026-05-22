@@ -33,7 +33,7 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
   Input,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { TopBarActions, TopBarContentActions } from '@/components/layout/TopBar'
 import type { ContextItem, Artifact } from '@/data/ui-types'
 import { getArtifactIcon } from '@/data/ui-types'
@@ -118,7 +118,7 @@ export function appPreviewRefForContextItem(
   if (libraryFragmentRef) return { scope: 'library', appName: libraryFragmentRef.appName, appPath: libraryFragmentRef.appPath, fragment: libraryFragmentRef.fragment }
 
   const libraryManifestRef = parseLibraryAppManifestPath(item.id)
-  if (libraryManifestRef) return { scope: 'library', appName: libraryManifestRef.appName, appPath: item.id.slice(0, -'/desk.app.json'.length) }
+  if (libraryManifestRef) return { scope: 'library', appName: libraryManifestRef.appName, appPath: item.id.slice(0, -'/roomy.app.json'.length) }
 
   const libraryAppDirRef =
     item.type === 'app' && !libraryManifestRef
@@ -159,7 +159,7 @@ export function ContextDetail({ item, onBack, onCompose, onRenameItem, isPinned,
   const [deleteLibraryFile, deleteState] = useDeleteLibraryFileMutation()
   const [moveLibraryEntry, moveState] = useMoveLibraryEntryMutation()
 
-  const rightPanelOpenKey = `desk.library.${item.id}.rightPanelOpen`
+  const rightPanelOpenKey = `roomy.library.${item.id}.rightPanelOpen`
   const [panelOpen, setPanelOpen] = usePersistedState<boolean>(rightPanelOpenKey, shouldOpenRightPanelsByDefault())
   const isSmallViewport = useIsSmallRightPanelScreen()
 
@@ -216,7 +216,7 @@ export function ContextDetail({ item, onBack, onCompose, onRenameItem, isPinned,
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [showPreview, setShowPreview] = usePersistedState(
-    `desk.library.${item.id}.previewMode`,
+    `roomy.library.${item.id}.previewMode`,
     isMarkdownFile(item.name, item.mimeType) || isHtmlFile(item.name, item.mimeType),
   )
 
@@ -247,7 +247,7 @@ export function ContextDetail({ item, onBack, onCompose, onRenameItem, isPinned,
   // the raw JSON. The bridge + capability checklist live inside
   // <AppPreview>.
   // PR-E extends this to library apps: clicking either the `<name>.app/`
-  // library directory or its inner `desk.app.json` opens the same live
+  // library directory or its inner `roomy.app.json` opens the same live
   // preview.
   const baseAppPreviewRef = appPreviewRefForContextItem(item)
   const appPreviewRef = baseAppPreviewRef
@@ -1034,7 +1034,7 @@ export function ContextDetail({ item, onBack, onCompose, onRenameItem, isPinned,
             <AlertDialogDescription>
               {relatedArtifacts.length > 0 ? (
                 <>
-                  This item was used to create {relatedArtifacts.length} {relatedArtifacts.length === 1 ? 'artifact' : 'artifacts'} in your Desk:
+                  This item was used to create {relatedArtifacts.length} {relatedArtifacts.length === 1 ? 'artifact' : 'artifacts'} in your Roomy:
                   <span className="block mt-2 space-y-1">
                     {relatedArtifacts.map(a => (
                       <span key={a.id} className="flex items-center gap-2 text-foreground">
@@ -1044,7 +1044,7 @@ export function ContextDetail({ item, onBack, onCompose, onRenameItem, isPinned,
                     ))}
                   </span>
                   <span className="block mt-2">
-                    Those artifacts will remain in your Desk, but they will no longer reference this file as context.
+                    Those artifacts will remain in your Roomy, but they will no longer reference this file as context.
                   </span>
                 </>
               ) : (

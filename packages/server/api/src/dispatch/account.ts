@@ -1,5 +1,5 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
-import { queries } from "@agent-desk/db";
+import { queries } from "@roomy-ai/db";
 import * as accountRoutes from "../routes/account.js";
 import * as authRoutes from "../routes/auth.js";
 import * as localSourceRoutes from "../routes/localSources.js";
@@ -41,7 +41,7 @@ export async function dispatchAccount(
     // a slow-loris caller can't slip past the limiter by stalling the
     // POST.
     if (denyOverLimit(res, "auth.login", getClientIp(req))) return true;
-    const body = await parseBody(req) as { username: string; password: string };
+    const body = await parseBody(req) as { email: string; password: string };
     const result = await authRoutes.handleLogin(pool, body);
     sendJson(res, 200, result);
     return true;
@@ -50,13 +50,13 @@ export async function dispatchAccount(
     // Auto-login mints a bearer for the seed user without credentials,
     // so the call must originate from loopback. A request that reaches
     // the API from a remote address either means the operator put
-    // desk-server on a public interface deliberately or a reverse-proxy
+    // roomy-server on a public interface deliberately or a reverse-proxy
     // forwarded it — both should fall back to the manual LoginScreen
-    // rather than minting a free token. DESK_TRUST_PROXY=1 disables
+    // rather than minting a free token. ROOMY_TRUST_PROXY=1 disables
     // the loopback check so an operator who really wants public auto-
     // login can opt in explicitly.
     const remote = req.socket?.remoteAddress ?? "";
-    if (!isLoopbackAddress(remote) && process.env.DESK_TRUST_PROXY !== "1") {
+    if (!isLoopbackAddress(remote) && process.env.ROOMY_TRUST_PROXY !== "1") {
       sendJson(res, 403, { code: "FORBIDDEN", message: "Auto-login restricted to loopback" });
       return true;
     }

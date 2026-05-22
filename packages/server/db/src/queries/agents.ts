@@ -1,5 +1,5 @@
 import { type Pool, transact } from "../pool.js";
-import { AgentSchema, ValidationError, type Agent } from "@agent-desk/shared";
+import { AgentSchema, ValidationError, type Agent } from "@roomy-ai/shared";
 
 const ORDER_SQL = "sort_order ASC, name COLLATE NOCASE ASC, id ASC";
 

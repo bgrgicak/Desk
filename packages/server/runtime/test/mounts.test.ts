@@ -2,10 +2,10 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-desk/storage";
-import { generateId, LOCAL_FILESYSTEM_MOUNT_MARKER, LOCAL_FILESYSTEM_PROVIDER_ID } from "@agent-desk/shared";
+import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@roomy-ai/storage";
+import { generateId, LOCAL_FILESYSTEM_MOUNT_MARKER, LOCAL_FILESYSTEM_PROVIDER_ID } from "@roomy-ai/shared";
 import { setupTestDb, teardownTestDb } from "../../db/test/helpers/db.js";
-import { queries, type Pool } from "@agent-desk/db";
+import { queries, type Pool } from "@roomy-ai/db";
 import {
   projectMounts,
   teardownMounts,
@@ -30,7 +30,7 @@ const TEST_SLUG = "test-ws";
 const handle: SandboxHandle = { containerId: "fake-container", workspaceId: "wks_test123" };
 
 beforeAll(async () => {
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-runtime-mount-test-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-runtime-mount-test-"));
   await ensureLayout(home);
   await ensureWorkspaceLayout(home, TEST_SLUG);
   pool = await setupTestDb();
@@ -126,7 +126,7 @@ describe("mounts", () => {
   });
 
   it("buildWorkspaceMountPlan adds active local filesystem mounts and agent context", async () => {
-    const source = await fs.mkdtemp(path.join(os.tmpdir(), "desk-local-fs-source-"));
+    const source = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-local-fs-source-"));
     const connection = await queries.connectors.createConnection(pool, {
       ownerUserId: userId,
       providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
@@ -162,7 +162,7 @@ describe("mounts", () => {
   });
 
   it("buildWorkspaceMountPlan accepts stale local filesystem mount placeholders for the same home name", async () => {
-    const source = await fs.mkdtemp(path.join(os.tmpdir(), "desk-local-fs-stale-marker-"));
+    const source = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-local-fs-stale-marker-"));
     const staleUserId = generateId("user");
     await queries.users.insert(pool, {
       id: staleUserId,
@@ -198,7 +198,7 @@ describe("mounts", () => {
   });
 
   it("buildWorkspaceMountPlan rejects home-name collisions", async () => {
-    const source = await fs.mkdtemp(path.join(os.tmpdir(), "desk-local-fs-collision-"));
+    const source = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-local-fs-collision-"));
     await fs.mkdir(path.join(workspaceRootPath(home, TEST_SLUG), "Taken"));
     const collisionUserId = generateId("user");
     await queries.users.insert(pool, {

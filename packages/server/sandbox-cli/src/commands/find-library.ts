@@ -3,10 +3,10 @@ import { CliError, parseFlags } from "../errors.js";
 import { output } from "../index.js";
 
 export const usage =
-  "desk-agent find library [--query <text>] [--kind app|fragment|note|doc|any] [--workspace <current-slug>] [--limit N]";
+  "roomy-agent find library [--query <text>] [--kind app|fragment|note|doc|any] [--workspace <current-slug>] [--limit N]";
 
 export const help = `\
-desk-agent find library — discover reusable library apps, fragments, notes, and docs.
+roomy-agent find library — discover reusable library apps, fragments, notes, and docs.
 
 Optional:
   --query <text>           Free-text query. When omitted, returns recent hits.

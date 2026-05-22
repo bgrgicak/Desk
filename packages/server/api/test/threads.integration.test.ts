@@ -21,11 +21,11 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, queries, hashPassword } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId, MessageSchema, type Chat, type Message, type WsEvent } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, queries, hashPassword } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId, MessageSchema, type Chat, type Message, type WsEvent } from "@roomy-ai/shared";
 import { createApp } from "../src/app.js";
 import { createThread, sendMessage } from "../src/routes/chats.js";
 import { clearSessions } from "../src/auth/sessions.js";
@@ -145,7 +145,7 @@ async function seedUser(suffix: string): Promise<SeededUser> {
     title: "hub chat",
   });
 
-  const login = await request("POST", "/auth/login", null, { username, password });
+  const login = await request("POST", "/auth/login", null, { email: `${username}@example.com`, password });
   const token = (login.body as { token: string }).token;
 
   return {
@@ -172,14 +172,14 @@ async function seedAnchor(chatId: string, text = "anchor"): Promise<string> {
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-threads-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-threads-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-threads-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-threads-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   // No-op exec: the API path tests don't care about the agent actually
   // running, only about the DB rows and WS events emitted around the fire.
@@ -201,7 +201,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 describe("threadChatId schema mapping", () => {

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron/renderer";
 
-contextBridge.exposeInMainWorld("deskDesktop", {
+contextBridge.exposeInMainWorld("roomyDesktop", {
   onDockerMissing: (cb: () => void) => {
     ipcRenderer.on("docker-missing", () => cb());
   },

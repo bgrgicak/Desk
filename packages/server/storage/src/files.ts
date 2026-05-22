@@ -4,12 +4,12 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { type Pool } from "@agent-desk/db";
+import { type Pool } from "@roomy-ai/db";
 import {
   NotFoundError,
   MAX_UPLOAD_BYTES,
   ValidationError,
-} from "@agent-desk/shared";
+} from "@roomy-ai/shared";
 import {
   chatArtifactsDir,
   chatAttachmentsDir,
@@ -21,10 +21,10 @@ import {
   type VirtualLibraryMount,
 } from "./layout.js";
 import { invalidateLibraryListCache } from "./library-cache.js";
-import { ID_PREFIXES } from "@agent-desk/shared";
+import { ID_PREFIXES } from "@roomy-ai/shared";
 
 /**
- * Per-request storage context — carries the DB pool + Desk home root.
+ * Per-request storage context — carries the DB pool + Roomy home root.
  * Workspace-scoped helpers take a `slug` alongside this context so
  * every workspace's files live under their own directory.
  */
@@ -36,7 +36,7 @@ export interface StorageContext {
 export interface UploadArtifactInput {
   /** Workspace whose on-disk slug this upload is destined for. */
   workspaceId: string;
-  /** The workspace's `path` column — the directory name under `~/Desk/`. */
+  /** The workspace's `path` column — the directory name under `~/Roomy/`. */
   workspaceSlug: string;
   chatId?: string;
   name: string;
@@ -355,7 +355,7 @@ export async function overwriteFile(
   const parent = path.dirname(abs);
   await fs.mkdir(parent, { recursive: true });
 
-  // Place the temp file beside the target rather than under Desk's tmp
+  // Place the temp file beside the target rather than under Roomy's tmp
   // dir. Virtual mounts can live on a different filesystem (e.g. a user's
   // home directory on a separate mount), and `fs.rename` across devices
   // fails with EXDEV.
@@ -456,7 +456,7 @@ export async function pinLibraryFileToChat(
       return {
         path: relPath,
         name,
-        mime: "application/vnd.desk.app+directory",
+        mime: "application/vnd.roomy.app+directory",
         size: 0,
         createdAt: stat.birthtime.toISOString(),
         updatedAtMs: String(stat.mtimeMs),
@@ -494,7 +494,7 @@ export async function pinLibraryFileToChat(
           return {
             path: relPath,
             name: desiredName,
-            mime: "application/vnd.desk.app+directory",
+            mime: "application/vnd.roomy.app+directory",
             size: 0,
             createdAt: stat.birthtime.toISOString(),
             updatedAtMs: String(stat.mtimeMs),
@@ -522,7 +522,7 @@ export async function pinLibraryFileToChat(
     return {
       path: relPath,
       name: path.basename(linkPath),
-      mime: "application/vnd.desk.app+directory",
+      mime: "application/vnd.roomy.app+directory",
       size: 0,
       createdAt: stat.birthtime.toISOString(),
       updatedAtMs: String(stat.mtimeMs),
@@ -649,7 +649,7 @@ export async function saveChatArtifactToLibrary(
 }
 
 /**
- * The "version" of a library app — the mtime of its `desk.app.json`
+ * The "version" of a library app — the mtime of its `roomy.app.json`
  * manifest, as a string of milliseconds. Captured at copy time so the
  * UI can pass it back at replace time, and the server can detect whether
  * the library copy moved while the user was editing in the chat.
@@ -660,7 +660,7 @@ export async function saveChatArtifactToLibrary(
  */
 async function libraryAppVersion(appAbs: string): Promise<string | null> {
   try {
-    const s = await fs.stat(path.join(appAbs, "desk.app.json"));
+    const s = await fs.stat(path.join(appAbs, "roomy.app.json"));
     return String(s.mtimeMs);
   } catch {
     return null;
@@ -767,7 +767,7 @@ export async function copyLibraryAppToChat(
   return {
     path: relPath,
     name: baseName,
-    mime: "application/vnd.desk.app+directory",
+    mime: "application/vnd.roomy.app+directory",
     size: 0,
     createdAt: destStat.birthtime.toISOString(),
     updatedAtMs: String(destStat.mtimeMs),
@@ -895,7 +895,7 @@ export async function replaceLibraryAppFromChat(
   return {
     path: relPath,
     name: path.basename(destAbs),
-    mime: "application/vnd.desk.app+directory",
+    mime: "application/vnd.roomy.app+directory",
     size: 0,
     createdAt: newStat.birthtime.toISOString(),
     updatedAtMs: String(newStat.mtimeMs),
@@ -934,7 +934,7 @@ export async function deleteChatApp(
 
 /**
  * Removes a library `<name>.app/` directory by moving it to
- * `~/Desk/.trash/.app-versions/<name>-<timestamp>/`. Recoverable via
+ * `~/Roomy/.trash/.app-versions/<name>-<timestamp>/`. Recoverable via
  * the same trash bucket modify-as-version uses; its lazy sweep clears
  * entries older than 30 days. Issue #47, PR-E.
  */
@@ -989,7 +989,7 @@ export async function moveFile(
 }
 
 /**
- * "Delete" a file by moving it to ~/Desk/.trash/{timestamp}-{name}.
+ * "Delete" a file by moving it to ~/Roomy/.trash/{timestamp}-{name}.
  * The file stays on disk until the trash is purged. After delete, the
  * original path no longer resolves — subsequent reads/stats return 404.
  * The trash itself is not mounted into sandboxes, so the agent cannot
@@ -1041,7 +1041,7 @@ export async function removeChatAttachment(
 /**
  * Soft-deletes a chat's on-disk footprint by moving `.chats/{chatId}/`
  * (which holds attachments, logs, and notes/) into
- * `~/Desk/.trash/.chats/`. Idempotent — missing dirs are silently skipped.
+ * `~/Roomy/.trash/.chats/`. Idempotent — missing dirs are silently skipped.
  */
 export async function trashChatDirectories(
   home: string,

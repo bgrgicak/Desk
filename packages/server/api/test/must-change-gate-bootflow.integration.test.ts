@@ -32,11 +32,11 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
+import { Pool, runMigrations } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
 import { createApp, type AppOptions } from "../src/app.js";
-import { seedIfEmpty } from "@agent-desk/db";
+import { insertSeedFixture } from "@roomy-ai/db";
 
 let pool: Pool;
 let home: string;
@@ -104,20 +104,18 @@ function rawWsUpgrade(reqPath: string): Promise<{ response: string; socket: net.
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcb-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-mcb-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcb-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-mcb-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   // Seed with the documented public seed password — the only
   // configuration that flips must_change_password=1 on the user row.
-  process.env.DESK_SEED_USERNAME = SEED_USERNAME;
-  process.env.DESK_SEED_PASSWORD = SEED_PASSWORD;
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: SEED_USERNAME, password: SEED_PASSWORD });
 
   server = createApp(appOpts());
   await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -131,16 +129,14 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
-  delete process.env.DESK_SEED_USERNAME;
-  delete process.env.DESK_SEED_PASSWORD;
+  delete process.env.ROOMY_HOME;
 });
 
 describe("must-change-password — full SPA-shaped boot flow", () => {
   it("steps a user from the gated state through password change and into the normal API", async () => {
     // ── 1. Login with the documented public seed password ─────────
     const login = await jsonRequest("POST", "/auth/login", {
-      body: { username: SEED_USERNAME, password: SEED_PASSWORD },
+      body: { email: `${SEED_USERNAME}@roomy.local`, password: SEED_PASSWORD },
     });
     expect(login.status).toBe(200);
     const token = (login.body as { token: string }).token;
@@ -193,7 +189,7 @@ describe("must-change-password — full SPA-shaped boot flow", () => {
     // Fresh user with the gate set so re-running this spec doesn't
     // get tangled with the round-trip above (which clears the flag).
     const login = await jsonRequest("POST", "/auth/login", {
-      body: { username: SEED_USERNAME, password: "fresh-password-strong-1" },
+      body: { email: `${SEED_USERNAME}@roomy.local`, password: "fresh-password-strong-1" },
     });
     // After the round-trip test we changed the password; if THIS test
     // runs after that, the seed value no longer logs in.  Skip in

@@ -1,6 +1,6 @@
-import { type Pool } from "@agent-desk/db";
-import { queries } from "@agent-desk/db";
-import { ForbiddenError, UnauthorizedError } from "@agent-desk/shared";
+import { type Pool } from "@roomy-ai/db";
+import { queries } from "@roomy-ai/db";
+import { ForbiddenError, UnauthorizedError } from "@roomy-ai/shared";
 import { verifySession } from "./sessions.js";
 
 /**
@@ -36,8 +36,8 @@ const PUBLIC_PREFIXES = ["/auth/login", "/auth/auto-login", "/auth/signup", "/op
 // dispatch handler can enforce the internal contract directly.
 const INTERNAL_PREFIX = "/internal/";
 
-// Routes under /sandbox/* are called by the agent's `desk` CLI from inside
-// an pi run. They authenticate via X-Desk-Sandbox-Token instead of
+// Routes under /sandbox/* are called by the agent's `roomy` CLI from inside
+// an pi run. They authenticate via X-Roomy-Sandbox-Token instead of
 // a user session — see auth/sandboxToken.ts.
 const SANDBOX_PREFIX = "/sandbox/";
 

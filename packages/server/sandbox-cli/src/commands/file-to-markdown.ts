@@ -4,10 +4,10 @@ import { readFile, writeFile } from "node:fs/promises";
 import { CliError, parseFlags } from "../errors.js";
 
 export const usage =
-  "desk-agent file to-markdown [--output <path>] <workspace-relative-path>";
+  "roomy-agent file to-markdown [--output <path>] <workspace-relative-path>";
 
 export const help = `\
-desk-agent file to-markdown — convert a document into agent-readable Markdown/text.
+roomy-agent file to-markdown — convert a document into agent-readable Markdown/text.
 
 Required:
   <workspace-relative-path>    Document to convert.
@@ -21,8 +21,8 @@ Supported:
   Already-readable text: .md, .markdown, .txt, .csv, .tsv, .json, .xml, .yaml, .yml
 
 Examples:
-  desk-agent file to-markdown report.pdf
-  desk-agent file to-markdown --output report.md report.docx
+  roomy-agent file to-markdown report.pdf
+  roomy-agent file to-markdown --output report.md report.docx
 
 Exit codes:
   0 on success — converted text on stdout or written to --output.

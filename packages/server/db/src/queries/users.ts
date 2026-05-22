@@ -1,5 +1,5 @@
 import { type Pool } from "../pool.js";
-import { UnauthorizedError, UserSchema, type User } from "@agent-desk/shared";
+import { UnauthorizedError, UserSchema, type User } from "@roomy-ai/shared";
 import { hashPassword, verifyPassword, isLegacyHash } from "../passwords.js";
 
 function rowToUser(row: Record<string, unknown>): User {
@@ -120,16 +120,16 @@ export async function getPasswordHash(
 }
 
 /**
- * Authenticates by username + password. Returns the user on success, null on
- * bad username or password. Opportunistically rehashes legacy `plain:` entries
+ * Authenticates by email + password. Returns the user on success, null on
+ * bad email or password. Opportunistically rehashes legacy `plain:` entries
  * on successful login.
  */
 export async function login(
   db: Pool,
-  username: string,
+  email: string,
   password: string,
 ): Promise<User | null> {
-  const user = await findByUsername(db, username);
+  const user = await findByEmail(db, email);
   if (!user) return null;
 
   const hash = await getPasswordHash(db, user.id);

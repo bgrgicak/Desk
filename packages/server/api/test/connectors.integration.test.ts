@@ -4,9 +4,9 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
+import { Pool, runMigrations, insertSeedFixture } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -23,18 +23,16 @@ let vault: VaultStore;
 let userId: string;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-connectors-api-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-connectors-api-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "connector-api";
-  process.env.DESK_SEED_PASSWORD = "connector-pass";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "connector-api", password: "connector-pass" });
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-connectors-api-home-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-connectors-api-home-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
   const storage = { pool, home };
   const runManager = createRunManager({
     pool,
@@ -99,7 +97,7 @@ describe("connector connection routes", () => {
   let workspaceId: string;
 
   beforeAll(async () => {
-    const login = await request("POST", "/auth/login", undefined, { username: "connector-api", password: "connector-pass" });
+    const login = await request("POST", "/auth/login", undefined, { email: "connector-api@roomy.local", password: "connector-pass" });
     token = login.body.token;
     const ws = await request("POST", "/workspaces", token, { name: "Connector Grants" });
     workspaceId = ws.body.id;
@@ -260,7 +258,6 @@ describe("connector connection routes", () => {
     const resolved = await resolveProviderKeys(pool, vault, userId);
     expect(resolved.ANTHROPIC_API_KEY).toBe("sk-ant-provider-second");
   });
-
 
   it("validates connector payloads", async () => {
     const missing = await request("POST", "/me/connections", token, {});

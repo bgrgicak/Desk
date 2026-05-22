@@ -1,4 +1,4 @@
-import { SidebarTrigger } from '@agent-desk/ui'
+import { SidebarTrigger } from '@roomy-ai/ui'
 
 interface PageHeaderProps {
   breadcrumb: React.ReactNode

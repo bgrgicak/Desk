@@ -6,7 +6,7 @@ import {
   type Chat,
   type ChatWithListMeta,
   type GoalKey,
-} from "@agent-desk/shared";
+} from "@roomy-ai/shared";
 
 function validateGoal(goal: string | null | undefined): GoalKey | null | undefined {
   if (goal === undefined) return undefined;
@@ -67,7 +67,7 @@ function latestAgentTurnStateMatchesSql(states: readonly string[]): string {
 
 /**
  * Server-side chat-list response row.  Same shape as
- * `ChatWithListMeta` from `@agent-desk/shared`, but with the four
+ * `ChatWithListMeta` from `@roomy-ai/shared`, but with the four
  * sidebar-meta fields promoted from optional to required because the
  * server query always populates them (the shared type leaves them
  * optional so the WS `chat.updated` payload — which omits them — fits

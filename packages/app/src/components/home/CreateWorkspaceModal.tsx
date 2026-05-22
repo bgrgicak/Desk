@@ -5,7 +5,7 @@ import {
   DialogContent,
   DialogDescription,
   DialogTitle,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { useCreateWorkspaceMutation } from '@/store/api'
 import type { ServerWorkspace } from '@/store/types'
 import { ROOM_PALETTE } from '@/components/rooms/palette'

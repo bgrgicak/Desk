@@ -1,9 +1,9 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { GOAL_KEYS, type GoalKey } from "@agent-desk/shared";
+import { GOAL_KEYS, type GoalKey } from "@roomy-ai/shared";
 import { loadAndSub } from "./prompt.js";
 import { SKILLS_SANDBOX_DIR, skillsHostDir } from "./mounts.js";
-import { DESK_REFERENCE_SKILLS, type DeskSkillSpec } from "./skills.js";
+import { ROOMY_REFERENCE_SKILLS, type RoomySkillSpec } from "./skills.js";
 
 const GOAL_SKILL_DESCRIPTIONS: Record<GoalKey, string> = {
   scheduled: "Use when the user wants future or recurring work: every, daily, tomorrow, at a time, cron, remind me.",
@@ -17,19 +17,19 @@ const GOAL_SKILL_DESCRIPTIONS: Record<GoalKey, string> = {
   search: "Use when the user wants to find, look up, browse, compare, research, or recommend products, places, articles, papers, tools, or sources.",
 };
 
-export const DESK_GOAL_SKILL_PREFIX = "desk-goal-";
-export const DESK_SKILL_PREFIX = "desk-";
-export const DESK_SKILLS_MANIFEST_FILE = ".desk-skills.json";
+export const ROOMY_GOAL_SKILL_PREFIX = "roomy-goal-";
+export const ROOMY_SKILL_PREFIX = "roomy-";
+export const ROOMY_SKILLS_MANIFEST_FILE = ".roomy-skills.json";
 export const GOAL_SKILLS_SANDBOX_DIR = SKILLS_SANDBOX_DIR;
-export const DESK_SKILLS_SANDBOX_DIR = SKILLS_SANDBOX_DIR;
+export const ROOMY_SKILLS_SANDBOX_DIR = SKILLS_SANDBOX_DIR;
 
-const LEGACY_GOAL_SKILLS_MANIFEST_FILE = ".desk-goal-skills.json";
+const LEGACY_GOAL_SKILLS_MANIFEST_FILE = ".roomy-goal-skills.json";
 
 export function goalSkillName(goal: GoalKey): string {
-  return `${DESK_GOAL_SKILL_PREFIX}${goal}`;
+  return `${ROOMY_GOAL_SKILL_PREFIX}${goal}`;
 }
 
-function goalSkillSpec(goal: GoalKey): DeskSkillSpec {
+function goalSkillSpec(goal: GoalKey): RoomySkillSpec {
   return {
     name: goalSkillName(goal),
     description: GOAL_SKILL_DESCRIPTIONS[goal],
@@ -38,7 +38,7 @@ function goalSkillSpec(goal: GoalKey): DeskSkillSpec {
   };
 }
 
-function renderSkill(spec: DeskSkillSpec): string {
+function renderSkill(spec: RoomySkillSpec): string {
   validateSkillName(spec.name);
   validateDescription(spec.description);
   const metadata = Object.entries(spec.metadata ?? {});
@@ -47,7 +47,7 @@ function renderSkill(spec: DeskSkillSpec): string {
     `name: ${frontmatterScalar(spec.name)}`,
     `description: ${frontmatterScalar(spec.description)}`,
     "metadata:",
-    "  source: desk",
+    "  source: roomy",
     ...metadata.map(([key, value]) => `  ${key}: ${frontmatterScalar(value)}`),
     "---",
     "",
@@ -57,17 +57,17 @@ function renderSkill(spec: DeskSkillSpec): string {
 }
 
 /**
- * Materializes packaged Desk reference docs as native pi skills following
+ * Materializes packaged Roomy reference docs as native pi skills following
  * the Agent Skills standard. The host directory is mounted read-only inside
  * the sandbox and symlinked into pi's discovery path: ~/.agents/skills.
  */
-export async function writeDeskSkillFiles(home: string): Promise<void> {
+export async function writeRoomySkillFiles(home: string): Promise<void> {
   const skillsDir = skillsHostDir(home);
   await fs.mkdir(skillsDir, { recursive: true });
 
-  const skillSpecs = [...DESK_REFERENCE_SKILLS, ...GOAL_KEYS.map(goalSkillSpec)];
+  const skillSpecs = [...ROOMY_REFERENCE_SKILLS, ...GOAL_KEYS.map(goalSkillSpec)];
   const nextDirs = skillSpecs.map((spec) => spec.name);
-  const manifestPath = path.join(skillsDir, DESK_SKILLS_MANIFEST_FILE);
+  const manifestPath = path.join(skillsDir, ROOMY_SKILLS_MANIFEST_FILE);
   const previousDirs = unique([
     ...(await readManifest(manifestPath)),
     ...(await readManifest(path.join(skillsDir, LEGACY_GOAL_SKILLS_MANIFEST_FILE))),
@@ -88,20 +88,20 @@ export async function writeDeskSkillFiles(home: string): Promise<void> {
   );
   await fs.writeFile(
     manifestPath,
-    `${JSON.stringify({ generatedBy: "Desk", directories: nextDirs }, null, 2)}\n`,
+    `${JSON.stringify({ generatedBy: "Roomy", directories: nextDirs }, null, 2)}\n`,
     "utf-8",
   );
 }
 
-export const writeGoalSkillFiles = writeDeskSkillFiles;
+export const writeGoalSkillFiles = writeRoomySkillFiles;
 
 async function readManifest(manifestPath: string): Promise<string[]> {
   try {
     const raw = await fs.readFile(manifestPath, "utf-8");
     const parsed = JSON.parse(raw) as { generatedBy?: unknown; directories?: unknown; files?: unknown };
     const entries = Array.isArray(parsed.directories) ? parsed.directories : parsed.files;
-    if (parsed.generatedBy !== "Desk" || !Array.isArray(entries)) return [];
-    return entries.filter((entry): entry is string => typeof entry === "string" && isDeskSkillName(entry));
+    if (parsed.generatedBy !== "Roomy" || !Array.isArray(entries)) return [];
+    return entries.filter((entry): entry is string => typeof entry === "string" && isRoomySkillName(entry));
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw err;
@@ -112,19 +112,19 @@ function unique(entries: string[]): string[] {
   return [...new Set(entries)];
 }
 
-function isDeskSkillName(name: string): boolean {
-  return /^desk-[a-z0-9-]+$/.test(name);
+function isRoomySkillName(name: string): boolean {
+  return /^roomy-[a-z0-9-]+$/.test(name);
 }
 
 function validateSkillName(name: string): void {
-  if (!isDeskSkillName(name)) {
-    throw new Error(`Invalid Desk skill name "${name}"`);
+  if (!isRoomySkillName(name)) {
+    throw new Error(`Invalid Roomy skill name "${name}"`);
   }
 }
 
 function validateDescription(description: string): void {
   if (description.trim() !== description || description.length === 0 || description.includes("\n")) {
-    throw new Error(`Invalid Desk skill description "${description}"`);
+    throw new Error(`Invalid Roomy skill description "${description}"`);
   }
 }
 

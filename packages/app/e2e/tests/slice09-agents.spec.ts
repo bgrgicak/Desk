@@ -24,7 +24,7 @@ async function openAgentsTab(page: import("@playwright/test").Page) {
   await page.getByRole("dialog").getByRole("button", { name: /^AI providers$/i }).click();
   // Wait for /tools/models to populate. The Add form snapshots flatModels
   // via useState(initialModel) on mount — open it before models resolve and
-  // the Add agent button stays disabled with no way to pick one. The Desk
+  // the Add agent button stays disabled with no way to pick one. The Roomy
   // row's provider label is the readiness signal: it only renders once
   // modelIndex has the seeded model. The seeded agent ships on
   // `anthropic/claude-haiku-4-5`, which SettingsModal's providerLabel()
@@ -39,7 +39,7 @@ async function openAgentsTab(page: import("@playwright/test").Page) {
 test("settings modal lists the seeded agent", async ({ loggedInPage }) => {
   await openAgentsTab(loggedInPage);
   await expect(
-    loggedInPage.getByRole("dialog").getByText(/^Desk$/).first(),
+    loggedInPage.getByRole("dialog").getByText(/^Roomy$/).first(),
   ).toBeVisible({ timeout: 10_000 });
 });
 

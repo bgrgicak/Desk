@@ -859,7 +859,7 @@ function ToolOnlyRunFallback() {
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1">
           <CheckCircle2 className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-          <span className="text-xs text-muted-foreground">Desk</span>
+          <span className="text-xs text-muted-foreground">Roomy</span>
         </div>
       </div>
       <div className="rounded-lg bg-muted/50 px-3.5 py-2.5 text-sm text-muted-foreground">

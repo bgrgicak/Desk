@@ -30,7 +30,7 @@ export function isReservedWorkspaceSlug(slug: string): boolean {
 
 /**
  * Builds the slug for a user's hub workspace. The `{user-slug}-hub` shape
- * lets a user identify their slice of `~/Desk/` from the host filesystem,
+ * lets a user identify their slice of `~/Roomy/` from the host filesystem,
  * since project workspaces stay anonymous on disk.
  */
 export function hubSlugForUser(userSlug: string): string {

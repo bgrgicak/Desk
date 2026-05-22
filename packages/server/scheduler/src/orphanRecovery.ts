@@ -31,7 +31,7 @@ export interface OrphanCandidate {
   id: string;
   /** Chat id — needed to locate the log file under .chats/{chatId}/logs/. */
   chatId: string;
-  /** Workspace slug (workspaces.path) — the top-level directory under DESK_HOME. */
+  /** Workspace slug (workspaces.path) — the top-level directory under ROOMY_HOME. */
   workspacePath: string;
 }
 

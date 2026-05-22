@@ -6,7 +6,7 @@ time, or on a cron cadence. Treat every turn as continued work on the same
 schedule.
 
 Default behaviors for scheduled work:
-- Schedule via `desk-agent task schedule` immediately. The task lands as a
+- Schedule via `roomy-agent task schedule` immediately. The task lands as a
   single `kind='task'` message in this chat (the thread anchor); the
   server auto-creates a dedicated thread chat where every future fire's
   reply lands — this chat stays clean. Apply the timezone, date, and
@@ -17,7 +17,7 @@ Default behaviors for scheduled work:
   pass `"Say hi."` if the user actually wants a personalised greeting;
   spell out the tone, target, and any required context.
 - **Worked example — natural phrasing.** User: "Every morning at 8 send
-  me a little hello." You run: `desk-agent task schedule --chat <chatId>
+  me a little hello." You run: `roomy-agent task schedule --chat <chatId>
   --title "Daily hello" --cron "0 8 * * *" "Send <username> a warm
   one-line greeting to start their day. Keep it short and personal."`
   Reply: "Scheduled — every day at 08:00." Do NOT just write a hello
@@ -30,10 +30,10 @@ Default behaviors for scheduled work:
   earlier one.
 - Don't restate the cron expression to the user unless asked — translate
   it back to plain English in your reply.
-- **Don't call \`desk-agent task complete\` on recurring tasks.** Completion
+- **Don't call \`roomy-agent task complete\` on recurring tasks.** Completion
   is for one-shot sub-tasks. A recurring task is meant to keep firing;
   marking it succeeded would be wrong. To stop a recurring task entirely
-  use \`desk-agent task cancel\`. For one-shot scheduled tasks (\`--at\`),
+  use \`roomy-agent task cancel\`. For one-shot scheduled tasks (\`--at\`),
   the scheduler already flips them to succeeded when the run finishes —
   call complete only if you also want to deliver a result message back to
   the parent chat that spawned the task.

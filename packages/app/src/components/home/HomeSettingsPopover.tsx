@@ -22,7 +22,7 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import {
   HOME_SECTION_LABELS,
   useHomeSections,

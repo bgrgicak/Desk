@@ -17,7 +17,7 @@ interface MarkdownContentProps {
   /**
    * When provided, sandbox paths (/home/agent/... or ~/...) are detected and
    * rendered as PathChip components. Should be the workspace directory name
-   * (e.g. "desk-2"). Pair with workspaceId to make chips navigable.
+   * (e.g. "roomy-2"). Pair with workspaceId to make chips navigable.
    */
   workspacePath?: string
   /** Workspace UUID — when paired with workspacePath, PathChip clicks open
@@ -26,15 +26,15 @@ interface MarkdownContentProps {
 }
 
 function urlTransform(url: string): string {
-  if (url.startsWith('desk-path:')) return url
-  if (url.startsWith('desk-entity:')) return url
+  if (url.startsWith('roomy-path:')) return url
+  if (url.startsWith('roomy-entity:')) return url
   if (/^(https?:|mailto:|#)/.test(url)) return url
   if (url.startsWith('/') || url.startsWith('.')) return url
   return ''
 }
 
 export function parseEntityUrl(href: string): { kind: EntityChipKind; id: string } | null {
-  const match = href.match(/^desk-entity:(chat|workspace|task|artifact|file):(.+)$/)
+  const match = href.match(/^roomy-entity:(chat|workspace|task|artifact|file):(.+)$/)
   if (!match) return null
   try {
     const kind = match[1] as EntityChipKind
@@ -71,7 +71,7 @@ function isServerWorkspace(value: unknown): value is ServerWorkspace {
  * Module-level memoized selector that walks the entire RTK Query cache to
  * find every cached chat (across all workspace-scoped `getChats` queries
  * plus any individual `getChat` fetches). Used by the markdown renderer
- * to resolve `desk-entity:chat:<id>` links to chip titles without forcing
+ * to resolve `roomy-entity:chat:<id>` links to chip titles without forcing
  * the caller to know which query holds the row.
  *
  * Previously inlined as a `useAppSelector` arrow function inside the
@@ -186,7 +186,7 @@ export const MarkdownContent = memo(function MarkdownContent({ text, workspacePa
       </code>
     ),
     a: ({ href, children }: React.ComponentProps<'a'>) => {
-      if (href?.startsWith('desk-entity:')) {
+      if (href?.startsWith('roomy-entity:')) {
         const entity = parseEntityUrl(href)
         if (entity) {
           if (entity.kind === 'chat') {
@@ -199,9 +199,9 @@ export const MarkdownContent = memo(function MarkdownContent({ text, workspacePa
         }
         return <>{children}</>
       }
-      if (href?.startsWith('desk-path:')) {
+      if (href?.startsWith('roomy-path:')) {
         if (!workspacePath) return <>{children}</>
-        const sandboxPath = decodeURIComponent(href.slice('desk-path:'.length))
+        const sandboxPath = decodeURIComponent(href.slice('roomy-path:'.length))
         // Compute display path from the sandbox path — avoids String(children)
         // which would produce [object Object] for React element trees.
         const displayPath = sandboxToUserPath(sandboxPath, workspacePath)

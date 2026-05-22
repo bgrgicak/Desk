@@ -1,5 +1,5 @@
 {
-  "name": "@agent-desk/api",
+  "name": "@roomy-ai/api",
   "version": "0.1.0-alpha.0",
   "license": "MIT",
   "type": "module",
@@ -7,7 +7,7 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "@agent-desk/dev": "./src/index.ts",
+      "@roomy-ai/dev": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
@@ -29,16 +29,16 @@
     "build": "tsc",
     "openapi:dump": "npx tsx src/scripts/dump-openapi.ts",
     "typecheck": "tsc --noEmit",
-    "start": "tsx --conditions=@agent-desk/dev src/main.ts",
+    "start": "tsx --conditions=@roomy-ai/dev src/main.ts",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@agent-desk/db": ">=0.1.0-0",
-    "@agent-desk/runtime": ">=0.1.0-0",
-    "@agent-desk/scheduler": ">=0.1.0-0",
-    "@agent-desk/shared": ">=0.1.0-0",
-    "@agent-desk/storage": ">=0.1.0-0",
+    "@roomy-ai/db": ">=0.1.0-0",
+    "@roomy-ai/runtime": ">=0.1.0-0",
+    "@roomy-ai/scheduler": ">=0.1.0-0",
+    "@roomy-ai/shared": ">=0.1.0-0",
+    "@roomy-ai/storage": ">=0.1.0-0",
     "@noble/hashes": "^1.8.0",
     "@types/busboy": "^1.5.4",
     "@types/ws": "^8.5.14",

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { type Pool } from "../../src/pool.js";
-import { generateId, UnauthorizedError } from "@agent-desk/shared";
+import { generateId, UnauthorizedError } from "@roomy-ai/shared";
 import { setupTestDb, teardownTestDb } from "../helpers/db.js";
 import * as users from "../../src/queries/users.js";
 import { hashPassword } from "../../src/passwords.js";
@@ -76,13 +76,13 @@ describe("users queries", () => {
       email: "loginer@example.com",
     });
 
-    const ok = await users.login(pool, "loginer", "correct-horse");
+    const ok = await users.login(pool, "loginer@example.com", "correct-horse");
     expect(ok?.id).toBe(loginId);
 
-    const wrong = await users.login(pool, "loginer", "battery-staple");
+    const wrong = await users.login(pool, "loginer@example.com", "battery-staple");
     expect(wrong).toBeNull();
 
-    const missing = await users.login(pool, "nobody", "whatever");
+    const missing = await users.login(pool, "nobody@example.com", "whatever");
     expect(missing).toBeNull();
   });
 
@@ -95,7 +95,7 @@ describe("users queries", () => {
       email: "legacy@example.com",
     });
 
-    const ok = await users.login(pool, "legacy", "s3cret");
+    const ok = await users.login(pool, "legacy@example.com", "s3cret");
     expect(ok?.id).toBe(legacyId);
 
     const rehashed = await users.getPasswordHash(pool, legacyId);
@@ -103,7 +103,7 @@ describe("users queries", () => {
     expect(rehashed!.startsWith("plain:")).toBe(false);
     expect(rehashed!.startsWith("$argon2id$")).toBe(true);
 
-    const stillOk = await users.login(pool, "legacy", "s3cret");
+    const stillOk = await users.login(pool, "legacy@example.com", "s3cret");
     expect(stillOk?.id).toBe(legacyId);
   });
 
@@ -121,11 +121,32 @@ describe("users queries", () => {
     const stored = await users.getPasswordHash(pool, spId);
     expect(stored!.startsWith("$argon2id$")).toBe(true);
 
-    const ok = await users.login(pool, "pwchanger", "new-pass");
+    const ok = await users.login(pool, "pwchanger@example.com", "new-pass");
     expect(ok?.id).toBe(spId);
 
     await expect(
       users.setPassword(pool, spId, "wrong-current", "whatever"),
     ).rejects.toBeInstanceOf(UnauthorizedError);
+  });
+
+  it("two users can share the same display name (username is no longer unique)", async () => {
+    const aliceId = generateId("user");
+    const bobId = generateId("user");
+    await users.insert(pool, {
+      id: aliceId,
+      username: "Alex",
+      passwordHash: "hash-a",
+      email: "alex-1@example.com",
+    });
+    // Same display name, distinct email — should succeed.
+    await users.insert(pool, {
+      id: bobId,
+      username: "Alex",
+      passwordHash: "hash-b",
+      email: "alex-2@example.com",
+    });
+
+    expect(await users.findById(pool, aliceId)).not.toBeNull();
+    expect(await users.findById(pool, bobId)).not.toBeNull();
   });
 });

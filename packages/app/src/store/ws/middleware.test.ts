@@ -336,7 +336,7 @@ describe('applyEventToCache', () => {
           content: {
             type: 'events',
             log: [
-              { kind: 'stderr', line: '<path>/home/agent/.config/pi/skills/desk-goal-app/SKILL.md</path> <type>file</type> <content>error handling notes</content>' },
+              { kind: 'stderr', line: '<path>/home/agent/.config/pi/skills/roomy-goal-app/SKILL.md</path> <type>file</type> <content>error handling notes</content>' },
             ],
           },
           createdAt: new Date().toISOString(),
@@ -362,7 +362,7 @@ describe('applyEventToCache', () => {
           content: {
             type: 'events',
             log: [
-              { kind: 'stderr', line: '&lt;skill_content name="desk-goal-app"&gt;failure modes and error handling&lt;/skill_content&gt;' },
+              { kind: 'stderr', line: '&lt;skill_content name="roomy-goal-app"&gt;failure modes and error handling&lt;/skill_content&gt;' },
             ],
           },
           createdAt: new Date().toISOString(),

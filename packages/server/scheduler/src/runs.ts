@@ -1,16 +1,16 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { type Pool } from "@agent-desk/db";
+import { type Pool } from "@roomy-ai/db";
 import {
   generateId,
   GOAL_KEYS,
   type GoalKey,
   type Message,
   type WsEvent,
-} from "@agent-desk/shared";
-import { queries } from "@agent-desk/db";
-import { resolveDeskHome } from "@agent-desk/storage";
+} from "@roomy-ai/shared";
+import { queries } from "@roomy-ai/db";
+import { resolveRoomyHome } from "@roomy-ai/storage";
 import {
   buildWorkspaceMountPlan,
   createOrReuse,
@@ -24,7 +24,7 @@ import {
   type LogEvent,
   type AgentFileInput,
   type SandboxHandle,
-} from "@agent-desk/runtime";
+} from "@roomy-ai/runtime";
 import * as sandboxSweep from "./runs-sandbox-sweep.js";
 import { createSummaryScheduler } from "./runs-summary.js";
 import { derivePromptInputs as derivePromptInputsExtern } from "./runs-prompt.js";
@@ -47,7 +47,7 @@ import {
   resolveModelForRun,
   type SummaryModelTokenLimits,
 } from "./runs-helpers.js";
-import { withModule } from "@agent-desk/shared/logger";
+import { withModule } from "@roomy-ai/shared/logger";
 const log = withModule("scheduler/runs");
 
 export interface RunManagerOptions {
@@ -73,7 +73,7 @@ export interface RunManagerOptions {
   ) => Promise<{ exitCode: number; model?: string }>;
   /** Test-injectable replacement for the production workspace reflection call. */
   reflectWorkspace?: ReflectFn<WorkspaceReflectionInput>;
-  /** DESK_HOME root. Defaults to resolveDeskHome(). */
+  /** ROOMY_HOME root. Defaults to resolveRoomyHome(). */
   home?: string;
   /** Test hook for model metadata used by the adaptive summary trigger. */
   summaryModelContextWindowFn?: (chatId: string, modelId: string) => Promise<number | SummaryModelTokenLimits | null>;
@@ -134,11 +134,11 @@ async function isAlreadyCancelled(pool: Pool, messageId: string): Promise<boolea
 
 export function createRunManager(opts: RunManagerOptions) {
   const { pool, emit = () => {} } = opts;
-  const home = opts.home ?? resolveDeskHome();
+  const home = opts.home ?? resolveRoomyHome();
   const resolveProviderKeys = opts.resolveProviderKeys ?? (() => Promise.resolve({}));
 
   let inFlight = 0;
-  const MAX_CONCURRENT = parseInt(process.env.DESK_SCHEDULER_MAX_CONCURRENT ?? "10", 10);
+  const MAX_CONCURRENT = parseInt(process.env.ROOMY_SCHEDULER_MAX_CONCURRENT ?? "10", 10);
 
   /**
    * Emit a `message.updated` for the row we just wrote, and — when the
@@ -434,7 +434,7 @@ export function createRunManager(opts: RunManagerOptions) {
       );
       const ctxRow = ctxRows[0];
       const workspaceId = ctxRow?.workspace_id ?? (await firstWorkspaceId());
-      const workspaceSlug = ctxRow?.workspace_path ?? "desk";
+      const workspaceSlug = ctxRow?.workspace_path ?? "roomy";
       const workspaceName = ctxRow?.workspace_name ?? workspaceSlug;
       const workspaceKind: "project" | "hub" =
         ctxRow?.workspace_kind === "hub" ? "hub" : "project";
@@ -500,7 +500,7 @@ export function createRunManager(opts: RunManagerOptions) {
       const runAgentId = runAgent?.id ?? agentId;
       const agentFileInput: AgentFileInput = {
         agentId: runAgentId,
-        agentName: runAgent?.name ?? "Desk Agent",
+        agentName: runAgent?.name ?? "Roomy Agent",
         model: runAgent?.model ?? "anthropic/claude-haiku-4-5",
         userName,
         userTimezone,
@@ -565,14 +565,14 @@ export function createRunManager(opts: RunManagerOptions) {
           await onLog(evt);
         };
         let attempt = 0;
-        // One pi session per Desk chat. Read the chat's
+        // One pi session per Roomy chat. Read the chat's
         // currently-bound session id (null on the chat's first turn) and
         // pass it into the runtime; the runtime returns the session that
         // actually handled the run, which may be a freshly-created one if
         // the chat had none or the stored id was stale on the daemon.
         let piSessionId = await queries.chats.getPiSessionId(pool, executionChatId);
         const activeModelIds = activeAgents.map((a) => a.model);
-        // Translate the primary Desk model id and every active fallback
+        // Translate the primary Roomy model id and every active fallback
         // model into pi's provider namespace. `codex/<n>` becomes
         // `openai-codex/<n>` when OAuth is live, `openai/<n>` when only
         // an API key is. Missing-auth stays on the requested runtime
@@ -608,7 +608,7 @@ export function createRunManager(opts: RunManagerOptions) {
             });
           } else {
             try {
-              const handle: SandboxHandle = process.env.DESK_SANDBOX_DRIVER === "fake"
+              const handle: SandboxHandle = process.env.ROOMY_SANDBOX_DRIVER === "fake"
                 ? { containerId: "fake-sandbox", workspaceId }
                 : await createOrReuse(
                     workspaceId,
@@ -726,7 +726,7 @@ export function createRunManager(opts: RunManagerOptions) {
         // When the run produced a new summary, snapshot the previous summary
         // (if any) so a bad rewrite doesn't silently erase user edits.
         if (outputKind === "summary") {
-          const { snapshotSummary } = await import("@agent-desk/storage");
+          const { snapshotSummary } = await import("@roomy-ai/storage");
           const prev = await pool.query(
             `SELECT id, content FROM messages
              WHERE chat_id = ? AND json_extract(content, '$.type') = 'summary'
@@ -764,7 +764,7 @@ export function createRunManager(opts: RunManagerOptions) {
         // summary alongside its own files. Best-effort — the DB row is the
         // source of truth.
         if (content.type === "summary") {
-          const { materializeSummary } = await import("@agent-desk/storage");
+          const { materializeSummary } = await import("@roomy-ai/storage");
           await materializeSummary(home, workspaceSlug, executionChatId, child.id, content.body).catch(() => { /* best-effort */ });
         }
         emit({ type: "message.appended", payload: child, workspaceId });
@@ -840,7 +840,7 @@ export function createRunManager(opts: RunManagerOptions) {
    * keep the parent task pending so an error does not count as completion.
    *
    * Unscheduled agent-authored tasks are sandbox-issued sub-tasks: the
-   * agent ran `desk-agent task schedule` to spin off work, the auto-fire
+   * agent ran `roomy-agent task schedule` to spin off work, the auto-fire
    * path in /sandbox/messages promoted the parent to `running` so the
    * kanban badge reads Active, and the run has now ended. Two outcomes:
    *
@@ -851,7 +851,7 @@ export function createRunManager(opts: RunManagerOptions) {
    *     from inside the agent isn't overwritten.
    *
    *   - Run succeeded: leave the parent in `running` (Active). The
-   *     canonical close is `desk-agent task complete`, called either
+   *     canonical close is `roomy-agent task complete`, called either
    *     from inside the agent during the run or by a later caller
    *     (main-thread agent, user gesture). If the agent forgot to call
    *     it, the agent's reply has likely landed in the thread chat
@@ -1087,7 +1087,7 @@ export function createRunManager(opts: RunManagerOptions) {
     opts: { staleAfterMs?: number } = {},
   ): Promise<{ preempted: string } | null> {
     const staleAfterMs = opts.staleAfterMs
-      ?? parseInt(process.env.DESK_RUN_STALE_PREEMPT_MS ?? "30000", 10);
+      ?? parseInt(process.env.ROOMY_RUN_STALE_PREEMPT_MS ?? "30000", 10);
     const running = await findRunningChatTurn(chatId);
     if (!running) return null;
     const logPath = path.join(
@@ -1105,7 +1105,7 @@ export function createRunManager(opts: RunManagerOptions) {
     } catch {
       // Missing log file means pi hasn't emitted its first event
       // yet — usually container cold-start (entrypoint downloading
-      // deps, `.deskrc` running). Stale-only mode is conservative:
+      // deps, `.roomyrc` running). Stale-only mode is conservative:
       // skip rather than risk killing legitimately-progressing work.
       // Stuck-with-no-log rows are recovered by `recoverOrphanedRuns`
       // at the requeue cap.

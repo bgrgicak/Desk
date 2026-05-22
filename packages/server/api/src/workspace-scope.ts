@@ -1,7 +1,7 @@
-import { type Pool } from "@agent-desk/db";
-import { NotFoundError, ValidationError } from "@agent-desk/shared";
-import { queries } from "@agent-desk/db";
-import { validateLibrarySubpath, validateReadableSubpath } from "@agent-desk/storage";
+import { type Pool } from "@roomy-ai/db";
+import { NotFoundError, ValidationError } from "@roomy-ai/shared";
+import { queries } from "@roomy-ai/db";
+import { validateLibrarySubpath, validateReadableSubpath } from "@roomy-ai/storage";
 import { requireOwnedChat, requireOwnedWorkspace } from "./auth/ownership.js";
 
 const WORKSPACE_ID_PATTERN = /^wks_[A-Za-z0-9_-]+$/;

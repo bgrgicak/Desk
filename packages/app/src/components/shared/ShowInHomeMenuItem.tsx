@@ -1,5 +1,5 @@
 import { Home } from 'lucide-react'
-import { DropdownMenuItem } from '@agent-desk/ui'
+import { DropdownMenuItem } from '@roomy-ai/ui'
 import { useIsHomePinned, toggleHomePin, type HomePinRef } from '@/hooks/use-home-pins'
 
 /**

@@ -2,7 +2,7 @@ import { createContext, useContext, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { Home } from 'lucide-react'
-import { cn, SidebarTrigger } from '@agent-desk/ui'
+import { cn, SidebarTrigger } from '@roomy-ai/ui'
 import { roomColor } from '@/components/rooms/roomColor'
 import { buildPath } from '@/router/nav'
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
@@ -114,7 +114,7 @@ export function TopBar({ workspace, trailing, className, hideBreadcrumb = false,
                 // The workspace crumb hides on mobile when a trailing
                 // crumb is present — the page name (chat title /
                 // Library / Tasks) is the more useful context, and
-                // packing both into a 375 px viewport reduced "Desk
+                // packing both into a 375 px viewport reduced "Roomy
                 // dev" to an ugly "D…". The workspace's accent colour
                 // still shows on the trailing crumb's separator so
                 // the room identity isn't lost entirely. The desktop

@@ -1,5 +1,5 @@
 {
-  "name": "@agent-desk/app",
+  "name": "@roomy-ai/app",
   "version": "0.1.0-alpha.0",
   "license": "MIT",
   "type": "module",
@@ -25,8 +25,8 @@
     "test:e2e:headed": "playwright test --headed"
   },
   "dependencies": {
-    "@agent-desk/shared": ">=0.1.0-0",
-    "@agent-desk/ui": ">=0.1.0-0",
+    "@roomy-ai/shared": ">=0.1.0-0",
+    "@roomy-ai/ui": ">=0.1.0-0",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-html": "^6.4.11",
     "@codemirror/lang-javascript": "^6.2.5",
@@ -62,6 +62,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.4",
     "@playwright/test": "^1.49.0",
+    "@roomy-ai/db": ">=0.1.0-0",
     "@tailwindcss/vite": "^4.2.2",
     "@types/mdast": "^4.0.4",
     "@types/node": "^24.12.2",

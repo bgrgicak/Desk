@@ -8,14 +8,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { queries, type Pool } from "@agent-desk/db";
-import { generateId } from "@agent-desk/shared";
+import { queries, type Pool } from "@roomy-ai/db";
+import { generateId } from "@roomy-ai/shared";
 import { createOrReuse } from "./docker.js";
 import { buildWorkspaceMountPlan } from "./mounts.js";
 import { execRun } from "./execRun.js";
 
 // Local copies of the scheduler types. We can't depend on
-// `@agent-desk/scheduler` here without creating a cycle (scheduler
+// `@roomy-ai/scheduler` here without creating a cycle (scheduler
 // already depends on runtime), so we duplicate the small shape and
 // rely on TypeScript's structural typing to match at the call site
 // in `api/src/main.ts`.
@@ -58,7 +58,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const PROMPTS_DIR = path.resolve(here, "prompts");
 
 function reflectionModel(agentModel: string): string {
-  return process.env.DESK_REFLECTION_MODEL ?? agentModel;
+  return process.env.ROOMY_REFLECTION_MODEL ?? agentModel;
 }
 
 async function readPrompt(rel: string): Promise<string> {

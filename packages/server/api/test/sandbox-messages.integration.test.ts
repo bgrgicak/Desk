@@ -5,10 +5,10 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, queries, runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
-import { ensureLayout } from "@agent-desk/storage";
+import { Pool, queries, runMigrations, insertSeedFixture } from "@roomy-ai/db";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
+import { ensureLayout } from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -23,18 +23,16 @@ let agentId: string;
 let sourceChatId: string;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-sandbox-messages-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-sandbox-messages-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "sandbox-messages-user";
-  process.env.DESK_SEED_PASSWORD = "pw";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "sandbox-messages-user", password: "pw" });
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-sandbox-messages-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-sandbox-messages-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const { rows: wsRows } = await pool.query<{ id: string }>("SELECT id FROM workspaces LIMIT 1");
   workspaceId = wsRows[0].id;
@@ -69,7 +67,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 async function issueSandboxToken(): Promise<string> {
@@ -95,7 +93,7 @@ function sandboxPost(body: unknown, token: string, urlPath = "/sandbox/messages"
         headers: {
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(raw),
-          "X-Desk-Sandbox-Token": token,
+          "X-Roomy-Sandbox-Token": token,
         },
       },
       (res) => {
@@ -183,7 +181,7 @@ describe("POST /sandbox/messages", () => {
 
   it("auto-fires unscheduled agent tasks — the anchor runs immediately, no manual Run click required", async () => {
     // The agent's intent when spawning an unscheduled sub-task via
-    // `desk-agent task schedule` (no --at / --cron) is "go do this now."
+    // `roomy-agent task schedule` (no --at / --cron) is "go do this now."
     // Sitting in pending until the user clicks Run defeats the purpose.
     // The sandbox endpoint must insert the first task_run row before
     // returning so the response carries an `active` state and the UI's
@@ -237,7 +235,7 @@ describe("POST /sandbox/messages", () => {
   it("leaves a successful unscheduled agent task in `running` for `task complete` to close", async () => {
     // afterTaskRun deliberately does NOT propagate success onto an
     // agent-authored unscheduled parent: the canonical close is
-    // `desk-agent task complete`, and auto-completing here would (a)
+    // `roomy-agent task complete`, and auto-completing here would (a)
     // steal the Needs-input hand-off the agent's reply lands on the
     // thread chat, and (b) break callers that issue task complete after
     // the run terminates (the endpoint throws on terminal state). So
@@ -315,7 +313,7 @@ describe("POST /sandbox/messages", () => {
             headers: {
               "Content-Type": "application/json",
               "Content-Length": Buffer.byteLength(raw),
-              "X-Desk-Sandbox-Token": token,
+              "X-Roomy-Sandbox-Token": token,
             },
           },
           (response) => {

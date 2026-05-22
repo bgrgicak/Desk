@@ -4,10 +4,10 @@
 
 ## Context
 
-Desk uses SQLite with WAL mode + `locking_mode=EXCLUSIVE` (see
+Roomy uses SQLite with WAL mode + `locking_mode=EXCLUSIVE` (see
 `packages/server/db/src/pool.ts`). The exclusive lock means
 exactly one process can hold the database open; a second
-desk-server boot against the same file fails fast on
+roomy-server boot against the same file fails fast on
 `SQLITE_BUSY`. This is intentional — the architecture is
 single-node and the lock surfaces accidental misconfiguration.
 
@@ -58,7 +58,7 @@ Postgres now" — it's "we know how, when the time comes."
   process and would need a Redis-shaped cross-process store at
   multi-node time.
 - `locking_mode=EXCLUSIVE` is a forcing function: a second
-  desk-server boot against the same DB file fails fast. This
+  roomy-server boot against the same DB file fails fast. This
   makes "accidentally run two copies" loud, which is what we
   want for a single-node product.
 

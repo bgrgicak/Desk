@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { toast } from 'sonner'
-import type { GoalKey } from '@agent-desk/shared'
+import type { GoalKey } from '@roomy-ai/shared'
 import type { UploadedFile, SendOptions } from '@/components/compose/ChatInput'
 import { ArtifactInlineCard } from '@/components/shared/ArtifactInlineCard'
 import { RoomTopBarActions } from '@/components/layout/RoomTopBarActions'
@@ -115,7 +115,7 @@ interface ChatViewProps {
 /**
  * "In this chat" panel — user uploads sitting under
  * `.chats/{chatId}/attachments/`. Summary mirrors (`.chats/{id}/notes/`) are
- * Desk-managed memory and are not listed here; summary messages are visible in
+ * Roomy-managed memory and are not listed here; summary messages are visible in
  * the chat stream only when developer mode is enabled.
  *
  * Sidebar uploads land in `.chats/{chatId}/attachments/` (not the workspace
@@ -145,7 +145,7 @@ export function ChatView({
   const anchorMessage = startThread
     ? (location.state as { anchorMessage?: ServerMessage } | null)?.anchorMessage ?? null
     : null
-  const rightPanelOpenKey = chat.id && chat.id !== NEW_CHAT_ID ? `desk.chat.${chat.id}.rightPanelOpen` : null
+  const rightPanelOpenKey = chat.id && chat.id !== NEW_CHAT_ID ? `roomy.chat.${chat.id}.rightPanelOpen` : null
   const [panelOpen, setPanelOpen] = usePersistedState<boolean>(rightPanelOpenKey, shouldOpenChatSidebarsByDefault())
   const isSmallViewport = useIsSmallScreen()
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined)
@@ -633,7 +633,7 @@ export function ChatView({
             onFileClick={(file) => {
               if (isAppArtifactFile(file)) {
                 onAttachmentClick?.({
-                  path: `${file.path}/desk.app.json`,
+                  path: `${file.path}/roomy.app.json`,
                   name: file.label ?? file.name,
                   mime: 'application/json',
                   size: file.size,

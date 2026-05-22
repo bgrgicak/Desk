@@ -14,7 +14,7 @@ import {
   CommandList,
   CommandSeparator,
   useIsMobile,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { BackgroundBlobs } from '@/components/layout/BackgroundBlobs'
 import { TopBar } from '@/components/layout/TopBar'
 import { RoomSidebar, type PinnedSidebarEntry } from '@/components/layout/RoomSidebar'

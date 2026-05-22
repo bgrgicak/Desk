@@ -1,7 +1,7 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
-import { queries } from "@agent-desk/db";
-import { generateId, NotFoundError, ValidationError } from "@agent-desk/shared";
-import { withModule } from "@agent-desk/shared/logger";
+import { queries } from "@roomy-ai/db";
+import { generateId, NotFoundError, ValidationError } from "@roomy-ai/shared";
+import { withModule } from "@roomy-ai/shared/logger";
 import { authenticateSandboxToken } from "../auth/sandboxToken.js";
 import { requireOwnedChat } from "../auth/ownership.js";
 import * as chatRoutes from "../routes/chats.js";
@@ -15,7 +15,7 @@ const log = withModule("api/dispatch/sandbox");
 
 /**
  * Dispatcher for every `/sandbox/*` route. All sandbox routes share the
- * `X-Desk-Sandbox-Token` auth scheme (`authenticateSandboxToken`) and
+ * `X-Roomy-Sandbox-Token` auth scheme (`authenticateSandboxToken`) and
  * never see the regular bearer-session middleware — so they sit BEFORE
  * `requireAuth` in the main dispatcher chain.
  *
@@ -34,7 +34,7 @@ export async function dispatchSandbox(
   const { pool, vault, storage, runManager, emit } = ctx;
 
   if (path === "/sandbox/secrets" && method === "GET") {
-    const tokenHeader = req.headers["x-desk-sandbox-token"];
+    const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
     const { agent } = await authenticateSandboxToken(pool, token);
     const result = vaultRoutes.sandboxList(vault, agent.userId);
@@ -43,7 +43,7 @@ export async function dispatchSandbox(
   }
 
   if (segments[0] === "sandbox" && segments[1] === "secrets" && segments.length === 3 && method === "GET") {
-    const tokenHeader = req.headers["x-desk-sandbox-token"];
+    const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
     const { agent } = await authenticateSandboxToken(pool, token);
     const title = decodeURIComponent(segments[2]);
@@ -57,7 +57,7 @@ export async function dispatchSandbox(
   }
 
   if (path === "/sandbox/messages" && method === "POST") {
-    const tokenHeader = req.headers["x-desk-sandbox-token"];
+    const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
     const { agent } = await authenticateSandboxToken(pool, token);
     const body = await parseBody(req) as { chatId?: string; newChat?: boolean; title?: unknown; content?: unknown; executeAt?: unknown; cron?: unknown } & Record<string, unknown>;
@@ -204,7 +204,7 @@ export async function dispatchSandbox(
   // so the agent can't silently turn a scheduled task into a manual one
   // by forgetting --at.
   if (path === "/sandbox/messages/reschedule" && method === "POST") {
-    const tokenHeader = req.headers["x-desk-sandbox-token"];
+    const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
     const { agent } = await authenticateSandboxToken(pool, token);
     const body = await parseBody(req) as {
@@ -299,7 +299,7 @@ export async function dispatchSandbox(
   // the user / main-thread agent sees the outcome without opening the
   // sub-task thread.
   if (path === "/sandbox/messages/complete" && method === "POST") {
-    const tokenHeader = req.headers["x-desk-sandbox-token"];
+    const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
     const { agent } = await authenticateSandboxToken(pool, token);
     const body = await parseBody(req) as { chatId?: unknown; messageId?: unknown; message?: unknown };
@@ -387,7 +387,7 @@ export async function dispatchSandbox(
   // Sandbox task cancellation — lets an agent cancel follow-up checks it
   // previously scheduled without needing a browser user-session token.
   if (path === "/sandbox/messages/cancel" && method === "POST") {
-    const tokenHeader = req.headers["x-desk-sandbox-token"];
+    const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
     const { agent } = await authenticateSandboxToken(pool, token);
     const body = await parseBody(req) as { chatId?: unknown; messageId?: unknown };
@@ -423,7 +423,7 @@ export async function dispatchSandbox(
   // Seed messages — bulk-inserts text messages without triggering agent
   // turns. Used by the agent to populate a chat for scrollback testing.
   if (path === "/sandbox/seed-messages" && method === "POST") {
-    const tokenHeader = req.headers["x-desk-sandbox-token"];
+    const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
     const { agent } = await authenticateSandboxToken(pool, token);
     const body = await parseBody(req) as {
@@ -454,11 +454,11 @@ export async function dispatchSandbox(
   }
 
   // Memory-system P3.5 — full-text search for the in-sandbox agent.
-  // Auth is X-Desk-Sandbox-Token. Recall is scoped to the sandbox
+  // Auth is X-Roomy-Sandbox-Token. Recall is scoped to the sandbox
   // session's workspace by default; the hub session widens to all
   // workspaces the user owns (scope.kind === 'owned').
   if (path === "/sandbox/search/messages" && method === "GET") {
-    const tokenHeader = req.headers["x-desk-sandbox-token"];
+    const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
     const { session, agent, workspace, scope } = await authenticateSandboxToken(pool, token);
     const params = new URL(req.url ?? "/", "http://localhost").searchParams;
@@ -525,7 +525,7 @@ export async function dispatchSandbox(
   }
 
   if (path === "/sandbox/search" && method === "GET") {
-    const tokenHeader = req.headers["x-desk-sandbox-token"];
+    const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
     const { session, agent, scope } = await authenticateSandboxToken(pool, token);
     const params = new URL(req.url ?? "/", "http://localhost").searchParams;
@@ -575,7 +575,7 @@ export async function dispatchSandbox(
   }
 
   if ((path === "/sandbox/find/library" || path === "/sandbox/find/artifacts") && method === "GET") {
-    const tokenHeader = req.headers["x-desk-sandbox-token"];
+    const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
     const { session, agent, scope } = await authenticateSandboxToken(pool, token);
     const params = new URL(req.url ?? "/", "http://localhost").searchParams;
@@ -619,7 +619,7 @@ export async function dispatchSandbox(
   }
 
   if (path === "/sandbox/artifacts" && method === "POST") {
-    const tokenHeader = req.headers["x-desk-sandbox-token"];
+    const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
     const { session, agent } = await authenticateSandboxToken(pool, token);
     const body = await parseBody(req) as { chatId?: string } & Record<string, unknown>;

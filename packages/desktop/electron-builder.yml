@@ -1,6 +1,6 @@
-appId: com.agentdesk.desk
-productName: Desk
-copyright: Copyright © 2024 Agent Desk
+appId: com.roomy-ai.roomy
+productName: Roomy
+copyright: Copyright © 2024 Agent Roomy
 
 directories:
   buildResources: assets
@@ -13,7 +13,7 @@ files:
 extraResources:
   # Staged by scripts/stage-server.mjs — contains every server workspace
   # package + its transitive npm deps in a node_modules layout so the
-  # spawned desk-server can resolve @agent-desk/* and busboy/croner/etc.
+  # spawned roomy-server can resolve @roomy-ai/* and busboy/croner/etc.
   - from: build-server
     to: server
     filter:

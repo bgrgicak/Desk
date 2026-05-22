@@ -1,4 +1,4 @@
-import { cn } from '@agent-desk/ui'
+import { cn } from '@roomy-ai/ui'
 
 interface SplitResizeHandleProps {
   isResizing: boolean

@@ -17,9 +17,9 @@ if (fs.existsSync(envPath)) {
 }
 
 export default defineConfig({
-  // Resolve workspace deps via the `@agent-desk/dev` export condition so Vite
+  // Resolve workspace deps via the `@roomy-ai/dev` export condition so Vite
   // pulls TS source from each package's src/ directly. Without this it
-  // walks the default `import` condition (e.g. @agent-desk/shared/dist/index.js),
+  // walks the default `import` condition (e.g. @roomy-ai/shared/dist/index.js),
   // which only exists after a separate `tsc` build of every package —
   // fine locally for anyone who has built once, broken on fresh CI
   // checkouts where `npm ci` does not run package build scripts. The
@@ -32,12 +32,12 @@ export default defineConfig({
       // import from `@/store/…`, `@/auth/…`, etc.
       "@": path.resolve(import.meta.dirname, "packages/app/src"),
     },
-    conditions: ["@agent-desk/dev"],
+    conditions: ["@roomy-ai/dev"],
   },
   ssr: {
     resolve: {
-      conditions: ["@agent-desk/dev"],
-      externalConditions: ["@agent-desk/dev"],
+      conditions: ["@roomy-ai/dev"],
+      externalConditions: ["@roomy-ai/dev"],
     },
   },
   test: {

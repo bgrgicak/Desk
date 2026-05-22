@@ -1,11 +1,11 @@
-# @agent-desk/app-scaffold
+# @roomy-ai/app-scaffold
 
-Template tree for an agent-authored Desk app.
+Template tree for an agent-authored Roomy app.
 
 This package isn't published or imported. It's baked into the sandbox
-image at `/opt/desk-template/app/` (with `node_modules/` pre-installed)
+image at `/opt/roomy-template/app/` (with `node_modules/` pre-installed)
 and copied into a chat artifact directory on demand by
-`desk-agent app create <name>`. Every Desk app starts as a copy of this
+`roomy-agent app create <name>`. Every Roomy app starts as a copy of this
 tree.
 
 For agent-facing instructions see `AGENTS.md` in this directory.

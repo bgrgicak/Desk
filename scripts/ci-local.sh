@@ -4,15 +4,14 @@ set -eu
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT_DIR"
 
-export DESK_DEV="${DESK_DEV:-1}"
-if [ -z "${DESK_HOME:-}" ]; then
-  DESK_HOME=$(mktemp -d)
-  export DESK_HOME
+export ROOMY_DEV="${ROOMY_DEV:-1}"
+if [ -z "${ROOMY_HOME:-}" ]; then
+  ROOMY_HOME=$(mktemp -d)
+  export ROOMY_HOME
 fi
-export DESK_VAULT_PASSWORD="${DESK_VAULT_PASSWORD:-ci-local-vault-password}"
-export DESK_DB_PATH="${DESK_DB_PATH:-$DESK_HOME/.database/desk.sqlite3}"
+export ROOMY_DB_PATH="${ROOMY_DB_PATH:-$ROOMY_HOME/.database/roomy.sqlite3}"
 
-mkdir -p "$DESK_HOME" "$(dirname "$DESK_DB_PATH")"
+mkdir -p "$ROOMY_HOME" "$(dirname "$ROOMY_DB_PATH")"
 
 pids=""
 cleanup() {
@@ -56,13 +55,13 @@ typecheck_pid=$!
 pids="$pids $typecheck_pid"
 
 (
-  npm run build --workspace=@agent-desk/sandbox-cli
-  docker build -f packages/server/runtime/Dockerfile.sandbox -t desk/sandbox:v1 .
+  npm run build --workspace=@roomy-ai/sandbox-cli
+  docker build -f packages/server/runtime/Dockerfile.sandbox -t roomy/sandbox:v1 .
 ) &
 sandbox_pid=$!
 pids="$pids $sandbox_pid"
 
-npm -w @agent-desk/app exec -- playwright install chromium &
+npm -w @roomy-ai/app exec -- playwright install chromium &
 playwright_install_pid=$!
 pids="$pids $playwright_install_pid"
 
@@ -76,7 +75,7 @@ npx vitest run --passWithNoTests --retry=2 &
 vitest_pid=$!
 pids="$pids $vitest_pid"
 
-npx nx build @agent-desk/api &
+npx nx build @roomy-ai/api &
 api_build_pid=$!
 pids="$pids $api_build_pid"
 
@@ -85,7 +84,7 @@ wait_group \
   api-build "$api_build_pid"
 
 printf '[ci:local] Running Playwright e2e\n'
-npm -w @agent-desk/app run test:e2e -- --retries=2
+npm -w @roomy-ai/app run test:e2e -- --retries=2
 
 trap - INT TERM
 printf '[ci:local] Complete\n'

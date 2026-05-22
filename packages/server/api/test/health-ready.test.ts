@@ -4,9 +4,9 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
+import { Pool, runMigrations } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
 import { createApp, type AppOptions } from "../src/app.js";
 
 let pool: Pool;
@@ -47,14 +47,14 @@ function fetchJson(method: string, reqPath: string): Promise<{ status: number; b
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-health-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-health-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-health-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-health-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   server = createApp(appOpts());
   await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -66,7 +66,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 describe("GET /health", () => {

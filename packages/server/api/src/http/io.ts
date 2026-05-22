@@ -30,11 +30,11 @@ export async function parseBody(req: IncomingMessage): Promise<unknown> {
 
 /**
  * Default destination for `/internal/backup`. Lands next to the live DB
- * inside `$DESK_HOME/backups/` so file ownership matches the DB and the
+ * inside `$ROOMY_HOME/backups/` so file ownership matches the DB and the
  * directory is included in any host-level backup of the data root. Uses
  * UTC date so multi-region rsync targets don't fight over filenames.
  */
-export function defaultBackupPath(deskHome: string): string {
+export function defaultBackupPath(roomyHome: string): string {
   const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
-  return pathJoin(deskHome, "backups", `desk-${ts}.sqlite3`);
+  return pathJoin(roomyHome, "backups", `roomy-${ts}.sqlite3`);
 }

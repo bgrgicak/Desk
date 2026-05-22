@@ -8,7 +8,7 @@ RUN npm install --ignore-scripts --loglevel=error && \
 
 # ---- Build stage: prepare app scaffold template ----
 FROM node:23-slim AS app-template
-WORKDIR /opt/desk-template
+WORKDIR /opt/roomy-template
 COPY packages/ui/ ./ui/
 RUN cd ui && \
     npm install --ignore-scripts --loglevel=error && \
@@ -17,7 +17,7 @@ RUN cd ui && \
 COPY packages/app-scaffold/ ./app/
 RUN cd app && \
     cp package.json package.json.template && \
-    node -e "const fs=require('node:fs'); const ui=JSON.parse(fs.readFileSync('../ui/package.json','utf8')); const pkg=JSON.parse(fs.readFileSync('package.json','utf8')); const tarball=ui.name.replace('@','').replace('/','-')+'-'+ui.version+'.tgz'; pkg.dependencies['@agent-desk/ui']='file:../ui/'+tarball; fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)+'\n')" && \
+    node -e "const fs=require('node:fs'); const ui=JSON.parse(fs.readFileSync('../ui/package.json','utf8')); const pkg=JSON.parse(fs.readFileSync('package.json','utf8')); const tarball=ui.name.replace('@','').replace('/','-')+'-'+ui.version+'.tgz'; pkg.dependencies['@roomy-ai/ui']='file:../ui/'+tarball; fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)+'\n')" && \
     npm install --ignore-scripts --loglevel=error && \
     npm run build && \
     rm -rf dist && \
@@ -26,14 +26,14 @@ RUN cd app && \
 # ---- Runtime stage ----
 FROM node:22-slim
 
-LABEL org.opencontainers.image.title="Desk Sandbox" \
-      org.opencontainers.image.description="Container image for Desk agent runs (pi coding agent + sandbox helpers)" \
+LABEL org.opencontainers.image.title="Roomy Sandbox" \
+      org.opencontainers.image.description="Container image for Roomy agent runs (pi coding agent + sandbox helpers)" \
       org.opencontainers.image.source="https://github.com/bgrgicak/Desk" \
       org.opencontainers.image.licenses="MIT"
 
 # Install basics. Node.js/npm are provided by the base image; installing Ubuntu's
 # npm package pulls hundreds of Debian packages and has made CI builds stall.
-# `xvfb` is needed when the desk-mcp-bridge extension's playwright-mcp server
+# `xvfb` is needed when the roomy-mcp-bridge extension's playwright-mcp server
 # runs a real browser; idle cost is ~zero until Xvfb is started by the
 # host runtime via ensureContainerXvfb.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -47,7 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN npm install -g @earendil-works/pi-coding-agent@0.75.4 --omit=dev --loglevel=error \
     && rm -rf /root/.npm
 
-# Browser/display stack for the desk-mcp-bridge playwright server. Browser
+# Browser/display stack for the roomy-mcp-bridge playwright server. Browser
 # binaries live outside any bind-mounted workspace home so every sandbox
 # user shares the pinned version. Xvfb itself is *not* started here —
 # the host runtime starts it lazily only for browser-goal chats via
@@ -61,33 +61,33 @@ RUN npm install -g playwright@1.60.0-alpha-1777669338000 @playwright/mcp@0.0.73 
     && chmod -R a+rX /opt/playwright-browsers \
     && rm -rf /root/.npm /var/lib/apt/lists/*
 
-# Bake the desk-mcp-bridge pi extension into /etc/skel/.pi/agent/extensions/
+# Bake the roomy-mcp-bridge pi extension into /etc/skel/.pi/agent/extensions/
 # so every workspace's first boot gets it via the entrypoint's cp -rn.
 # Pi auto-discovers extensions in ~/.pi/agent/extensions/<name>/index.ts.
-COPY packages/server/runtime/pi-extensions/desk-mcp-bridge /etc/skel/.pi/agent/extensions/desk-mcp-bridge
+COPY packages/server/runtime/pi-extensions/roomy-mcp-bridge /etc/skel/.pi/agent/extensions/roomy-mcp-bridge
 RUN chmod -R a+rX /etc/skel/.pi
 
-# Install @agent-desk/sandbox-cli binary from builder stage. esbuild's `banner`
+# Install @roomy-ai/sandbox-cli binary from builder stage. esbuild's `banner`
 # config already prepends `#!/usr/bin/env node`, so we just symlink — adding
 # a second shebang here would break the file as a Node entry point. The bin
-# is `desk-agent`: `desk` is reserved for the host CLI (@agent-desk/cli); the
-# in-sandbox callback tool is what `desk-agent task schedule` invokes.
-COPY --from=builder /build/sandbox-cli/dist/desk.js /usr/local/lib/desk-agent-cli/desk-agent.js
-RUN ln -s /usr/local/lib/desk-agent-cli/desk-agent.js /usr/local/bin/desk-agent && \
-    chmod +x /usr/local/lib/desk-agent-cli/desk-agent.js
+# is `roomy-agent`: `roomy` is reserved for the host CLI (@roomy-ai/cli); the
+# in-sandbox callback tool is what `roomy-agent task schedule` invokes.
+COPY --from=builder /build/sandbox-cli/dist/roomy.js /usr/local/lib/roomy-agent-cli/roomy-agent.js
+RUN ln -s /usr/local/lib/roomy-agent-cli/roomy-agent.js /usr/local/bin/roomy-agent && \
+    chmod +x /usr/local/lib/roomy-agent-cli/roomy-agent.js
 
-# Bake the app scaffold into the sandbox so `desk-agent app create` can clone it
+# Bake the app scaffold into the sandbox so `roomy-agent app create` can clone it
 # without network access during agent runs.
-COPY --from=app-template /opt/desk-template/app /opt/desk-template/app
+COPY --from=app-template /opt/roomy-template/app /opt/roomy-template/app
 
 # Seed shell dotfiles from /etc/skel into the bind-mounted $HOME on first
 # start (idempotent via `cp -rn`). See runtime/sandbox-entrypoint.sh.
-COPY packages/server/runtime/sandbox-entrypoint.sh /usr/local/bin/desk-sandbox-entrypoint
-RUN chmod +x /usr/local/bin/desk-sandbox-entrypoint
+COPY packages/server/runtime/sandbox-entrypoint.sh /usr/local/bin/roomy-sandbox-entrypoint
+RUN chmod +x /usr/local/bin/roomy-sandbox-entrypoint
 
 # Baseline `agent` user. The image ships with this baked at AGENT_UID=2000
 # so a `docker run` without a per-run --user has *some* unprivileged user
-# to run as — but desk-server always passes `--user` of the host process
+# to run as — but roomy-server always passes `--user` of the host process
 # (or 0:0 under rootless docker) so the runtime uid is whoever spawned
 # the sandbox. /home/agent is the bind-mount target; the workspace root
 # on the host lands there directly, so reads/writes both directions just
@@ -102,7 +102,7 @@ WORKDIR /home/agent
 ENV HOME=/home/agent
 USER agent
 
-ENTRYPOINT ["/usr/local/bin/desk-sandbox-entrypoint"]
+ENTRYPOINT ["/usr/local/bin/roomy-sandbox-entrypoint"]
 
 # Keep the container alive so `docker exec` has a target.
 # Runs (pi invocations) are dispatched via `docker exec` per turn.

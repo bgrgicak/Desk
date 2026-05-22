@@ -1,6 +1,6 @@
 import { type IncomingMessage } from "node:http";
-import { type Pool } from "@agent-desk/db";
-import { UnauthorizedError } from "@agent-desk/shared";
+import { type Pool } from "@roomy-ai/db";
+import { UnauthorizedError } from "@roomy-ai/shared";
 import { verifySession } from "./sessions.js";
 import { enforceMustChangePassword } from "./middleware.js";
 
@@ -16,7 +16,7 @@ import { enforceMustChangePassword } from "./middleware.js";
  * dist routes), which means without this call a user still on the
  * documented public seed credential could mint app-session tokens
  * or access app dist routes even though the rest of the API refuses
- * them.  `enforceMustChangePassword` throws a `DeskError(FORBIDDEN)`
+ * them.  `enforceMustChangePassword` throws a `RoomyError(FORBIDDEN)`
  * that the dispatcher's catch maps to 403, matching how the
  * non-/apps routes behave.
  *

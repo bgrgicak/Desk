@@ -10,14 +10,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { Pool, queries } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { ensureLayout, materializeSummary } from "@agent-desk/storage";
+import { Pool, queries } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture } from "@roomy-ai/db";
+import { ensureLayout, materializeSummary } from "@roomy-ai/storage";
 import { createApp, type AppOptions } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 
 let pool: Pool;
 let server: http.Server;
@@ -27,20 +27,18 @@ let dbPath: string;
 
 beforeAll(async () => {
   // Per-test-file SQLite file so workers don't collide on the same DB.
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-api-e2e-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-api-e2e-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "testuser";
-  process.env.DESK_SEED_PASSWORD = "test-pass-1234";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "test-pass-1234" });
 
   // Create temp home directory with storage layout
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-api-e2e-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-api-e2e-"));
   await ensureLayout(home);
-  // fireMessage reads DESK_HOME for its log file path.
-  process.env.DESK_HOME = home;
+  // fireMessage reads ROOMY_HOME for its log file path.
+  process.env.ROOMY_HOME = home;
 
   const storage = { pool, home };
   const runManager = createRunManager({
@@ -108,7 +106,7 @@ function requestMultipart(
   parts: Array<{ name: string; filename?: string; contentType?: string; body: Buffer }>,
 ): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
-    const boundary = `----desk-test-${crypto.randomBytes(8).toString("hex")}`;
+    const boundary = `----roomy-test-${crypto.randomBytes(8).toString("hex")}`;
     const chunks: Buffer[] = [];
     for (const p of parts) {
       const header = [`--${boundary}`];
@@ -184,7 +182,7 @@ describe("API e2e (real Postgres)", () => {
 
   it("POST /auth/login authenticates against real DB", async () => {
     const res = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     expect(res.status).toBe(200);
@@ -215,7 +213,7 @@ describe("API e2e (real Postgres)", () => {
   });
 
   it("POST /chats creates a chat, GET /chats returns it", async () => {
-    // Get workspace and agent IDs. The seeded "Desk" project workspace is
+    // Get workspace and agent IDs. The seeded "Roomy" project workspace is
     // the right home for ad-hoc chats — pick it explicitly so the test
     // doesn't depend on which workspace happens to come back first.
     const wsRes = await request("GET", "/workspaces", token);
@@ -363,7 +361,7 @@ describe("API e2e (real Postgres)", () => {
   it("POST /auth/logout invalidates the session", async () => {
     // Login to get a new token to revoke
     const loginRes = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     const tempToken = (loginRes.body as { token: string }).token;
@@ -379,7 +377,7 @@ describe("API e2e (real Postgres)", () => {
   it("WebSocket upgrade with real session delivers broadcast events", async () => {
     // Login fresh
     const loginRes = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     const wsToken = (loginRes.body as { token: string }).token;
@@ -991,7 +989,7 @@ describe("API e2e (real Postgres)", () => {
 
   it("invalid login returns 401", async () => {
     const res = await request("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "wrongpassword",
     });
     expect(res.status).toBe(401);
@@ -1021,7 +1019,7 @@ describe("API e2e (real Postgres)", () => {
  */
 const REAL_E2E_SANDBOX_AVAILABLE = await (async () => {
   try {
-    const { detectEngine, sandboxImage } = await import("@agent-desk/runtime");
+    const { detectEngine, sandboxImage } = await import("@roomy-ai/runtime");
     const engine = await detectEngine();
     return (await engine.imageId(sandboxImage())) !== null;
   } catch {
@@ -1079,24 +1077,22 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
   }
 
   beforeAll(async () => {
-    const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-real-e2e-db-"));
+    const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-real-e2e-db-"));
     realDbPath = path.join(dbDir, "test.sqlite3");
     realPool = new Pool({ path: realDbPath });
 
     await runMigrations(realPool);
-    process.env.DESK_SEED_USERNAME = "testuser";
-    process.env.DESK_SEED_PASSWORD = "test-pass-1234";
-    await seedIfEmpty(realPool);
+  await insertSeedFixture(realPool);
     const { rows: workspaceRows } = await realPool.query("SELECT id FROM workspaces");
     realWorkspaceIds = workspaceRows.map((row) => row.id as string);
 
-    realHome = await fs.mkdtemp(path.join(os.tmpdir(), "desk-real-e2e-"));
+    realHome = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-real-e2e-"));
     await ensureLayout(realHome);
-    // The runtime resolves its on-disk home via `resolveDeskHome()`,
-    // which falls back to process.env.DESK_HOME. Pin it so the agent
+    // The runtime resolves its on-disk home via `resolveRoomyHome()`,
+    // which falls back to process.env.ROOMY_HOME. Pin it so the agent
     // file (and any test reading it back) hit the same tree the
     // storage context above uses.
-    process.env.DESK_HOME = realHome;
+    process.env.ROOMY_HOME = realHome;
 
     const storage = { pool: realPool, home: realHome };
 
@@ -1123,16 +1119,16 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
     if (realServer) await new Promise<void>((resolve) => realServer.close(() => resolve()));
     if (realPool) await realPool.end();
 
-    // The scheduler spawned real desk-sandbox-* containers during the run.
+    // The scheduler spawned real roomy-sandbox-* containers during the run.
     // Remove only sandboxes that bind this test's temp home so parallel suites
     // keep their own containers.
     try {
-      const { detectEngine } = await import("@agent-desk/runtime");
+      const { detectEngine } = await import("@roomy-ai/runtime");
       const engine = await detectEngine();
       for (const workspaceId of realWorkspaceIds) {
-        await engine.remove(`desk-sandbox-${workspaceId}`, true).catch(() => {});
+        await engine.remove(`roomy-sandbox-${workspaceId}`, true).catch(() => {});
       }
-      const containers = await engine.list({ all: true, namePrefix: "desk-sandbox-" });
+      const containers = await engine.list({ all: true, namePrefix: "roomy-sandbox-" });
       for (const c of containers) {
         const info = await engine.inspect(c.id).catch(() => null);
         if (info?.binds.some((bind) => bind.startsWith(`${realHome}:`) || bind.startsWith(`${realHome}/`))) {
@@ -1148,7 +1144,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
   it("sends a message through the full real stack and gets an assistant response", async () => {
     // Login
     const loginRes = await realRequest("POST", "/auth/login", undefined, {
-      username: "testuser",
+      email: "testuser@roomy.local",
       password: "test-pass-1234",
     });
     expect(loginRes.status).toBe(200);
@@ -1189,7 +1185,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
     expect(assistantMsgs.length).toBeGreaterThanOrEqual(1);
   }, 360_000); // Free model runs are slower than paid APIs
 
-  // G10: User memory (~/Desk/.memory/memory.md) is injected into the
+  // G10: User memory (~/Roomy/.memory/memory.md) is injected into the
   // system prompt the runtime ships to pi. The cheap test-time model
   // doesn't reliably honor a user-memory instruction over the always-on
   // artifact-attach guidance, so the assertion targets the *prompt
@@ -1199,14 +1195,14 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
   it("user memory.md is rendered into the agent file at run time", async () => {
     if (!realToken) {
       const loginRes = await realRequest("POST", "/auth/login", undefined, {
-        username: "testuser",
+        email: "testuser@roomy.local",
         password: "test-pass-1234",
       });
       realToken = (loginRes.body as { token: string }).token;
     }
 
     const sentinel = "CORSAIR_SENTINEL_USER_MEMORY";
-    // DESK_HOME is the data root — no "Desk" sub-segment since ac4ecca.
+    // ROOMY_HOME is the data root — no "Roomy" sub-segment since ac4ecca.
     const memoryDir = path.join(realHome, ".memory");
     await fs.mkdir(memoryDir, { recursive: true });
     await fs.writeFile(
@@ -1250,7 +1246,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
       if (body.includes(sentinel)) break;
     }
     expect(body).toContain(sentinel);
-    expect(body).toContain("<!-- Desk user memory index -->");
+    expect(body).toContain("<!-- Roomy user memory index -->");
   }, 120_000);
 
   // Full sub-task loop against the real stack: agent spawns an
@@ -1272,7 +1268,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
   it.skipIf(!!process.env.CI)("spawns a sub-task, auto-fires it, completes it, and delivers a report-back to the parent chat", async () => {
     if (!realToken) {
       const loginRes = await realRequest("POST", "/auth/login", undefined, {
-        username: "testuser",
+        email: "testuser@roomy.local",
         password: "test-pass-1234",
       });
       realToken = (loginRes.body as { token: string }).token;
@@ -1319,7 +1315,7 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
             headers: {
               "Content-Type": "application/json",
               "Content-Length": String(Buffer.byteLength(payload)),
-              "X-Desk-Sandbox-Token": rawToken,
+              "X-Roomy-Sandbox-Token": rawToken,
             },
           },
           (res) => {

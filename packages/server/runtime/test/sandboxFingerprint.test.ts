@@ -13,7 +13,7 @@ const FINGERPRINT_SCRIPT = resolve(
 );
 
 function makeFixtureRepo(): string {
-  const root = mkdtempSync(join(tmpdir(), "desk-fp-"));
+  const root = mkdtempSync(join(tmpdir(), "roomy-fp-"));
   mkdirSync(join(root, "packages/server/sandbox-cli/src"), { recursive: true });
   mkdirSync(join(root, "packages/server/runtime"), { recursive: true });
   mkdirSync(join(root, "packages/ui/src"), { recursive: true });
@@ -31,7 +31,7 @@ function makeFixtureRepo(): string {
   );
   writeFileSync(
     join(root, "packages/server/sandbox-cli/package.json"),
-    '{"name":"@agent-desk/sandbox-cli"}\n',
+    '{"name":"@roomy-ai/sandbox-cli"}\n',
   );
   writeFileSync(
     join(root, "packages/server/runtime/Dockerfile.sandbox"),
@@ -39,14 +39,14 @@ function makeFixtureRepo(): string {
   );
   writeFileSync(
     join(root, "packages/ui/package.json"),
-    '{"name":"@agent-desk/ui"}\n',
+    '{"name":"@roomy-ai/ui"}\n',
   );
   writeFileSync(
     join(root, "packages/ui/src/index.ts"),
     "export const Button = 'button';\n",
   );
   writeFileSync(
-    join(root, "packages/app-scaffold/desk.app.json"),
+    join(root, "packages/app-scaffold/roomy.app.json"),
     '{"name":"app"}\n',
   );
   writeFileSync(
@@ -54,7 +54,7 @@ function makeFixtureRepo(): string {
     "export const scaffold = true;\n",
   );
   writeFileSync(
-    join(root, "packages/app-scaffold/fragments/example/desk.fragment.json"),
+    join(root, "packages/app-scaffold/fragments/example/roomy.fragment.json"),
     '{"name":"frag"}\n',
   );
   return root;
@@ -107,7 +107,7 @@ describe("sandbox-fingerprint.sh", () => {
   it("changes when an app-scaffold manifest changes", () => {
     const before = fingerprint(root);
     writeFileSync(
-      join(root, "packages/app-scaffold/desk.app.json"),
+      join(root, "packages/app-scaffold/roomy.app.json"),
       '{"name":"app","displayName":"App"}\n',
     );
     expect(fingerprint(root)).not.toBe(before);
@@ -135,7 +135,7 @@ describe("sandbox-fingerprint.sh", () => {
     const before = fingerprint(root);
     writeFileSync(
       join(root, "packages/server/sandbox-cli/package.json"),
-      '{"name":"@agent-desk/sandbox-cli","dependencies":{"x":"1.0.0"}}\n',
+      '{"name":"@roomy-ai/sandbox-cli","dependencies":{"x":"1.0.0"}}\n',
     );
     expect(fingerprint(root)).not.toBe(before);
   });

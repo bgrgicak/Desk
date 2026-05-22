@@ -120,7 +120,7 @@ describe('eventDisplayChunks', () => {
           type: 'tool',
           part: {
             tool: 'skill',
-            content: '<skill_content name="desk-cli-task-schedule">failure modes and error handling</skill_content>',
+            content: '<skill_content name="roomy-cli-task-schedule">failure modes and error handling</skill_content>',
           },
         },
       },
@@ -132,7 +132,7 @@ describe('eventDisplayChunks', () => {
   it('renders post-event unparsed stdout as neutral diagnostics in developer mode', () => {
     const log = [
       { kind: 'event' as const, event: { type: 'tool', part: { tool: 'skill' } } },
-      { kind: 'unparsed' as const, line: '<skill_content name="desk-goal-app">reference text</skill_content>' },
+      { kind: 'unparsed' as const, line: '<skill_content name="roomy-goal-app">reference text</skill_content>' },
     ]
 
     expect(eventDisplayChunks(log, true)).toEqual([
@@ -143,7 +143,7 @@ describe('eventDisplayChunks', () => {
 
   it('renders structured tool stderr payloads as neutral diagnostics in developer mode', () => {
     const log = [
-      { kind: 'stderr' as const, line: '<path>/home/agent/.config/pi/skills/desk-goal-app/SKILL.md</path> <type>file</type> <content>error handling notes</content>' },
+      { kind: 'stderr' as const, line: '<path>/home/agent/.config/pi/skills/roomy-goal-app/SKILL.md</path> <type>file</type> <content>error handling notes</content>' },
     ]
 
     expect(eventDisplayChunks(log, true)).toEqual([
@@ -153,7 +153,7 @@ describe('eventDisplayChunks', () => {
 
   it('renders escaped structured tool stderr payloads as neutral diagnostics in developer mode', () => {
     const log = [
-      { kind: 'stderr' as const, line: '&lt;skill_content name="desk-goal-app"&gt;failure modes and error handling&lt;/skill_content&gt;' },
+      { kind: 'stderr' as const, line: '&lt;skill_content name="roomy-goal-app"&gt;failure modes and error handling&lt;/skill_content&gt;' },
     ]
 
     expect(eventDisplayChunks(log, true)).toEqual([

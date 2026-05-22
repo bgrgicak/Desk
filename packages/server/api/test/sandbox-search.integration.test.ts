@@ -5,10 +5,10 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, queries, runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
-import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-desk/storage";
+import { Pool, queries, runMigrations, insertSeedFixture } from "@roomy-ai/db";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
+import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -29,18 +29,16 @@ let agentId: string;
 let userId: string;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-sandbox-search-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-sandbox-search-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "search-user";
-  process.env.DESK_SEED_PASSWORD = "pw";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "search-user", password: "pw" });
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-sandbox-search-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-sandbox-search-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const { rows: wsRows } = await pool.query<{ id: string; path: string }>(
     "SELECT id, path FROM workspaces LIMIT 1",
@@ -153,7 +151,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 function sandboxGet(
@@ -167,7 +165,7 @@ function sandboxGet(
         port,
         path: urlPath,
         method: "GET",
-        headers: { "X-Desk-Sandbox-Token": token },
+        headers: { "X-Roomy-Sandbox-Token": token },
       },
       (res) => {
         const chunks: Buffer[] = [];

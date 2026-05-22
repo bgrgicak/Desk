@@ -1,24 +1,24 @@
 /**
- * Entry point for the desk-server process.
+ * Entry point for the roomy-server process.
  *
  * Reads runtime config from env, wires up storage + scheduler + run manager,
  * starts the HTTP + WS server on $PORT, and runs migrations + seed on boot.
  *
  * Kept tiny on purpose — real behaviour lives in `app.ts`. This file is the
- * I/O boundary the host launcher (`dev.sh` / `desk start`) drives.
+ * I/O boundary the host launcher (`dev.sh` / `roomy start`) drives.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { createPool, queries, runMigrations, seedIfEmpty } from "@agent-desk/db";
+import { createPool, queries, runMigrations } from "@roomy-ai/db";
 import {
   ensureLayout,
   ensureWorkspaceLayout,
   enforceLogRetention,
   migrateLegacyWorkspaceLayout,
   reconcileArtifactRefs,
-  resolveDeskHome,
-} from "@agent-desk/storage";
-import { createRunManager, ensureDailyReflectionTasks } from "@agent-desk/scheduler";
+  resolveRoomyHome,
+} from "@roomy-ai/storage";
+import { createRunManager, ensureDailyReflectionTasks } from "@roomy-ai/scheduler";
 import {
   auditSandboxMounts,
   buildDaemonEnv,
@@ -29,7 +29,7 @@ import {
   resolveLocalSourceEnv,
   writeBuiltinApps,
   writeGoalSkillFiles,
-} from "@agent-desk/runtime";
+} from "@roomy-ai/runtime";
 import { createApp } from "./app.js";
 import { pruneExpiredSessions } from "./auth/sessions.js";
 import { broadcast, clearConnections } from "./ws/registry.js";
@@ -37,27 +37,26 @@ import { resolveRecipientUserId } from "./ws/recipient.js";
 import { ensureHubsForAllUsers } from "./routes/workspaces.js";
 import { VaultStore } from "./vault/store.js";
 import { resolveProviderKeys } from "./providerKeys.js";
-import { resolveVaultPasswordEnv } from "./envFile.js";
-import type { WsEvent } from "@agent-desk/shared";
-import { withModule } from "@agent-desk/shared/logger";
+import type { WsEvent } from "@roomy-ai/shared";
+import { withModule } from "@roomy-ai/shared/logger";
 const log = withModule("api/main");
 
 const PORT = parseInt(process.env.PORT ?? "35138", 10);
-const DESK_HOME = resolveDeskHome();
-// Default to $DESK_HOME/.database/desk.sqlite3. Dotfile parent so the DB
+const ROOMY_HOME = resolveRoomyHome();
+// Default to $ROOMY_HOME/.database/roomy.sqlite3. Dotfile parent so the DB
 // stays out of any in-app library listing; tests override
-// DESK_DB_PATH to a per-run mkdtemp path.
-const DESK_DB_PATH =
-  process.env.DESK_DB_PATH
-  ?? path.join(DESK_HOME, ".database", "desk.sqlite3");
+// ROOMY_DB_PATH to a per-run mkdtemp path.
+const ROOMY_DB_PATH =
+  process.env.ROOMY_DB_PATH
+  ?? path.join(ROOMY_HOME, ".database", "roomy.sqlite3");
 
 const PRE_MIGRATION_BACKUP_KEEP = parseInt(
-  process.env.DESK_PRE_MIGRATION_BACKUP_KEEP ?? "10",
+  process.env.ROOMY_PRE_MIGRATION_BACKUP_KEEP ?? "10",
   10,
 );
 
 /**
- * Snapshot the SQLite DB to ${DESK_HOME}/backups/pre-migration-<ts>.db
+ * Snapshot the SQLite DB to ${ROOMY_HOME}/backups/pre-migration-<ts>.db
  * before migrations run. Uses the same VACUUM INTO path as the
  * /internal/backup endpoint — works while the pool holds an exclusive
  * lock, produces a checkpointed copy. Old snapshots beyond
@@ -69,21 +68,21 @@ const PRE_MIGRATION_BACKUP_KEEP = parseInt(
  */
 async function snapshotBeforeMigrations(
   pool: ReturnType<typeof createPool>,
-  deskHome: string,
+  roomyHome: string,
   dbPath: string,
 ): Promise<void> {
   try {
     const stat = await fs.stat(dbPath).catch(() => null);
     if (!stat || stat.size === 0) return; // first boot
 
-    const backupDir = path.join(deskHome, "backups");
+    const backupDir = path.join(roomyHome, "backups");
     await fs.mkdir(backupDir, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
     const target = path.join(backupDir, `pre-migration-${ts}.db`);
 
     // VACUUM INTO takes the path as a literal SQL string. SQLite's
     // single-quote escape covers the normal injection vectors, but a
-    // DESK_HOME containing newlines, NUL bytes or backslashes would
+    // ROOMY_HOME containing newlines, NUL bytes or backslashes would
     // sneak past the escape on certain SQLite versions. Reject those
     // explicitly so the backup never runs with a path we didn't sanitise.
     // eslint-disable-next-line no-control-regex -- intentional: rejecting NUL byte injection in path
@@ -109,78 +108,76 @@ async function snapshotBeforeMigrations(
 
 async function main(): Promise<void> {
   // better-sqlite3 doesn't create parent directories — make sure the
-  // tree exists before opening the file (a fresh ~/Desk doesn't have
+  // tree exists before opening the file (a fresh ~/Roomy doesn't have
   // .database yet).
-  await fs.mkdir(path.dirname(DESK_DB_PATH), { recursive: true });
-  const pool = createPool({ path: DESK_DB_PATH });
+  await fs.mkdir(path.dirname(ROOMY_DB_PATH), { recursive: true });
+  const pool = createPool({ path: ROOMY_DB_PATH });
 
   // Snapshot the DB before migrations run. Forward-only migrations
   // can leave the schema wedged if a partial run errors halfway; the
   // snapshot is the safety net documented in BACKUP.md. Skip on a
   // truly-empty file (first boot) to avoid surfacing a "VACUUM INTO
   // requires content" error during install. Retention is bounded by
-  // DESK_PRE_MIGRATION_BACKUP_KEEP (default 10).
-  await snapshotBeforeMigrations(pool, DESK_HOME, DESK_DB_PATH);
+  // ROOMY_PRE_MIGRATION_BACKUP_KEEP (default 10).
+  await snapshotBeforeMigrations(pool, ROOMY_HOME, ROOMY_DB_PATH);
 
-  // One-shot schema + seed. Idempotent — safe on every boot.
+  // One-shot schema. Idempotent — safe on every boot.
   await runMigrations(pool);
-  // Fresh installs no longer get a default `desk` user — the first
-  // visitor goes through the signup screen and chooses their own
-  // credentials. Operators who want a scripted/preseeded account opt
-  // in by setting DESK_SEED_PASSWORD (and optionally
-  // DESK_SEED_USERNAME).
-  if (process.env.DESK_SEED_PASSWORD) {
-    await seedIfEmpty(pool);
-  }
+  // No user is ever auto-created at boot. The first visitor goes
+  // through the signup wizard (`/auth/signup`), which is unlocked
+  // automatically on a fresh install (empty users table) by the
+  // `firstRun` branch of `/auth/signup-status`. The wizard creates
+  // the user, the optional first room, and the vault atomically, so
+  // a fresh boot never lands on the legacy VaultGate setup screen.
   await pruneExpiredSessions(pool);
 
   // Boot-time visibility for the on-disk root. A silent split between this
   // value and the bind source the runtime computes once dropped every user
   // upload into a parallel tree.
   log.info(
-    `desk-server DESK_HOME=${DESK_HOME} (source=${process.env.DESK_HOME ? "env" : process.env.HOME ? "$HOME" : "fallback"})`,
+    `roomy-server ROOMY_HOME=${ROOMY_HOME} (source=${process.env.ROOMY_HOME ? "env" : process.env.HOME ? "$HOME" : "fallback"})`,
   );
-  if (!process.env.DESK_HOME) {
+  if (!process.env.ROOMY_HOME) {
     log.warn(
-      "DESK_HOME is not set explicitly. Falling back to $HOME; " +
-        "set DESK_HOME to pin the on-disk root.",
+      "ROOMY_HOME is not set explicitly. Falling back to $HOME; " +
+        "set ROOMY_HOME to pin the on-disk root.",
     );
   }
-  await fs.mkdir(DESK_HOME, { recursive: true });
-  // One-shot migration from the legacy `${DESK_HOME}/workspaces/{slug}/`
-  // layout to the flat `${DESK_HOME}/{slug}/` layout. Idempotent — does
+  await fs.mkdir(ROOMY_HOME, { recursive: true });
+  // One-shot migration from the legacy `${ROOMY_HOME}/workspaces/{slug}/`
+  // layout to the flat `${ROOMY_HOME}/{slug}/` layout. Idempotent — does
   // nothing once the legacy parent is gone.
-  const wsMigration = await migrateLegacyWorkspaceLayout(DESK_HOME);
+  const wsMigration = await migrateLegacyWorkspaceLayout(ROOMY_HOME);
   if (wsMigration.migrated > 0 || wsMigration.conflicts.length > 0) {
     log.info(
       `workspace layout migration: migrated=${wsMigration.migrated} ` +
         `skipped=${wsMigration.skipped} conflicts=${JSON.stringify(wsMigration.conflicts)}`,
     );
   }
-  await ensureLayout(DESK_HOME);
-  await writeGoalSkillFiles(DESK_HOME);
-  await writeBuiltinApps(DESK_HOME);
+  await ensureLayout(ROOMY_HOME);
+  await writeGoalSkillFiles(ROOMY_HOME);
+  await writeBuiltinApps(ROOMY_HOME);
   // Per-user hub auto-create. Runs before the workspace layout backfill
   // so a fresh hub immediately has its on-disk tree. Idempotent — does
   // nothing for users that already have a hub.
   //
-  // Opt-out via `DESK_HUB_AUTO_CREATE=off` for environments whose tests
+  // Opt-out via `ROOMY_HUB_AUTO_CREATE=off` for environments whose tests
   // still assume the seeded user has a single project workspace (e.g. the
   // Playwright e2e harness). Production deployments leave it on so the
   // hub is always available.
   const hubAutoCreateDisabled =
-    (process.env.DESK_HUB_AUTO_CREATE ?? "on").toLowerCase() === "off";
+    (process.env.ROOMY_HUB_AUTO_CREATE ?? "on").toLowerCase() === "off";
   if (!hubAutoCreateDisabled) {
-    await ensureHubsForAllUsers(pool, DESK_HOME);
+    await ensureHubsForAllUsers(pool, ROOMY_HOME);
   } else {
-    log.info("hub auto-create: disabled via DESK_HUB_AUTO_CREATE=off");
+    log.info("hub auto-create: disabled via ROOMY_HUB_AUTO_CREATE=off");
   }
 
   // Ensure every existing workspace has its on-disk tree, so a server
   // started after migration 0010 backfill still has folders for rows
   // that were created before per-workspace dirs existed.
   for (const ws of await queries.workspaces.list(pool)) {
-    await ensureWorkspaceLayout(DESK_HOME, ws.path);
+    await ensureWorkspaceLayout(ROOMY_HOME, ws.path);
   }
 
   // Re-queue agent_turn / summary_request messages that were interrupted
@@ -198,7 +195,7 @@ async function main(): Promise<void> {
 
   // Repair/flag artifactRef messages whose target moved or vanished while
   // the server was down.
-  const reconciled = await reconcileArtifactRefs(pool, DESK_HOME);
+  const reconciled = await reconcileArtifactRefs(pool, ROOMY_HOME);
   if (reconciled.checked > 0) {
     log.info(
       `artifactRef reconcile: checked=${reconciled.checked} repaired=${reconciled.repaired} missing=${reconciled.missing}`,
@@ -206,12 +203,12 @@ async function main(): Promise<void> {
   }
 
   // Log retention: keep the last N log files per chat. Evicted files go
-  // to ~/Desk/.trash/logs/ so nothing is silently destroyed.
-  const LOG_RETENTION_FILES = parseInt(process.env.DESK_LOG_RETENTION_FILES ?? "500", 10);
-  const LOG_RETENTION_INTERVAL_MS = parseInt(process.env.DESK_LOG_RETENTION_INTERVAL_MS ?? "3600000", 10);
+  // to ~/Roomy/.trash/logs/ so nothing is silently destroyed.
+  const LOG_RETENTION_FILES = parseInt(process.env.ROOMY_LOG_RETENTION_FILES ?? "500", 10);
+  const LOG_RETENTION_INTERVAL_MS = parseInt(process.env.ROOMY_LOG_RETENTION_INTERVAL_MS ?? "3600000", 10);
   const runRetention = async (): Promise<void> => {
     try {
-      const res = await enforceLogRetention(DESK_HOME, LOG_RETENTION_FILES);
+      const res = await enforceLogRetention(ROOMY_HOME, LOG_RETENTION_FILES);
       if (res.evicted > 0) {
         log.info(`log retention: scanned=${res.scanned} evicted=${res.evicted}`);
       }
@@ -226,13 +223,13 @@ async function main(): Promise<void> {
   // Provider-key audit log retention. The table records every read /
   // write / delete touching a user's provider keys (see SECURITY.md)
   // and grows unbounded otherwise. 90-day default rolling window;
-  // operators can tune via DESK_KEY_ACCESS_LOG_RETENTION_DAYS.
+  // operators can tune via ROOMY_KEY_ACCESS_LOG_RETENTION_DAYS.
   const KEY_LOG_RETENTION_DAYS = parseInt(
-    process.env.DESK_KEY_ACCESS_LOG_RETENTION_DAYS ?? "90",
+    process.env.ROOMY_KEY_ACCESS_LOG_RETENTION_DAYS ?? "90",
     10,
   );
   const KEY_LOG_REAPER_INTERVAL_MS = parseInt(
-    process.env.DESK_KEY_ACCESS_LOG_REAPER_INTERVAL_MS ?? "86400000", // daily
+    process.env.ROOMY_KEY_ACCESS_LOG_REAPER_INTERVAL_MS ?? "86400000", // daily
     10,
   );
   const runKeyAccessLogReaper = async (): Promise<void> => {
@@ -255,65 +252,11 @@ async function main(): Promise<void> {
   );
   keyAccessLogReaperTimer.unref();
 
-  const vault = new VaultStore(path.join(DESK_HOME, ".vaults"));
-
-  // DESK_VAULT_PASSWORD is now opt-in (no longer auto-generated). When
-  // set, boot auto-unlocks every existing vault with it and can
-  // auto-create missing ones if DESK_VAULT_AUTO_SETUP=on. When unset,
-  // boot doesn't touch vaults at all — users pick their own password
-  // through the VaultDialog on first credential save.
-  {
-    const vaultPassword = await resolveVaultPasswordEnv({ deskHome: DESK_HOME });
-    if (!vaultPassword) {
-      log.info("vault: no DESK_VAULT_PASSWORD configured — boot auto-unlock skipped");
-    } else {
-    // `DESK_VAULT_AUTO_SETUP=on` (explicit opt-in) lets boot create
-    // vaults for users who don't have one yet. Default is off: missing
-    // vaults stay missing so the modal owns first-time setup. Auto-
-    // unlock of *existing* vaults is unconditional whenever a password
-    // is configured — it's just a cache refill for the in-memory
-    // master, doesn't disclose anything new.
-    const autoSetup = (process.env.DESK_VAULT_AUTO_SETUP ?? "off").toLowerCase() === "on";
-
-    const { rows: allUsers } = await pool.query<{ id: string }>("SELECT id FROM users");
-    let unlocked = 0;
-    let setup = 0;
-    let failed = 0;
-    let skipped = 0;
-    for (const user of allUsers) {
-      const { exists } = await vault.status(user.id);
-      try {
-        if (!exists) {
-          if (!autoSetup) {
-            skipped += 1;
-            continue;
-          }
-          await vault.setup(user.id, vaultPassword);
-          setup += 1;
-          log.info({ userId: user.id }, "vault: auto-setup via DESK_VAULT_PASSWORD");
-        } else {
-          await vault.unlock(user.id, vaultPassword);
-          unlocked += 1;
-        }
-      } catch (err) {
-        failed += 1;
-        // Most likely cause: DESK_VAULT_PASSWORD drifted from the value
-        // the vault was sealed with. The vault stays locked and the
-        // user must unlock it through the VaultDialog. We surface this
-        // loudly so it's not silently swallowed.
-        log.warn(
-          { userId: user.id, err: (err as Error).message },
-          "vault: auto-unlock failed (password mismatch?) — user will need to unlock via UI",
-        );
-      }
-    }
-    log.info({ unlocked, setup, failed, skipped }, "vault: boot auto-unlock complete");
-    }
-  }
+  const vault = new VaultStore(path.join(ROOMY_HOME, ".vaults"));
 
   const runManager = createRunManager({
     pool,
-    home: DESK_HOME,
+    home: ROOMY_HOME,
     reflectWorkspace: productionReflectWorkspace,
     resolveProviderKeys: (userId, workspaceId) => resolveProviderKeys(pool, vault, userId, workspaceId),
     emit: (event: WsEvent) => {
@@ -332,7 +275,7 @@ async function main(): Promise<void> {
   });
 
   const POLL_INTERVAL_MS = parseInt(
-    process.env.DESK_SCHEDULER_POLL_INTERVAL_MS ?? "60000",
+    process.env.ROOMY_SCHEDULER_POLL_INTERVAL_MS ?? "60000",
     10,
   );
   const pollTimer = runManager.startPolling(POLL_INTERVAL_MS);
@@ -353,43 +296,43 @@ async function main(): Promise<void> {
   // whatever real bug stranded its row in `running` state.
   //
   // Idle-sandbox sweeper: removes the container for any workspace
-  // with no message activity for `DESK_SANDBOX_IDLE_MS` (default
+  // with no message activity for `ROOMY_SANDBOX_IDLE_MS` (default
   // 30 min). The next fire creates a fresh sandbox at the baseline
   // size, which also serves as the "reset grown sandbox back to
   // small" path. One SQL query + one `docker ps` per minute.
   const idleSweepTimer = runManager.startIdleSweeper(
-    parseInt(process.env.DESK_SANDBOX_IDLE_SWEEP_INTERVAL_MS ?? "60000", 10),
+    parseInt(process.env.ROOMY_SANDBOX_IDLE_SWEEP_INTERVAL_MS ?? "60000", 10),
   );
 
   // Soft-tier daemon sweeper: kills the in-container pi
-  // daemon for workspaces quiet for `DESK_SANDBOX_SOFT_IDLE_MS` (default
+  // daemon for workspaces quiet for `ROOMY_SANDBOX_SOFT_IDLE_MS` (default
   // 10 min) but leaves the container running. Saves ~400 MB of warm-
   // daemon RSS per sandbox; the next message pays only the ~2-5 s
   // daemon respawn cost. Runs on the same 60s cadence as the hard
   // sweeper — they coexist (hard reap takes precedence; once the
   // container is gone, the soft tier finds nothing to do).
   const softIdleSweepTimer = runManager.startSoftIdleDaemonSweeper(
-    parseInt(process.env.DESK_SANDBOX_SOFT_IDLE_SWEEP_INTERVAL_MS ?? "60000", 10),
+    parseInt(process.env.ROOMY_SANDBOX_SOFT_IDLE_SWEEP_INTERVAL_MS ?? "60000", 10),
   );
 
   // Memory-system Phase 5 — daily reflection. Seed one internal recurring
   // scheduler task per workspace instead of owning a separate process-local
-  // cron. Set DESK_DAILY_REFLECTION=off to skip seeding in dev / tests.
+  // cron. Set ROOMY_DAILY_REFLECTION=off to skip seeding in dev / tests.
   const reflectionDisabled =
-    (process.env.DESK_DAILY_REFLECTION ?? "on").toLowerCase() === "off";
+    (process.env.ROOMY_DAILY_REFLECTION ?? "on").toLowerCase() === "off";
   if (!reflectionDisabled) {
     await ensureDailyReflectionTasks({
       pool,
-      cron: process.env.DESK_DAILY_REFLECTION_CRON ?? "0 3 * * *",
+      cron: process.env.ROOMY_DAILY_REFLECTION_CRON ?? "0 3 * * *",
     });
   }
   if (reflectionDisabled) {
-    log.info("daily reflection: disabled via DESK_DAILY_REFLECTION=off");
+    log.info("daily reflection: disabled via ROOMY_DAILY_REFLECTION=off");
   }
 
   const server = createApp({
     pool,
-    storage: { pool, home: DESK_HOME },
+    storage: { pool, home: ROOMY_HOME },
     runManager,
     vault,
     refreshSandboxConnections: async (userId, workspaceId) => {
@@ -426,28 +369,28 @@ async function main(): Promise<void> {
     server.listen(PORT, "0.0.0.0", resolve);
   });
 
-  log.info(`desk-server listening on :${PORT}`);
+  log.info(`roomy-server listening on :${PORT}`);
 
   // Probe the container engine once at startup and log the choice so
-  // operators don't have to re-read DESK_CONTAINER_ENGINE / docker info
+  // operators don't have to re-read ROOMY_CONTAINER_ENGINE / docker info
   // to know which path is live. Best-effort: a host without an engine
   // can still serve the API; sandbox-launching routes will surface the
   // failure with the right error code at request time.
   try {
     const engine = await detectEngine();
-    const override = process.env.DESK_CONTAINER_ENGINE
-      ? ` (pinned via DESK_CONTAINER_ENGINE)`
+    const override = process.env.ROOMY_CONTAINER_ENGINE
+      ? ` (pinned via ROOMY_CONTAINER_ENGINE)`
       : ` (autodetected)`;
     log.info(`sandbox driver: ${engine.name}${override}`);
   } catch (err) {
     log.warn(`sandbox driver: unavailable — ${(err as Error).message}`);
   }
 
-  void auditSandboxMounts(DESK_HOME).then(async (drift) => {
+  void auditSandboxMounts(ROOMY_HOME).then(async (drift) => {
     for (const d of drift) {
       log.warn(
         `sandbox bind drift: ${d.containerName} mounts ${JSON.stringify(d.actualBinds)} ` +
-          `but DESK_HOME=${DESK_HOME} would place workspaces under ${d.expectedPrefix}. ` +
+          `but ROOMY_HOME=${ROOMY_HOME} would place workspaces under ${d.expectedPrefix}. ` +
           `Removing stale container.`,
       );
     }
@@ -458,7 +401,7 @@ async function main(): Promise<void> {
   // within a bounded grace period, drop WS clients, close the DB pool.
   // If a request hangs past SHUTDOWN_GRACE_MS we force-exit so a stuck
   // upstream call can never block restart.
-  const SHUTDOWN_GRACE_MS = parseInt(process.env.DESK_SHUTDOWN_GRACE_MS ?? "30000", 10);
+  const SHUTDOWN_GRACE_MS = parseInt(process.env.ROOMY_SHUTDOWN_GRACE_MS ?? "30000", 10);
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
     if (shuttingDown) return;
@@ -498,6 +441,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  log.error({ err }, "desk-server fatal error");
+  log.error({ err }, "roomy-server fatal error");
   process.exit(1);
 });

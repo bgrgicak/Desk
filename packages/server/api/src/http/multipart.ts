@@ -1,7 +1,7 @@
 import { type IncomingMessage } from "node:http";
 import { type Readable } from "node:stream";
 import Busboy from "busboy";
-import { ValidationError } from "@agent-desk/shared";
+import { ValidationError } from "@roomy-ai/shared";
 import { readRawBody } from "./io.js";
 
 /**

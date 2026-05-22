@@ -7,7 +7,7 @@ function artifactType(
   name: string,
   isDir = false,
 ): Artifact["type"] {
-  // A `<name>.app/` directory is a Desk app — the directory extension is
+  // A `<name>.app/` directory is a Roomy app — the directory extension is
   // the discriminator (see chat-apps plan, PR-A). Library `.app/`
   // recognition lands in PR-E; chat-artifact recognition lands in PR-B
   // and uses this same helper.

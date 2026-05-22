@@ -1,13 +1,13 @@
-# Desk App Scaffold Instructions
+# Roomy App Scaffold Instructions
 
-This directory is the template copied by `desk-agent app create <name>` into
+This directory is the template copied by `roomy-agent app create <name>` into
 `~/.chats/<chatId>/artifacts/<name>.app/` and later, after promotion, into
 `~/<name>.app/`. Anything changed here becomes part of generated apps.
 
 ## Start Here
 
 Build the smallest correct fragment-composed static app that satisfies the
-user. Fragments are the primary building blocks of Desk apps, not optional
+user. Fragments are the primary building blocks of Roomy apps, not optional
 garnish. Identify distinct user-facing surfaces, workflows, storage-backed
 capabilities, and capability boundaries before filling in the app shell. A
 single broad “workspace” fragment is not sufficient when the app contains
@@ -16,9 +16,9 @@ multiple independently useful surfaces.
 Non-negotiable rules:
 
 - Static-only: no Express, Hono, Node server, SSR, background jobs, webhooks, or
-  sidecars. The only backend is Desk.
-- Use the Desk capability bridge for privileged work. Do not author auth,
-  cookies, direct Desk API fetches, or `window.parent` DOM access.
+  sidecars. The only backend is Roomy.
+- Use the Roomy capability bridge for privileged work. Do not author auth,
+  cookies, direct Roomy API fetches, or `window.parent` DOM access.
 - Persist user records with `getStorageClient()` from `src/storage/client.ts`.
   Never use `localStorage`, `sessionStorage`, `IndexedDB`, constants, or ad-hoc
   JSON files as the source of truth.
@@ -33,15 +33,15 @@ Non-negotiable rules:
 1. Decide the fragment model first, before writing `src/App.tsx`: write a brief
    inventory of each fragment's name, user-facing job, props/state contract,
    storage collections, capabilities, standalone rendering needs, and
-   `desk.app.json` registration. Implement those focused fragments under
+   `roomy.app.json` registration. Implement those focused fragments under
    `fragments/<name>/`, then compose them from `src/App.tsx`. Skip real
    fragments only when the app is genuinely atomic and has no storage-backed
    workflow or reusable user-facing surface.
 2. Edit source in place; do not create another `.app/` unless the user clearly
    wants a separate app.
 3. Add storage capabilities before using storage: `storage.read` and/or
-   `storage.write` in `desk.app.json`, and in each storage-backed fragment's
-   `desk.fragment.json`.
+   `storage.write` in `roomy.app.json`, and in each storage-backed fragment's
+   `roomy.fragment.json`.
 4. Replace or delete `fragments/example/` before shipping real work. `npm run
    verify` fails while the example fragment directory remains.
 5. Run `npm run build` from the app directory, then confirm `dist/` exists and
@@ -50,7 +50,7 @@ Non-negotiable rules:
 6. Run `npm run verify` when the sandbox supports worker/fork-heavy test
    runners. If verification cannot run because of sandbox limits, report that
    explicitly instead of treating the app as fully verified.
-7. Manually test the built app in Desk's sandboxed iframe, including each real
+7. Manually test the built app in Roomy's sandboxed iframe, including each real
    standalone fragment entry and the main user flow.
 
 Useful commands:
@@ -68,7 +68,7 @@ The sandbox image already has Node 22, npm, and offline-installed
 
 ## App Shape
 
-Start from fragments, not from `src/App.tsx`. A Desk app must be composed from
+Start from fragments, not from `src/App.tsx`. A Roomy app must be composed from
 focused fragments whenever it has distinct surfaces, reusable workflows, storage
 contracts, or capability boundaries. `src/App.tsx` is for layout, routing,
 coordination, navigation, and app-specific state wiring.
@@ -83,7 +83,7 @@ Do not collapse a multi-surface app into one generic fragment named things like
 `workspace`, `dashboard`, `main`, `home`, or `<app-name>-workspace`. A single
 broad fragment that contains list, create, edit, detail, search, delete,
 dashboard, or import/export behavior is the same architectural failure as
-putting everything directly in `src/App.tsx`: Desk cannot address, reuse,
+putting everything directly in `src/App.tsx`: Roomy cannot address, reuse,
 inspect, or show those capabilities independently in chat.
 
 Use one screen in `src/App.tsx` only for genuinely atomic utilities: trivial
@@ -105,13 +105,13 @@ Use fragments for:
 Fragment rules:
 
 - Each fragment lives in `fragments/<name>/` and has `Component.tsx`,
-  `main.tsx`, `index.html`, `desk.fragment.json`, and `skill.md`.
+  `main.tsx`, `index.html`, `roomy.fragment.json`, and `skill.md`.
 - Fragment names must be **kebab-case** matching `^[a-z][a-z0-9-]{0,62}$`
   (lowercase letter, then letters/digits/hyphens). Underscores are not
   allowed — they break the serve-time URL matcher. Use `add-todo`, not
   `add_todo`; `yes-no`, not `yes_no`. Same constraint applies to the app
   directory name (`<name>.app`).
-- Each real fragment must be listed in `desk.app.json`; no unregistered real
+- Each real fragment must be listed in `roomy.app.json`; no unregistered real
   fragment should be left behind as dead code.
 - The fragment's `Component.tsx` is the only implementation of that surface.
   The full app imports it; do not duplicate code under `src/`.
@@ -119,7 +119,7 @@ Fragment rules:
   full-app-only store from fragment code.
 - Any standalone fragment meant to open a specific record, detail view, editor,
   filtered list, chart slice, or search result must declare the necessary
-  `params` in `desk.fragment.json` (for example `note_id`, `task_id`, or
+  `params` in `roomy.fragment.json` (for example `note_id`, `task_id`, or
   `query`) and read them from `new URLSearchParams(window.location.search)`.
   Do not ship record-specific fragments that silently select the first stored
   record when no param is supplied; render an empty/select state instead. The
@@ -151,7 +151,7 @@ Examples:
   package.json
   vite.config.ts
   index.html
-  desk.app.json
+  roomy.app.json
   src/
     main.tsx
     App.tsx
@@ -162,7 +162,7 @@ Examples:
       Component.tsx
       main.tsx
       index.html
-      desk.fragment.json
+      roomy.fragment.json
       skill.md
   dist/
 ```
@@ -173,11 +173,11 @@ assets.
 
 ## Persistent app storage
 
-Use Desk storage for records that must survive refreshes, app reloads, chat
+Use Roomy storage for records that must survive refreshes, app reloads, chat
 artifact promotion, future editing sessions, or movement between clients such
 as desktop and phone. Browser storage is only for disposable UI cache.
 
-Desk storage is exposed to app code through `window.desk.storage`; use the
+Roomy storage is exposed to app code through `window.roomy.storage`; use the
 scaffold client:
 
 ```ts
@@ -225,9 +225,9 @@ Collection names must match `^[a-z][a-z0-9_-]{0,62}$`. Document IDs are created
 by `create`; use `put` only when the app genuinely needs a stable chosen ID.
 Documents must be JSON-serializable.
 
-Desk currently backs app storage with `.storage/data.sqlite` inside the app
-directory, so it travels with the `.app/` when Desk promotes or replaces the
-app. Cross-device availability depends on Desk syncing app storage, not on
+Roomy currently backs app storage with `.storage/data.sqlite` inside the app
+directory, so it travels with the `.app/` when Roomy promotes or replaces the
+app. Cross-device availability depends on Roomy syncing app storage, not on
 browser-device-local storage.
 
 Storage-backed UI must handle loading and errors. Do not call storage at module
@@ -236,20 +236,20 @@ actions with error handling.
 
 ## Posting back to the chat
 
-Use `window.desk.chat.sendMessage(text, opts?)` to bubble a user choice back
+Use `window.roomy.chat.sendMessage(text, opts?)` to bubble a user choice back
 into the chat as a new user message — the agent reads it on its next turn.
 Required for any fragment that asks the user a question via UI controls
 (yes/no, radio, checkbox, form) instead of expecting a free-text reply.
 
 ```ts
-await window.desk.chat.sendMessage('Yes')
-await window.desk.chat.sendMessage('Yes', { artifactRefMessageId: '<msgId>' })
+await window.roomy.chat.sendMessage('Yes')
+await window.roomy.chat.sendMessage('Yes', { artifactRefMessageId: '<msgId>' })
 ```
 
 Rules:
 
-- Declare `chats.write` in both `desk.app.json` and the calling fragment's
-  `desk.fragment.json`. Without it the bridge rejects the call.
+- Declare `chats.write` in both `roomy.app.json` and the calling fragment's
+  `roomy.fragment.json`. Without it the bridge rejects the call.
 - `text` is a plain string (≤ 4000 chars). It lands in the chat exactly as
   typed — keep it short and structured. For a yes/no question, send `"Yes"`
   or `"No"`. For multi-select, send a single line like `"red, blue"`.
@@ -259,7 +259,7 @@ Rules:
   reloads the chat the fragment re-mounts and that's expected.
 - Read fragment props (e.g. the question text) from
   `new URLSearchParams(window.location.search)`. Declare them in
-  `desk.fragment.json` `params`.
+  `roomy.fragment.json` `params`.
 
 This bridge is only for chat replies. Anything else (storing records,
 reading files) still goes through the storage bridge or workspace-scoped
@@ -316,7 +316,7 @@ Storage-backed tests must use an isolated real SQLite database with the real
 never use a mocked or in-memory storage client as the only proof that storage
 works.
 
-Never mock `window.desk.storage`, `getStorageClient()`, or any Desk capability
+Never mock `window.roomy.storage`, `getStorageClient()`, or any Roomy capability
 bridge. A mocked bridge validates a contract that does not exist in production
 and hides real sandbox, capability, and adapter bugs.
 
@@ -356,10 +356,10 @@ Before telling the user the app is ready, verify:
 - `dist/` exists and contains built output. `npm run verify` checks this; an app
   with missing or empty `dist/` is broken even if another command reported
   success.
-- `fragments/example/` has been removed, and `desk.app.json` does not reference
+- `fragments/example/` has been removed, and `roomy.app.json` does not reference
   any example fragment.
 - Every real fragment has `Component.tsx`, `main.tsx`, `index.html`,
-  `desk.fragment.json`, `skill.md`, registration in `desk.app.json`, a built
+  `roomy.fragment.json`, `skill.md`, registration in `roomy.app.json`, a built
   standalone entry, and manual coverage of its main flow.
 - Multi-surface apps are decomposed into focused fragments. If the app has only
   one real fragment, verify that it is truly atomic rather than a generic
@@ -371,13 +371,13 @@ Before telling the user the app is ready, verify:
   `sandbox="allow-scripts allow-forms"` and no `allow-same-origin`.
 - Every real standalone fragment entry loads and its main flow works.
 - Storage-backed flows create, read, update, delete, refresh, and still show the
-  expected data through Desk storage.
+  expected data through Roomy storage.
 - The app has no leftover example-fragment UI unless explicitly requested.
 
 ## UI Library
 
-Use `@agent-desk/ui` components before adding new UI dependencies. Browse the
-exports in `node_modules/@agent-desk/ui/dist/index.d.ts`. Common exports include
+Use `@roomy-ai/ui` components before adding new UI dependencies. Browse the
+exports in `node_modules/@roomy-ai/ui/dist/index.d.ts`. Common exports include
 `Button`, `Input`, `Dialog`, `DropdownMenu`, `Card`, `Tabs`, and `Sheet`.
 
 If a primitive is missing, build a small local component in `src/components/`

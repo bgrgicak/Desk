@@ -21,8 +21,8 @@ Matched messages are fired concurrently via `fireMessage()`. The DB is the singl
 
 | Env var | Default | Description |
 |---|---|---|
-| `DESK_SCHEDULER_POLL_INTERVAL_MS` | `60000` | How often the poll loop runs (ms) |
-| `DESK_SCHEDULER_MAX_CONCURRENT` | `10` | Max simultaneous fires per tick |
+| `ROOMY_SCHEDULER_POLL_INTERVAL_MS` | `60000` | How often the poll loop runs (ms) |
+| `ROOMY_SCHEDULER_MAX_CONCURRENT` | `10` | Max simultaneous fires per tick |
 
 ## Cron tasks
 
@@ -50,6 +50,6 @@ Tasks with a past `execute_at` fire naturally on the next tick — no special ha
 
 Daily workspace reflection uses the same DB scheduler as recurring tasks. On startup, `ensureDailyReflectionTasks()` creates or repairs one `kind = 'task'` row per workspace with an enabled agent. The row stores `content.type = 'reflection_request'`, a cron expression, and the next `execute_at`.
 
-Reflection rows are task-like: every fire creates a `task_run` child, the parent returns to `pending`, and `execute_at` advances to the next cron occurrence. The default cron is `0 3 * * *`, overridable with `DESK_DAILY_REFLECTION_CRON`; seeding can be disabled with `DESK_DAILY_REFLECTION=off`.
+Reflection rows are task-like: every fire creates a `task_run` child, the parent returns to `pending`, and `execute_at` advances to the next cron occurrence. The default cron is `0 3 * * *`, overridable with `ROOMY_DAILY_REFLECTION_CRON`; seeding can be disabled with `ROOMY_DAILY_REFLECTION=off`.
 
-Reflection rows are regular tasks on the Tasks page. Each reflection task owns a dedicated `Workspace reflection` chat for follow-up conversation from the task detail panel; that chat is hidden from the sidebar so system maintenance chats are only reachable through Desk/task surfaces.
+Reflection rows are regular tasks on the Tasks page. Each reflection task owns a dedicated `Workspace reflection` chat for follow-up conversation from the task detail panel; that chat is hidden from the sidebar so system maintenance chats are only reachable through Roomy/task surfaces.

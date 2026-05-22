@@ -16,7 +16,7 @@ import {
   AlertDialogTitle,
   DropdownMenuItem,
   cn,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { iconForFile } from '@/data/file-kind'
 import { isAppArtifactFile } from '@/store/selectors/artifacts'
 import { toUiTask } from '@/store/selectors/tasks'
@@ -306,7 +306,7 @@ function FileRow({
   const Icon = iconForFile(file.name, file.mime)
   const href = workspaceId && onFileClick
     ? buildPath(workspaceId, 'context', {
-        item: isAppArtifactFile(file) ? `${file.path}/desk.app.json` : file.path,
+        item: isAppArtifactFile(file) ? `${file.path}/roomy.app.json` : file.path,
       })
     : undefined
 

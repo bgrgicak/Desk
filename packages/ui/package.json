@@ -1,5 +1,5 @@
 {
-  "name": "@agent-desk/ui",
+  "name": "@roomy-ai/ui",
   "version": "0.1.0-alpha.0",
   "license": "MIT",
   "type": "module",
@@ -13,7 +13,7 @@
   ],
   "exports": {
     ".": {
-      "@agent-desk/dev": "./src/index.ts",
+      "@roomy-ai/dev": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },

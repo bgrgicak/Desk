@@ -1,5 +1,5 @@
-import { type Pool, queries } from "@agent-desk/db";
-import type { WsEvent } from "@agent-desk/shared";
+import { type Pool, queries } from "@roomy-ai/db";
+import type { WsEvent } from "@roomy-ai/shared";
 
 /**
  * Resolves the recipient userId for a WS event so the broadcaster can fan

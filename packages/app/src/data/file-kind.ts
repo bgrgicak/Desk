@@ -16,7 +16,7 @@ import type { ContextItem } from './ui-types'
 
 export type FileKind = 'image' | 'video' | 'audio' | 'pdf' | 'html' | 'docx' | 'text' | 'app' | 'unknown'
 
-/** True when `name` is a Desk app directory (ends with `.app`). */
+/** True when `name` is a Roomy app directory (ends with `.app`). */
 export function isAppDirectory(name: string): boolean {
   return name.endsWith('.app') && name !== '.app'
 }

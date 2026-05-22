@@ -5,10 +5,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { Pool, runMigrations, queries } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { Pool, runMigrations, queries } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 import { createApp, type AppOptions, isWsOriginAllowed } from "../src/app.js";
 import { issueSession, clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -58,14 +58,14 @@ function rawUpgrade(port: number, reqPath: string, origin?: string): Promise<{ r
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ws-origin-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-ws-origin-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-ws-origin-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-ws-origin-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   userId = generateId("user");
   await queries.users.insert(pool, {
@@ -95,14 +95,14 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 describe("isWsOriginAllowed unit", () => {
-  const allowed = new Set<string>(["https://desk.example.com"]);
+  const allowed = new Set<string>(["https://roomy.example.com"]);
 
   it("returns true for an exactly-matched env-configured origin", () => {
-    expect(isWsOriginAllowed("https://desk.example.com", allowed)).toBe(true);
+    expect(isWsOriginAllowed("https://roomy.example.com", allowed)).toBe(true);
   });
 
   it("returns true for a missing origin (non-browser client)", () => {
@@ -122,54 +122,54 @@ describe("isWsOriginAllowed unit", () => {
 
   it("returns false for an unknown non-loopback origin", () => {
     expect(isWsOriginAllowed("https://evil.example.com", allowed)).toBe(false);
-    expect(isWsOriginAllowed("http://desk.example.com", allowed)).toBe(false); // wrong protocol
+    expect(isWsOriginAllowed("http://roomy.example.com", allowed)).toBe(false); // wrong protocol
   });
 
   it("is case-sensitive on the origin string", () => {
     // Origin headers are sent verbatim by browsers; we deliberately do
     // not lowercase them. Matches the WHATWG behavior.
-    expect(isWsOriginAllowed("HTTPS://DESK.EXAMPLE.COM", allowed)).toBe(false);
+    expect(isWsOriginAllowed("HTTPS://ROOMY.EXAMPLE.COM", allowed)).toBe(false);
   });
 });
 
 describe("getAllowedWsOrigins env parsing", () => {
-  it("returns DESK_ALLOWED_ORIGINS entries verbatim", async () => {
+  it("returns ROOMY_ALLOWED_ORIGINS entries verbatim", async () => {
     const { getAllowedWsOrigins } = await import("../src/http/security-headers.js");
     const set = getAllowedWsOrigins({
-      DESK_ALLOWED_ORIGINS: "https://desk.example.com,https://other.example.com",
-      DESK_ALLOWED_HOSTS: "",
+      ROOMY_ALLOWED_ORIGINS: "https://roomy.example.com,https://other.example.com",
+      ROOMY_ALLOWED_HOSTS: "",
     });
-    expect(set.has("https://desk.example.com")).toBe(true);
+    expect(set.has("https://roomy.example.com")).toBe(true);
     expect(set.has("https://other.example.com")).toBe(true);
   });
 
-  it("expands DESK_ALLOWED_HOSTS into http+https origin variants", async () => {
-    // Without this, an operator with desk.test in /etc/hosts (the
+  it("expands ROOMY_ALLOWED_HOSTS into http+https origin variants", async () => {
+    // Without this, an operator with roomy.test in /etc/hosts (the
     // documented nginx fixture default) gets 403 on every WS upgrade
-    // because the browser sends Origin: https://desk.test which the
+    // because the browser sends Origin: https://roomy.test which the
     // Vite-side env var alone doesn't tell the API process about.
     const { getAllowedWsOrigins } = await import("../src/http/security-headers.js");
     const set = getAllowedWsOrigins({
-      DESK_ALLOWED_ORIGINS: "",
-      DESK_ALLOWED_HOSTS: "desk.test,desk.local",
+      ROOMY_ALLOWED_ORIGINS: "",
+      ROOMY_ALLOWED_HOSTS: "roomy.test,roomy.local",
     });
-    expect(set.has("http://desk.test")).toBe(true);
-    expect(set.has("https://desk.test")).toBe(true);
-    expect(set.has("http://desk.local")).toBe(true);
-    expect(set.has("https://desk.local")).toBe(true);
+    expect(set.has("http://roomy.test")).toBe(true);
+    expect(set.has("https://roomy.test")).toBe(true);
+    expect(set.has("http://roomy.local")).toBe(true);
+    expect(set.has("https://roomy.local")).toBe(true);
   });
 
-  it("defaults DESK_ALLOWED_HOSTS to desk.test when unset", async () => {
+  it("defaults ROOMY_ALLOWED_HOSTS to roomy.test when unset", async () => {
     const { getAllowedWsOrigins } = await import("../src/http/security-headers.js");
     const set = getAllowedWsOrigins({});
-    expect(set.has("https://desk.test")).toBe(true);
-    expect(set.has("http://desk.test")).toBe(true);
+    expect(set.has("https://roomy.test")).toBe(true);
+    expect(set.has("http://roomy.test")).toBe(true);
   });
 
-  it("treats an explicitly empty DESK_ALLOWED_HOSTS as no hosts", async () => {
+  it("treats an explicitly empty ROOMY_ALLOWED_HOSTS as no hosts", async () => {
     const { getAllowedWsOrigins } = await import("../src/http/security-headers.js");
-    const set = getAllowedWsOrigins({ DESK_ALLOWED_HOSTS: "" });
-    expect(set.has("https://desk.test")).toBe(false);
+    const set = getAllowedWsOrigins({ ROOMY_ALLOWED_HOSTS: "" });
+    expect(set.has("https://roomy.test")).toBe(false);
   });
 });
 
@@ -247,14 +247,14 @@ describe("WebSocket upgrade — Origin allowlist (CSWSH mitigation)", () => {
     expect(response).toContain("403 Forbidden");
   });
 
-  it("accepts upgrade with Origin: https://desk.test (default DESK_ALLOWED_HOSTS)", async () => {
-    // Regression: user reported `wss://desk.test/ws … 403 Forbidden`
+  it("accepts upgrade with Origin: https://roomy.test (default ROOMY_ALLOWED_HOSTS)", async () => {
+    // Regression: user reported `wss://roomy.test/ws … 403 Forbidden`
     // when running behind the bundled nginx fixture, because the
-    // server-side allowlist used to only read DESK_ALLOWED_ORIGINS and
-    // ignored the Vite-shared DESK_ALLOWED_HOSTS entirely.
+    // server-side allowlist used to only read ROOMY_ALLOWED_ORIGINS and
+    // ignored the Vite-shared ROOMY_ALLOWED_HOSTS entirely.
     const { isWsOriginAllowed } = await import("../src/http/security-headers.js");
-    expect(isWsOriginAllowed("https://desk.test")).toBe(true);
-    expect(isWsOriginAllowed("http://desk.test")).toBe(true);
+    expect(isWsOriginAllowed("https://roomy.test")).toBe(true);
+    expect(isWsOriginAllowed("http://roomy.test")).toBe(true);
   });
 });
 
@@ -268,14 +268,14 @@ describe("WebSocket keepalive — server PING frames", () => {
   // would only show up as another round of "chats fail after a while"
   // reports.
   //
-  // Stands up a dedicated app with DESK_WS_PING_INTERVAL_MS=200 so the
+  // Stands up a dedicated app with ROOMY_WS_PING_INTERVAL_MS=200 so the
   // assertion finishes in well under a second rather than waiting 25 s
   // for the production cadence.
   let pingServer: http.Server;
   let pingPort: number;
   let pingUserId: string;
   beforeAll(async () => {
-    process.env.DESK_WS_PING_INTERVAL_MS = "200";
+    process.env.ROOMY_WS_PING_INTERVAL_MS = "200";
     pingUserId = generateId("user");
     await queries.users.insert(pool, {
       id: pingUserId,
@@ -293,7 +293,7 @@ describe("WebSocket keepalive — server PING frames", () => {
     pingPort = (pingServer.address() as net.AddressInfo).port;
   });
   afterAll(() => {
-    delete process.env.DESK_WS_PING_INTERVAL_MS;
+    delete process.env.ROOMY_WS_PING_INTERVAL_MS;
     if (pingServer) pingServer.unref();
   });
 

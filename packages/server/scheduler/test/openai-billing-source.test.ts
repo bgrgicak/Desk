@@ -1,11 +1,11 @@
 /**
  * Unit tests for the run-time model resolver.
  *
- * `resolveModelForRun` translates Desk-only `codex/*` ids back to pi's
+ * `resolveModelForRun` translates Roomy-only `codex/*` ids back to pi's
  * provider channels: `openai-codex/*` when the ChatGPT OAuth bridge is
  * available, or `openai/*` when only an API key is configured. Models
  * outside the codex prefix pass through unchanged. Missing-auth is
- * handled by pi itself — Desk no longer substitutes a fallback model.
+ * handled by pi itself — Roomy no longer substitutes a fallback model.
  *
  * `resolveOpenAiBillingSource` is kept as a thin compatibility shim;
  * the original test cases below still exercise it to lock the
@@ -73,9 +73,9 @@ describe("resolveOpenAiBillingSource", () => {
   });
 });
 
-describe("resolveModelForRun — auth-missing surfaces to pi (no Desk-side substitution)", () => {
+describe("resolveModelForRun — auth-missing surfaces to pi (no Roomy-side substitution)", () => {
   it("keeps codex/* on the openai-codex channel even when neither OAuth nor an API key is set, so pi raises a clear error", () => {
-    // Previously Desk substituted a FALLBACK_MODEL when no auth was
+    // Previously Roomy substituted a FALLBACK_MODEL when no auth was
     // live; that masked the real problem (missing connection). Now we
     // route to pi's expected channel and let pi report which provider
     // it can't authenticate.

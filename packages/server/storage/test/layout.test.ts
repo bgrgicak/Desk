@@ -23,7 +23,7 @@ import {
 let home: string;
 
 beforeAll(async () => {
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-layout-test-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-layout-test-"));
 });
 
 afterAll(async () => {
@@ -31,7 +31,7 @@ afterAll(async () => {
 });
 
 describe("ensureLayout", () => {
-  it("creates the global Desk directories without any workspace subtree", async () => {
+  it("creates the global Roomy directories without any workspace subtree", async () => {
     await ensureLayout(home);
 
     // Global dirs exist regardless of whether any workspaces were created.
@@ -40,7 +40,7 @@ describe("ensureLayout", () => {
     const trashStat = await fs.stat(path.join(home, ".trash"));
     expect(trashStat.isDirectory()).toBe(true);
     // The legacy `workspaces/` parent is no longer part of the layout —
-    // workspaces sit directly under $DESK_HOME.
+    // workspaces sit directly under $ROOMY_HOME.
     const legacy = await fs.stat(path.join(home, "workspaces")).catch(() => null);
     expect(legacy).toBeNull();
   });
@@ -57,9 +57,9 @@ describe("ensureLayout", () => {
 describe("ensureWorkspaceLayout", () => {
   it("creates the workspace root and the hidden .chats subtree for a given slug", async () => {
     await ensureLayout(home);
-    await ensureWorkspaceLayout(home, "desk");
+    await ensureWorkspaceLayout(home, "roomy");
 
-    const root = path.join(home, "desk");
+    const root = path.join(home, "roomy");
     const stat = await fs.stat(root);
     expect(stat.isDirectory()).toBe(true);
 
@@ -80,7 +80,7 @@ describe("ensureWorkspaceLayout", () => {
 });
 
 describe("memory path helpers", () => {
-  it("resolves user memory paths under $DESK_HOME/.memory/", () => {
+  it("resolves user memory paths under $ROOMY_HOME/.memory/", () => {
     expect(userMemoryDir("/h")).toBe(path.join("/h", ".memory"));
     expect(userMemoryIndexPath("/h")).toBe(path.join("/h", ".memory", "memory.md"));
     expect(userJournalDir("/h")).toBe(path.join("/h", ".memory", "journal"));
@@ -132,7 +132,7 @@ describe("ensureUserMemoryLayout", () => {
   let local: string;
 
   beforeAll(async () => {
-    local = await fs.mkdtemp(path.join(os.tmpdir(), "desk-memory-user-"));
+    local = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-memory-user-"));
   });
 
   afterAll(async () => {
@@ -161,7 +161,7 @@ describe("ensureUserMemoryLayout", () => {
   });
 
   it("is invoked transitively by ensureLayout", async () => {
-    const fresh = await fs.mkdtemp(path.join(os.tmpdir(), "desk-memory-bootstrap-"));
+    const fresh = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-memory-bootstrap-"));
     try {
       await ensureLayout(fresh);
       const stat = await fs.stat(userMemoryIndexPath(fresh));
@@ -176,7 +176,7 @@ describe("ensureWorkspaceMemoryLayout", () => {
   let local: string;
 
   beforeAll(async () => {
-    local = await fs.mkdtemp(path.join(os.tmpdir(), "desk-memory-ws-"));
+    local = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-memory-ws-"));
   });
 
   afterAll(async () => {
@@ -215,7 +215,7 @@ describe("migrateLegacyWorkspaceLayout", () => {
   let local: string;
 
   beforeEach(async () => {
-    local = await fs.mkdtemp(path.join(os.tmpdir(), "desk-migrate-"));
+    local = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-migrate-"));
   });
 
   afterEach(async () => {

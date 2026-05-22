@@ -65,23 +65,23 @@ export function setSecurityHeaders(req: IncomingMessage, res: ServerResponse, pa
  * Electron renderer all live on loopback but on different, sometimes
  * random, ports.
  *
- * Operators putting Desk behind a reverse proxy on the public
- * internet set DESK_ALLOWED_ORIGINS to a comma-separated list of the
+ * Operators putting Roomy behind a reverse proxy on the public
+ * internet set ROOMY_ALLOWED_ORIGINS to a comma-separated list of the
  * real origins; the env list is treated as exact additional matches
  * on top of the loopback rule.
  *
- * DESK_ALLOWED_HOSTS is also honored: it's the same env var the Vite
+ * ROOMY_ALLOWED_HOSTS is also honored: it's the same env var the Vite
  * dev/preview server uses to declare local hostnames (default
- * `desk.test`, used by the bundled nginx fixture). Each host produces
+ * `roomy.test`, used by the bundled nginx fixture). Each host produces
  * both http:// and https:// origin variants so operators don't have to
  * keep two parallel allowlists for the same hostname.
  */
 export function getAllowedWsOrigins(env: NodeJS.ProcessEnv = process.env): Set<string> {
-  const fromEnv = (env.DESK_ALLOWED_ORIGINS ?? "")
+  const fromEnv = (env.ROOMY_ALLOWED_ORIGINS ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-  const fromHosts = (env.DESK_ALLOWED_HOSTS ?? "desk.test")
+  const fromHosts = (env.ROOMY_ALLOWED_HOSTS ?? "roomy.test")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)

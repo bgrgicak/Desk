@@ -23,8 +23,8 @@ interface HomeSectionsState {
   hidden: HomeSectionKey[]
 }
 
-const KEY = 'desk.home-sections.v1'
-const CHANGE_EVENT = 'desk:home-sections-changed'
+const KEY = 'roomy.home-sections.v1'
+const CHANGE_EVENT = 'roomy:home-sections-changed'
 
 function normalize(raw: Partial<HomeSectionsState> | null): HomeSectionsState {
   const stored = (raw?.order ?? []).filter((k): k is HomeSectionKey => ALL.has(k as HomeSectionKey))

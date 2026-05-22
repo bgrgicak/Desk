@@ -3,9 +3,9 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
-import { generateId } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, insertSeedFixture, queries } from "@roomy-ai/db";
+import { generateId } from "@roomy-ai/shared";
 import { Cron } from "croner";
 import { createRunManager } from "../src/runs.js";
 
@@ -16,14 +16,12 @@ let dbPath: string;
 let home: string;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-poll-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-poll-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "testuser";
-  process.env.DESK_SEED_PASSWORD = "testpass";
-  await seedIfEmpty(pool);
+  await insertSeedFixture(pool, { username: "testuser", password: "testpass" });
 
   const { rows: agentRows } = await pool.query("SELECT id FROM agents LIMIT 1");
   agentId = agentRows[0].id as string;
@@ -40,8 +38,8 @@ beforeAll(async () => {
     [chatId, workspaceId, agentId, "Poll Test Chat"],
   );
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-poll-"));
-  process.env.DESK_HOME = home;
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-poll-"));
+  process.env.ROOMY_HOME = home;
 });
 
 afterAll(async () => {
@@ -179,8 +177,8 @@ describe("cron tasks", () => {
 
 describe("concurrency cap", () => {
   it("fires at most MAX_CONCURRENT tasks per tick", async () => {
-    const prev = process.env.DESK_SCHEDULER_MAX_CONCURRENT;
-    process.env.DESK_SCHEDULER_MAX_CONCURRENT = "3";
+    const prev = process.env.ROOMY_SCHEDULER_MAX_CONCURRENT;
+    process.env.ROOMY_SCHEDULER_MAX_CONCURRENT = "3";
     try {
       let concurrentPeak = 0;
       let current = 0;
@@ -209,8 +207,8 @@ describe("concurrency cap", () => {
 
       expect(concurrentPeak).toBeLessThanOrEqual(3);
     } finally {
-      if (prev === undefined) delete process.env.DESK_SCHEDULER_MAX_CONCURRENT;
-      else process.env.DESK_SCHEDULER_MAX_CONCURRENT = prev;
+      if (prev === undefined) delete process.env.ROOMY_SCHEDULER_MAX_CONCURRENT;
+      else process.env.ROOMY_SCHEDULER_MAX_CONCURRENT = prev;
     }
   });
 });
@@ -434,7 +432,7 @@ describe("getActiveWorkspaceIds", () => {
 describe("sweepIdleSandboxes", () => {
   it("returns [] and doesn't throw when no docker engine is reachable", async () => {
     const rm = makeRunManager();
-    // No DESK_CONTAINER_ENGINE override + no docker binary mocked → the
+    // No ROOMY_CONTAINER_ENGINE override + no docker binary mocked → the
     // reaper sees no containers and returns empty. The DB query still
     // runs successfully even though the engine doesn't.
     const removed = await rm.sweepIdleSandboxes(30 * 60 * 1000);
@@ -543,7 +541,7 @@ describe("preemptStalledChatRun", () => {
     const slug = `preempt-no-log-${Date.now()}`;
     const { chatId: cid } = await makeWorkspaceWithChat(slug);
     // Claimed 60 s ago, no log file on disk. The runtime may be inside
-    // `waitForEntrypointReady` (entrypoint downloading deps, `.deskrc`
+    // `waitForEntrypointReady` (entrypoint downloading deps, `.roomyrc`
     // installing packages) which legitimately takes minutes on a fresh
     // sandbox. Preempting based on row-age alone would yank work that
     // is making real progress, just not progress visible to us yet.

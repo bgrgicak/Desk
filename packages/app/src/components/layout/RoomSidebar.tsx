@@ -26,7 +26,7 @@ import {
   SidebarMenuItem,
   SidebarTrigger,
   useSidebar,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { SIDEBAR_ROW_STATE_CLASS, SidebarAccountMenu } from './sidebarShared'
 import { useGlobalPalette } from '@/components/global-palette/GlobalPaletteProvider'
 import { ChatMenuItems } from '@/components/chats/ChatMenuItems'

@@ -7,7 +7,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import type { ServerMessage } from '@/store/types'
 import { getRelativeTime } from '@/data/ui-types'
 import {
