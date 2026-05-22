@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Readable } from "node:stream";
-import { generateId } from "@agent-desk/shared";
+import { generateId } from "@roomy-ai/shared";
 import { uploadArtifact } from "../src/files.js";
 import { reconcileArtifactRefs } from "../src/reconcile.js";
 import {
@@ -73,7 +73,7 @@ describe("reconcileArtifactRefs", () => {
     });
     const mid = await insertArtifactMessage(file.path);
 
-    const root = path.join(ctx.home, "desk");
+    const root = path.join(ctx.home, "roomy");
     const oldAbs = path.join(root, file.path);
     const newAbs = path.join(root, "Projects", "moved-me.txt");
     await fs.mkdir(path.dirname(newAbs), { recursive: true });
@@ -106,7 +106,7 @@ describe("reconcileArtifactRefs", () => {
     const mid = await insertArtifactMessage("comeback.txt", { missing: true });
 
     // Create the file so reconcile finds it.
-    const abs = path.join(ctx.home, "desk", "comeback.txt");
+    const abs = path.join(ctx.home, "roomy", "comeback.txt");
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, "back!");
 
@@ -120,7 +120,7 @@ describe("reconcileArtifactRefs", () => {
 
   it("does not repair when multiple candidates exist", async () => {
     // Two files named "ambig.txt" in different user-visible folders.
-    const root = path.join(ctx.home, "desk");
+    const root = path.join(ctx.home, "roomy");
     const aAbs = path.join(root, "Projects", "ambig.txt");
     const bAbs = path.join(root, "Notes", "ambig.txt");
     await fs.mkdir(path.dirname(aAbs), { recursive: true });

@@ -1,7 +1,7 @@
 /**
  * PR-H: per-app document-collections storage.
  *
- * Real desk-server, real SQLite (the per-app DB itself is real, not a
+ * Real roomy-server, real SQLite (the per-app DB itself is real, not a
  * fake), real fs. Walks the full CRUD contract through the same cookie
  * the static-app route uses, plus the capability gate.
  */
@@ -11,15 +11,15 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, seedIfEmpty } from "@agent-desk/db";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { Pool, runMigrations, seedIfEmpty } from "@roomy-ai/db";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 import {
   chatArtifactsDir,
   ensureLayout,
   ensureWorkspaceLayout,
   workspaceRootPath,
-} from "@agent-desk/storage";
+} from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -39,18 +39,18 @@ const READONLY_APP = "viewer-app";
 const LIBRARY_APP = "library-store";
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-storage-int-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-storage-int-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "storage-int-user";
-  process.env.DESK_SEED_PASSWORD = "pw";
+  process.env.ROOMY_SEED_USERNAME = "storage-int-user";
+  process.env.ROOMY_SEED_PASSWORD = "pw";
   await seedIfEmpty(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-storage-int-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-storage-int-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const { rows: wsRows } = await pool.query<{ id: string; path: string }>(
     "SELECT id, path FROM workspaces LIMIT 1",
@@ -77,7 +77,7 @@ beforeAll(async () => {
     );
     await fs.mkdir(path.join(appRoot, "dist"), { recursive: true });
     await fs.writeFile(
-      path.join(appRoot, "desk.app.json"),
+      path.join(appRoot, "roomy.app.json"),
       JSON.stringify({ name, capabilities }),
       "utf8",
     );
@@ -91,7 +91,7 @@ beforeAll(async () => {
   const libraryAppRoot = path.join(workspaceRootPath(home, workspaceSlug), `${LIBRARY_APP}.app`);
   await fs.mkdir(path.join(libraryAppRoot, "dist"), { recursive: true });
   await fs.writeFile(
-    path.join(libraryAppRoot, "desk.app.json"),
+    path.join(libraryAppRoot, "roomy.app.json"),
     JSON.stringify({ name: LIBRARY_APP, capabilities: ["storage.read", "storage.write"] }),
     "utf8",
   );
@@ -130,7 +130,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 interface RawResponse {
@@ -419,7 +419,7 @@ describe("per-app storage CRUD (PR-H)", () => {
     );
     await fs.mkdir(path.join(appRoot, "dist"), { recursive: true });
     await fs.writeFile(
-      path.join(appRoot, "desk.app.json"),
+      path.join(appRoot, "roomy.app.json"),
       JSON.stringify({ name: RENAME_APP, capabilities: ["storage.read", "storage.write"] }),
       "utf8",
     );
@@ -449,7 +449,7 @@ describe("per-app storage CRUD (PR-H)", () => {
     // mimics PR-G's second rename: chat-copy → library.
     await fs.mkdir(path.join(appRoot, "dist"), { recursive: true });
     await fs.writeFile(
-      path.join(appRoot, "desk.app.json"),
+      path.join(appRoot, "roomy.app.json"),
       JSON.stringify({ name: RENAME_APP, capabilities: ["storage.read", "storage.write"] }),
       "utf8",
     );
@@ -497,7 +497,7 @@ describe("per-app storage CRUD (PR-H)", () => {
     );
     await fs.mkdir(path.join(appRoot, "dist"), { recursive: true });
     await fs.writeFile(
-      path.join(appRoot, "desk.app.json"),
+      path.join(appRoot, "roomy.app.json"),
       JSON.stringify({ name: PAGE_APP, capabilities: ["storage.read", "storage.write"] }),
       "utf8",
     );
@@ -572,14 +572,14 @@ describe("per-app storage CRUD (PR-H)", () => {
     );
     await fs.mkdir(path.join(appRoot, "dist"), { recursive: true });
     await fs.writeFile(
-      path.join(appRoot, "desk.app.json"),
+      path.join(appRoot, "roomy.app.json"),
       JSON.stringify({ name: SYMLINK_APP, capabilities: ["storage.read", "storage.write"] }),
       "utf8",
     );
     await fs.writeFile(path.join(appRoot, "dist", "index.html"), "<!doctype html><html></html>", "utf8");
     const cookie = await appCookie(SYMLINK_APP);
 
-    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "desk-storage-escape-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-storage-escape-"));
     await fs.symlink(outside, path.join(appRoot, ".storage"), "dir");
 
     const create = await httpRaw(
@@ -600,14 +600,14 @@ describe("per-app storage CRUD (PR-H)", () => {
     );
     await fs.mkdir(path.join(appRoot, "dist"), { recursive: true });
     await fs.writeFile(
-      path.join(appRoot, "desk.app.json"),
+      path.join(appRoot, "roomy.app.json"),
       JSON.stringify({ name: SYMLINK_ROOT_APP, capabilities: ["storage.read", "storage.write"] }),
       "utf8",
     );
     await fs.writeFile(path.join(appRoot, "dist", "index.html"), "<!doctype html><html></html>", "utf8");
     const cookie = await appCookie(SYMLINK_ROOT_APP);
 
-    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "desk-app-root-escape-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-app-root-escape-"));
     await fs.rm(appRoot, { recursive: true, force: true });
     await fs.symlink(outside, appRoot, "dir");
 

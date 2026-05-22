@@ -20,7 +20,7 @@ import {
   DialogTitle,
   TooltipProvider,
   Toaster,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { AppShell } from '@/components/layout/AppShell'
 import { LoginScreen } from '@/components/auth/LoginScreen'
 import { SignupScreen } from '@/components/auth/SignupScreen'
@@ -702,7 +702,7 @@ function AppInner() {
 
   // Both `?artifact=<path>` and `?item=<path>` route to the same unified
   // detail view. `?artifact` is kept as a deprecation alias — phase 4 of
-  // the Desk → Library consolidation removes it.
+  // the Roomy → Library consolidation removes it.
   //
   // Selected-item metadata always comes from `getLibraryFile?path=` — the
   // workspace-wide recursive listing that previously short-circuited this
@@ -811,7 +811,7 @@ function AppInner() {
           <DialogHeader>
             <DialogTitle>Enable desktop notifications?</DialogTitle>
             <DialogDescription>
-              Desk can show browser notifications for the same new chat messages that get the sidebar unread dot.
+              Roomy can show browser notifications for the same new chat messages that get the sidebar unread dot.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

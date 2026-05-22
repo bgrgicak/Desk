@@ -30,7 +30,7 @@ import {
   PopoverTrigger,
   Switch,
   cn,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import {
   useCreateAgentMutation,
   useDeleteAgentMutation,
@@ -450,7 +450,7 @@ function ModelsList({
         const showDropAfter = dropTarget?.id === a.id && dropTarget?.position === 'after'
         const handleDrop = (event: DragEvent<HTMLDivElement>) => {
           event.preventDefault()
-          const activeId = draggingId ?? event.dataTransfer.getData('application/x-desk-model-id')
+          const activeId = draggingId ?? event.dataTransfer.getData('application/x-roomy-model-id')
           const position = dropPositionFromEvent(event)
           setDraggingId(null)
           setDropTarget(null)
@@ -486,7 +486,7 @@ function ModelsList({
               onDragStart={(event) => {
                 setDraggingId(a.id)
                 event.dataTransfer.effectAllowed = 'move'
-                event.dataTransfer.setData('application/x-desk-model-id', a.id)
+                event.dataTransfer.setData('application/x-roomy-model-id', a.id)
               }}
               onDragEnd={() => {
                 setDraggingId(null)

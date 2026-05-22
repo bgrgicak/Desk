@@ -3,10 +3,10 @@ import { CliError, parseFlags } from "../errors.js";
 import { output } from "../index.js";
 
 export const usage =
-  'desk-agent task schedule --chat <id> [--title <text>] [--at <iso8601> | --cron <expr>] [--kind <kind>] [--attach <path> ...] <content>';
+  'roomy-agent task schedule --chat <id> [--title <text>] [--at <iso8601> | --cron <expr>] [--kind <kind>] [--attach <path> ...] <content>';
 
 export const help = `\
-desk-agent task schedule — create a task message. By default the task
+roomy-agent task schedule — create a task message. By default the task
 starts running immediately in its own thread; pass --at or --cron only
 when the user explicitly wants the work deferred to a future time.
 The three shapes are: unscheduled (default, runs now), scheduled
@@ -61,13 +61,13 @@ Optional:
 
 Examples:
   # Recurring weekday standup reminder
-  desk-agent task schedule --chat ch_abc \\
+  roomy-agent task schedule --chat ch_abc \\
       --title "Daily standup" \\
       --cron "0 9 * * 1-5" \\
       "Post the standup template to #team-engineering"
 
   # One-shot reminder
-  desk-agent task schedule --chat ch_abc \\
+  roomy-agent task schedule --chat ch_abc \\
       --title "Review migration PR" \\
       --at "2026-05-01T15:00:00Z" \\
       "Review the schema migration PR before the merge freeze"
@@ -75,12 +75,12 @@ Examples:
   # Unscheduled task — starts running immediately in its own thread.
   # No --at / --cron means "go do this now"; the server fires the task
   # as soon as the anchor and thread are in place.
-  desk-agent task schedule --chat ch_abc \\
+  roomy-agent task schedule --chat ch_abc \\
       --title "Summarize Q1 metrics" \\
       "Pull the Q1 numbers from the deck and produce a 1-pager"
 
   # Task with relevant context attached from the source chat.
-  desk-agent task schedule --chat ch_abc \\
+  roomy-agent task schedule --chat ch_abc \\
       --title "Investigate blank replies" \\
       --attach ".chats/ch_abc/artifacts/report.md" \\
       "Use the attached report and fix the blank-reply issue"

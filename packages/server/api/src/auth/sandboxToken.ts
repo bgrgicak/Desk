@@ -1,19 +1,19 @@
 import * as crypto from "node:crypto";
-import { type Pool } from "@agent-desk/db";
-import { queries } from "@agent-desk/db";
+import { type Pool } from "@roomy-ai/db";
+import { queries } from "@roomy-ai/db";
 import {
   UnauthorizedError,
   type Agent,
   type SandboxSession,
   type Workspace,
-} from "@agent-desk/shared";
+} from "@roomy-ai/shared";
 import type { WorkspaceScope } from "../workspace-scope.js";
 
 /**
  * Sandbox session tokens authenticate requests from inside an pi run
- * back to the desk-server REST API. The runtime mints one token per run and
- * passes it into the container as `DESK_SANDBOX_TOKEN`. The `desk` CLI
- * forwards it as `X-Desk-Sandbox-Token` on each request.
+ * back to the roomy-server REST API. The runtime mints one token per run and
+ * passes it into the container as `ROOMY_SANDBOX_TOKEN`. The `roomy` CLI
+ * forwards it as `X-Roomy-Sandbox-Token` on each request.
  *
  * Tokens hash to a row in `sandbox_sessions` (issued by runtime/sessions.ts).
  * `authenticateSandboxToken` resolves the header to (session, agent), and
@@ -45,7 +45,7 @@ export async function authenticateSandboxToken(
   headerValue: string | undefined,
 ): Promise<SandboxAuth> {
   if (!headerValue) {
-    throw new UnauthorizedError("Missing X-Desk-Sandbox-Token header");
+    throw new UnauthorizedError("Missing X-Roomy-Sandbox-Token header");
   }
   const session = await queries.sandboxSessions.findByTokenHash(pool, hashToken(headerValue));
   if (!session) {

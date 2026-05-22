@@ -80,7 +80,7 @@ describe("modelSelectionFromEvent", () => {
 });
 
 describe("translateTerminalAssistantText", () => {
-  it("synthesizes a Desk text event from final assistant text", () => {
+  it("synthesizes a Roomy text event from final assistant text", () => {
     const [line] = translateTerminalAssistantText({
       type: "message_end",
       message: {

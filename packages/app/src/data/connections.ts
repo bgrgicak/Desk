@@ -4,7 +4,7 @@
 // `/me/providers` for Claude/ChatGPT/GitHub). The other kinds are listed in the
 // catalog so they appear in the picker as a roadmap, but they're disabled
 // until a backend lands — there is no mock data seeded.
-import { LOCAL_FILESYSTEM_CONNECTION_KIND, LOCAL_FILESYSTEM_PROVIDER_ID, LOCAL_FILESYSTEM_CAPABILITIES, managedConnectionDefinitions, type ManagedConnectionDefinition } from '@agent-desk/shared'
+import { LOCAL_FILESYSTEM_CONNECTION_KIND, LOCAL_FILESYSTEM_PROVIDER_ID, LOCAL_FILESYSTEM_CAPABILITIES, managedConnectionDefinitions, type ManagedConnectionDefinition } from '@roomy-ai/shared'
 
 export type ConnectionKind =
   | 'claude' | 'chatgpt' | 'codex'

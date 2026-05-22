@@ -1,5 +1,5 @@
 import { type Pool, transact } from "./pool.js";
-import { generateId } from "@agent-desk/shared";
+import { generateId } from "@roomy-ai/shared";
 import { hashPassword } from "./passwords.js";
 
 export async function seedIfEmpty(pool: Pool): Promise<void> {
@@ -8,11 +8,11 @@ export async function seedIfEmpty(pool: Pool): Promise<void> {
   );
   if (rows[0].c > 0) return;
 
-  const username = process.env.DESK_SEED_USERNAME ?? "desk";
+  const username = process.env.ROOMY_SEED_USERNAME ?? "roomy";
   const SEED_PASSWORD = "change-me-before-first-boot";
-  const password = process.env.DESK_SEED_PASSWORD ?? SEED_PASSWORD;
+  const password = process.env.ROOMY_SEED_PASSWORD ?? SEED_PASSWORD;
   // Flag only the install that's still on the documented public seed
-  // password. Operators who explicitly set DESK_SEED_PASSWORD chose
+  // password. Operators who explicitly set ROOMY_SEED_PASSWORD chose
   // their own secret and don't need a "must change" prompt.
   const mustChangePassword = password === SEED_PASSWORD ? 1 : 0;
 
@@ -28,7 +28,7 @@ export async function seedIfEmpty(pool: Pool): Promise<void> {
     client.querySync(
       `INSERT INTO users (id, username, password_hash, email, must_change_password)
        VALUES (?, ?, ?, ?, ?)`,
-      [userId, username, passwordHash, `${username}@desk.local`, mustChangePassword],
+      [userId, username, passwordHash, `${username}@roomy.local`, mustChangePassword],
     );
 
     client.querySync(
@@ -37,7 +37,7 @@ export async function seedIfEmpty(pool: Pool): Promise<void> {
       [
         agentId,
         userId,
-        "Desk",
+        "Roomy",
         "anthropic/claude-haiku-4-5",
       ],
     );
@@ -45,7 +45,7 @@ export async function seedIfEmpty(pool: Pool): Promise<void> {
     client.querySync(
       `INSERT INTO workspaces (id, user_id, name, path)
        VALUES (?, ?, ?, ?)`,
-      [workspaceId, userId, "Desk", "desk"],
+      [workspaceId, userId, "Roomy", "roomy"],
     );
 
     client.querySync(

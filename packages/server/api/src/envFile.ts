@@ -2,8 +2,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 /**
- * Resolves the operator-supplied vault master password (DESK_VAULT_PASSWORD)
- * from process.env or from `${DESK_HOME}/.env`. Returns `null` when neither
+ * Resolves the operator-supplied vault master password (ROOMY_VAULT_PASSWORD)
+ * from process.env or from `${ROOMY_HOME}/.env`. Returns `null` when neither
  * source has one — in that case boot-time auto-unlock is skipped and users
  * pick their own password through the VaultDialog the first time they
  * store a credential.
@@ -14,19 +14,19 @@ import * as path from "node:path";
  * in explicitly when you need it (E2E, CI, single-user dev).
  */
 export async function resolveVaultPasswordEnv(opts: {
-  deskHome: string;
+  roomyHome: string;
   env?: NodeJS.ProcessEnv;
   envFile?: string;
 }): Promise<string | null> {
   const env = opts.env ?? process.env;
-  if (env.DESK_VAULT_PASSWORD) return env.DESK_VAULT_PASSWORD;
+  if (env.ROOMY_VAULT_PASSWORD) return env.ROOMY_VAULT_PASSWORD;
 
-  const envFile = opts.envFile ?? env.DESK_ENV_FILE ?? path.join(opts.deskHome, ".env");
+  const envFile = opts.envFile ?? env.ROOMY_ENV_FILE ?? path.join(opts.roomyHome, ".env");
   try {
     const existing = await fs.readFile(envFile, "utf-8");
-    const value = readEnvValue(existing, "DESK_VAULT_PASSWORD");
+    const value = readEnvValue(existing, "ROOMY_VAULT_PASSWORD");
     if (value) {
-      env.DESK_VAULT_PASSWORD = value;
+      env.ROOMY_VAULT_PASSWORD = value;
       return value;
     }
   } catch (err) {

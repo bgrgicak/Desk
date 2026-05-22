@@ -21,13 +21,13 @@ let tmpDir: string;
 let authPath: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "desk-local-sources-"));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "roomy-local-sources-"));
   authPath = path.join(tmpDir, "auth.json");
-  process.env.DESK_CODEX_AUTH_PATH = authPath;
+  process.env.ROOMY_CODEX_AUTH_PATH = authPath;
 });
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
-  delete process.env.DESK_CODEX_AUTH_PATH;
+  delete process.env.ROOMY_CODEX_AUTH_PATH;
 });
 
 describe("registry", () => {
@@ -45,7 +45,7 @@ describe("registry", () => {
 });
 
 describe("Codex local source", () => {
-  it("defaultCodexAuthPath honors DESK_CODEX_AUTH_PATH override", () => {
+  it("defaultCodexAuthPath honors ROOMY_CODEX_AUTH_PATH override", () => {
     expect(defaultCodexAuthPath()).toBe(authPath);
   });
 

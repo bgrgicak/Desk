@@ -3,10 +3,10 @@ import { CliError, parseFlags } from "../errors.js";
 import { output } from "../index.js";
 
 export const usage =
-  "desk-agent chat search-messages --query <text> [--chat <id>] [--workspace <current-slug>] [--kind any|message|summary] [--limit N]";
+  "roomy-agent chat search-messages --query <text> [--chat <id>] [--workspace <current-slug>] [--kind any|message|summary] [--limit N]";
 
 export const help = `\
-desk-agent chat search-messages — full-text search over the user's chat
+roomy-agent chat search-messages — full-text search over the user's chat
 history (messages + chat summaries). Memory-system spec, Section 3.
 
 Required:
@@ -26,9 +26,9 @@ Optional:
   --limit N                Default: 25. Capped at 100.
 
 Examples:
-  desk-agent chat search-messages --query "kanban board"
-  desk-agent chat search-messages --query "deploy notes" --kind summary
-  desk-agent chat search-messages --query "passwords"
+  roomy-agent chat search-messages --query "kanban board"
+  roomy-agent chat search-messages --query "deploy notes" --kind summary
+  roomy-agent chat search-messages --query "passwords"
 
 Output:
   JSON object {hits: [...]} where each hit has chatId, messageId,

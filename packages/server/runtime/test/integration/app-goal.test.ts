@@ -1,15 +1,15 @@
 /**
  * Integration test: agent app-goal scaffolding inside a real sandbox container.
  *
- * Skips when the desk/sandbox:v1 image isn't present locally.
+ * Skips when the roomy/sandbox:v1 image isn't present locally.
  *
- * Requires the image built from this PR's Dockerfile so /opt/desk-template/app
+ * Requires the image built from this PR's Dockerfile so /opt/roomy-template/app
  * is baked in. With an older image, the test surfaces a clear failure pointing
  * the developer at the rebuild command.
  *
  * What the test does end-to-end against real Docker:
  *   1. Spawn a sandbox container.
- *   2. Run `desk-agent app create --chat <id> my-app`.
+ *   2. Run `roomy-agent app create --chat <id> my-app`.
  *   3. Confirm the cloned tree has the expected structure and substitutions.
  *   4. Run `npm run build` inside the cloned `<name>.app/` directory.
  *   5. Confirm `dist/index.html` exists and Tailwind CSS was emitted.
@@ -25,7 +25,7 @@ import {
   ensureLayout,
   ensureWorkspaceLayout,
   workspaceRootPath,
-} from "@agent-desk/storage";
+} from "@roomy-ai/storage";
 import {
   createOrReuse,
   stopSandbox,
@@ -42,7 +42,7 @@ try {
   engineForSetup = await detectEngine();
   if (!(await engineForSetup.imageId(sandboxImage()))) {
     SKIP = true;
-    skipReason = "desk/sandbox:v1 image not present";
+    skipReason = "roomy/sandbox:v1 image not present";
   }
 } catch (err) {
   SKIP = true;
@@ -54,17 +54,17 @@ const describeIf = SKIP ? describe.skip : describe;
 let home: string;
 const testWorkspaceId = "wks_int_app_goal";
 const testWorkspaceSlug = "int-app-goal";
-const containerName = `desk-sandbox-${testWorkspaceId}`;
+const containerName = `roomy-sandbox-${testWorkspaceId}`;
 
 beforeAll(async () => {
   if (SKIP) {
     console.warn(`[app-goal integration] skipped: ${skipReason}`);
     return;
   }
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-app-goal-int-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-app-goal-int-"));
   await ensureLayout(home);
   await ensureWorkspaceLayout(home, testWorkspaceSlug);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 });
 
 afterAll(async () => {
@@ -94,22 +94,22 @@ async function execCapture(
 }
 
 describeIf("app goal — scaffold + build", () => {
-  it("clones the scaffold and `npm run build` produces dist/index.html that references @agent-desk/ui", async () => {
+  it("clones the scaffold and `npm run build` produces dist/index.html that references @roomy-ai/ui", async () => {
     const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
     const engine = await detectEngine();
     const chatId = "cht_app_goal_test";
 
-    // Confirm the bake-in exists. Old image without /opt/desk-template/app
+    // Confirm the bake-in exists. Old image without /opt/roomy-template/app
     // produces a clear failure message instead of a confusing CLI error.
     const probe = await execCapture(engine, handle.containerId, [
       "test",
       "-d",
-      "/opt/desk-template/app",
+      "/opt/roomy-template/app",
     ]);
     expect(
       probe.exitCode,
-      "sandbox image is missing /opt/desk-template/app — rebuild via " +
-        "`docker build -f packages/server/runtime/Dockerfile.sandbox -t desk/sandbox:v1 .` from the repo root",
+      "sandbox image is missing /opt/roomy-template/app — rebuild via " +
+        "`docker build -f packages/server/runtime/Dockerfile.sandbox -t roomy/sandbox:v1 .` from the repo root",
     ).toBe(0);
 
     // Pre-create the chat directory so the cp target exists. The host-side
@@ -123,7 +123,7 @@ describeIf("app goal — scaffold + build", () => {
     await fs.mkdir(chatHostDir, { recursive: true });
 
     const create = await execCapture(engine, handle.containerId, [
-      "desk-agent",
+      "roomy-agent",
       "app",
       "create",
       "--chat",
@@ -140,7 +140,7 @@ describeIf("app goal — scaffold + build", () => {
     // Confirm the host sees the cloned tree (bind-mount round-trip).
     const hostAppDir = path.join(chatHostDir, "my-app.app");
     const manifest = JSON.parse(
-      await fs.readFile(path.join(hostAppDir, "desk.app.json"), "utf-8"),
+      await fs.readFile(path.join(hostAppDir, "roomy.app.json"), "utf-8"),
     );
     expect(manifest.name).toBe("my-app");
 
@@ -165,7 +165,7 @@ describeIf("app goal — scaffold + build", () => {
     expect(cssAsset, `expected a CSS asset under dist/assets/: ${assetEntries}`).toBeTruthy();
     const css = await fs.readFile(path.join(distAssetsDir, cssAsset!), "utf-8");
     // Tailwind v4 emitted a non-trivial CSS bundle, evidence that
-    // @agent-desk/ui's @source directives reached the consumer build.
+    // @roomy-ai/ui's @source directives reached the consumer build.
     expect(css.length).toBeGreaterThan(1000);
 
     // Each fragment also gets its own dist/fragments/<name>/index.html.

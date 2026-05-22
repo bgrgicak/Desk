@@ -35,7 +35,7 @@ import {
   type TerminalAssistantMessage,
   type TranslateContext,
 } from "./piEvents.js";
-import { withModule } from "@agent-desk/shared/logger";
+import { withModule } from "@roomy-ai/shared/logger";
 const log = withModule("runtime/piClient");
 const PI_CLI_PATH = "/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js";
 
@@ -55,7 +55,7 @@ export interface PiRunOptions {
    * Host path to the bind-mounted pi session directory. Pi sometimes
    * persists the terminal assistant message there without echoing the
    * terminal event on stdout, leaving the CLI wrapper alive with MCP
-   * children. Watching this path lets Desk finish the run as soon as the
+   * children. Watching this path lets Roomy finish the run as soon as the
    * authoritative session record says the turn is done.
    */
   hostSessionDir?: string;
@@ -71,7 +71,7 @@ export interface PiRunOptions {
   models?: string[];
   /**
    * Env forwarded to pi. Provider keys (ANTHROPIC_API_KEY, …) land here.
-   * Per-run env (sandbox token, DESK_API_URL) are also forwarded.
+   * Per-run env (sandbox token, ROOMY_API_URL) are also forwarded.
    */
   env: Record<string, string>;
   /** The single user prompt for this turn (already includes any attachment text parts). */
@@ -186,7 +186,7 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
     // Pi auto-discovers extensions in $PI_CODING_AGENT_DIR/extensions/<name>/
     // index.ts. Because we override PI_CODING_AGENT_DIR to a fresh tmpfs
     // dir per invocation (for lockfile-contention reasons above), we need
-    // to seed the bundled extensions too — otherwise the desk-mcp-bridge
+    // to seed the bundled extensions too — otherwise the roomy-mcp-bridge
     // (and any future bundled extension) is invisible to pi, MCP servers
     // never spawn, and tools like playwright never reach the agent.
     //
@@ -439,7 +439,7 @@ export function watchPiSessionTerminal(
   const pollMs = opts.pollMs ?? 250;
   const successGraceMs = opts.successGraceMs ?? 250;
   const errorGraceMs = opts.errorGraceMs
-    ?? parseInt(process.env.DESK_PI_TERMINAL_ERROR_GRACE_MS ?? "12000", 10);
+    ?? parseInt(process.env.ROOMY_PI_TERMINAL_ERROR_GRACE_MS ?? "12000", 10);
   const offsets = new Map<string, number>();
   let stopped = false;
   let timer: NodeJS.Timeout | null = null;

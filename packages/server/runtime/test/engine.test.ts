@@ -13,9 +13,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { detectEngine, _isRemovalAlreadyInProgressForTest, _resetEngineCache, _wrapExecChildForTest, formatEngineErrorMessage, type EngineName } from "../src/engine.js";
-import { DeskError } from "@agent-desk/shared";
+import { RoomyError } from "@roomy-ai/shared";
 
-const PRIOR_OVERRIDE = process.env.DESK_CONTAINER_ENGINE;
+const PRIOR_OVERRIDE = process.env.ROOMY_CONTAINER_ENGINE;
 const PRIOR_PATH = process.env.PATH;
 
 beforeEach(() => {
@@ -23,26 +23,26 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (PRIOR_OVERRIDE === undefined) delete process.env.DESK_CONTAINER_ENGINE;
-  else process.env.DESK_CONTAINER_ENGINE = PRIOR_OVERRIDE;
+  if (PRIOR_OVERRIDE === undefined) delete process.env.ROOMY_CONTAINER_ENGINE;
+  else process.env.ROOMY_CONTAINER_ENGINE = PRIOR_OVERRIDE;
   process.env.PATH = PRIOR_PATH;
   _resetEngineCache();
 });
 
-describe("detectEngine — DESK_CONTAINER_ENGINE override", () => {
+describe("detectEngine — ROOMY_CONTAINER_ENGINE override", () => {
   it("honors a docker override when docker is reachable", async () => {
     if (!(await binaryWorks("docker"))) {
       // Skip cleanly when neither runtime is present on the host.
       return;
     }
-    process.env.DESK_CONTAINER_ENGINE = "docker";
+    process.env.ROOMY_CONTAINER_ENGINE = "docker";
     const engine = await detectEngine();
     expect(engine.name).toBe<EngineName>("docker");
   });
 
   it("honors a nerdctl override when nerdctl is reachable", async () => {
     if (!(await binaryWorks("nerdctl"))) return;
-    process.env.DESK_CONTAINER_ENGINE = "nerdctl";
+    process.env.ROOMY_CONTAINER_ENGINE = "nerdctl";
     const engine = await detectEngine();
     expect(engine.name).toBe<EngineName>("nerdctl");
   });
@@ -50,12 +50,12 @@ describe("detectEngine — DESK_CONTAINER_ENGINE override", () => {
   it("throws a descriptive error when no runtime is available", async () => {
     // Neutralise PATH so neither binary can be found.
     process.env.PATH = "/nonexistent";
-    delete process.env.DESK_CONTAINER_ENGINE;
+    delete process.env.ROOMY_CONTAINER_ENGINE;
     await expect(detectEngine()).rejects.toMatchObject({
       code: "RUNTIME_UNAVAILABLE",
       message: expect.stringMatching(/No container runtime/),
     });
-    await expect(detectEngine()).rejects.toBeInstanceOf(DeskError);
+    await expect(detectEngine()).rejects.toBeInstanceOf(RoomyError);
   });
 });
 
@@ -100,32 +100,32 @@ describe("exec handle stream lifecycle", () => {
 describe("container removal", () => {
   it("recognizes Docker's duplicate removal race as idempotent", () => {
     expect(_isRemovalAlreadyInProgressForTest(
-      "Error response from daemon: removal of container desk-sandbox-wks_x is already in progress",
+      "Error response from daemon: removal of container roomy-sandbox-wks_x is already in progress",
     )).toBe(true);
   });
 
   it("waits for an already-in-progress removal instead of failing", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-engine-fake-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-engine-fake-"));
     const fakeDocker = path.join(dir, "docker");
     await fs.writeFile(fakeDocker, `#!/bin/sh
 if [ "$1" = "info" ]; then exit 0; fi
 if [ "$1" = "rm" ]; then
-  printf '%s\n' 'Error response from daemon: removal of container desk-sandbox-wks_x is already in progress' >&2
+  printf '%s\n' 'Error response from daemon: removal of container roomy-sandbox-wks_x is already in progress' >&2
   exit 1
 fi
 if [ "$1" = "inspect" ]; then
-  printf '%s\n' 'Error: No such object: desk-sandbox-wks_x' >&2
+  printf '%s\n' 'Error: No such object: roomy-sandbox-wks_x' >&2
   exit 1
 fi
 exit 99
 `);
     await fs.chmod(fakeDocker, 0o755);
     process.env.PATH = `${dir}:${PRIOR_PATH ?? ""}`;
-    process.env.DESK_CONTAINER_ENGINE = "docker";
+    process.env.ROOMY_CONTAINER_ENGINE = "docker";
     _resetEngineCache();
 
     const engine = await detectEngine();
-    await expect(engine.remove("desk-sandbox-wks_x", true)).resolves.toBeUndefined();
+    await expect(engine.remove("roomy-sandbox-wks_x", true)).resolves.toBeUndefined();
   });
 });
 

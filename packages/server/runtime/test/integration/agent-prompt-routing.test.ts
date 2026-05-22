@@ -11,17 +11,17 @@
  *     drives what we ship next).
  *
  * We detect the agent's intent by scanning the run's event stream for
- * `desk-agent chat attach-artifact /opt/desk-apps/<app>.app/dist/fragments/<name>`
+ * `roomy-agent chat attach-artifact /opt/roomy-apps/<app>.app/dist/fragments/<name>`
  * bash invocations. The actual POST will fail in this harness because we
- * pass a synthetic chatId (no real desk-server backing it) — that's fine:
+ * pass a synthetic chatId (no real roomy-server backing it) — that's fine:
  * we only care about whether the agent picked the right path on its first
  * attempt, not whether the attach round-trip succeeded. The agent's later
  * apology / retry / fallback after the fake POST 404s is ignored.
  *
  * Preconditions:
- *   - Docker available + `desk/sandbox:v1` image present (otherwise skipped).
+ *   - Docker available + `roomy/sandbox:v1` image present (otherwise skipped).
  *   - chat-forms.app dist built. Run once before this file:
- *       npm --workspace @agent-desk/chat-forms-app run build
+ *       npm --workspace @roomy-ai/chat-forms-app run build
  *     (Same precondition as `chat-forms-fragment-sizing.spec.ts`.)
  *
  * These tests are slow — each one is one real free-model turn (~10–30s).
@@ -31,7 +31,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ensureLayout, ensureWorkspaceLayout } from "@agent-desk/storage";
+import { ensureLayout, ensureWorkspaceLayout } from "@roomy-ai/storage";
 import { createOrReuse, sandboxImage } from "../../src/docker.js";
 import { createDriver, type LogEvent } from "../../src/driver.js";
 import { detectEngine, type Engine } from "../../src/engine.js";
@@ -51,7 +51,7 @@ const describeIf = SKIP ? describe.skip : describe;
 
 const FREE_MODEL = "anthropic/claude-haiku-4-5";
 // pi only knows the `openai` provider; `codex/<name>` is a
-// Desk UI relabel. Use the canonical `openai/...` form so the daemon
+// Roomy UI relabel. Use the canonical `openai/...` form so the daemon
 // doesn't have to translate (and so we don't trip the `codex/X` →
 // `anthropic/claude-haiku-4-5` fallback when something looks off about auth).
 const CODEX_MODEL = "openai/gpt-5.5";
@@ -66,7 +66,7 @@ const CODEX_MODEL = "openai/gpt-5.5";
 // header.
 const CODEX_AUTH_ENV = loadCodexEnv();
 const ROUTING_MODEL =
-  process.env.DESK_ROUTING_MODEL ??
+  process.env.ROOMY_ROUTING_MODEL ??
   (CODEX_AUTH_ENV ? CODEX_MODEL : FREE_MODEL);
 
 let home: string;
@@ -79,14 +79,14 @@ const createdWorkspaceIds = new Set<string>();
 
 beforeAll(async () => {
   if (SKIP) return;
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-routing-int-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-routing-int-"));
   await ensureLayout(home);
-  // Mirror packages/desk-apps/ into ~/.apps/ so the sandbox mount plan
-  // can bind it read-only at /opt/desk-apps/. Without this the agent's
+  // Mirror packages/apps/ into ~/.apps/ so the sandbox mount plan
+  // can bind it read-only at /opt/roomy-apps/. Without this the agent's
   // attach-artifact call resolves to a non-existent path before we even
   // get to assert anything about the prompt-routing decision.
   await writeBuiltinApps(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
   // eslint-disable-next-line no-console
   console.log(
     `[routing-test] model=${ROUTING_MODEL} codex_auth=${CODEX_AUTH_ENV ? "yes" : "no"}`,
@@ -98,7 +98,7 @@ afterAll(async () => {
   if (engineForSetup) {
     for (const wid of createdWorkspaceIds) {
       await engineForSetup
-        .remove(`desk-sandbox-${wid}`, true)
+        .remove(`roomy-sandbox-${wid}`, true)
         .catch(() => {});
     }
   }
@@ -116,8 +116,8 @@ interface AttachCommand {
 
 /**
  * Walks the driver's event stream looking for bash-tool invocations whose
- * command line includes `desk-agent chat attach-artifact
- * /opt/desk-apps/<app>.app/dist/fragments/<name> …`. Returns one entry per
+ * command line includes `roomy-agent chat attach-artifact
+ * /opt/roomy-apps/<app>.app/dist/fragments/<name> …`. Returns one entry per
  * match in arrival order.
  *
  * The driver synthesizes tool/step events from the post-turn message API
@@ -130,7 +130,7 @@ interface AttachCommand {
 function collectAttachCommands(events: LogEvent[]): AttachCommand[] {
   const out: AttachCommand[] = [];
   const attachRe =
-    /desk-agent\s+chat\s+attach-artifact\s+(\/opt\/desk-apps\/([a-z][a-z0-9-]*)\.app\/dist\/fragments\/([a-z][a-z0-9-]*))(?:\s+([^\n\r]*))?/;
+    /roomy-agent\s+chat\s+attach-artifact\s+(\/opt\/roomy-apps\/([a-z][a-z0-9-]*)\.app\/dist\/fragments\/([a-z][a-z0-9-]*))(?:\s+([^\n\r]*))?/;
   for (const evt of events) {
     if (evt.kind !== "event") continue;
     const m = attachRe.exec(evt.payload);
@@ -191,13 +191,13 @@ async function runPrompt(
   void handle;
   const driver = createDriver();
   const events: LogEvent[] = [];
-  // Deliberately do NOT pass apiUrl. The in-sandbox `desk-agent` CLI
-  // will error fast with "DESK_API_URL is not set", which propagates as
+  // Deliberately do NOT pass apiUrl. The in-sandbox `roomy-agent` CLI
+  // will error fast with "ROOMY_API_URL is not set", which propagates as
   // a non-zero bash exit code into the agent's tool output. The free
   // model has been observed to settle the turn quickly after one such
   // failed attach attempt (it doesn't loop on retries). What we care
   // about lives in the synthesized tool events: the bash command string
-  // contains the full `desk-agent chat attach-artifact …` line the
+  // contains the full `roomy-agent chat attach-artifact …` line the
   // agent assembled, which is the routing signal regardless of whether
   // the POST succeeded.
   const result = await driver.execRun(workspaceId, {
@@ -403,7 +403,7 @@ describeIf("agent prompt routing — chat-forms (structured questions)", () => {
 
 describeIf("agent prompt routing — chat-cards (browseable results)", () => {
   // These tests currently fail by design: chat-cards.app does not exist
-  // on this branch, and desk-skills.md does not yet teach the agent
+  // on this branch, and roomy-skills.md does not yet teach the agent
   // about it. The failure shape (what the agent did instead — inline
   // markdown? a chat-forms fallback? attached something else?) is the
   // signal we use to write the cards routing rule + the chat-cards.app

@@ -34,9 +34,9 @@ test("preferences toggle persists across reload", async ({ loggedInPage }) => {
   const tasksButton = dialog.getByTestId("prefs-default-view-tasks");
   await expect(tasksButton).toHaveClass(/bg-foreground/);
 
-  // The persisted blob lives at desk.prefs.<userId>; assert the shape.
+  // The persisted blob lives at roomy.prefs.<userId>; assert the shape.
   const stored = await loggedInPage.evaluate(() => {
-    const keys = Object.keys(localStorage).filter(k => k.startsWith("desk.prefs."));
+    const keys = Object.keys(localStorage).filter(k => k.startsWith("roomy.prefs."));
     if (keys.length !== 1) return null;
     return localStorage.getItem(keys[0]);
   });

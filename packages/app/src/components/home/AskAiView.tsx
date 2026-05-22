@@ -12,7 +12,7 @@ import {
 import { usePrefs } from '@/hooks/use-prefs'
 import type { SendOptions, UploadedFile } from '@/components/compose/ChatInput'
 import type { AttachmentRef } from '@/store/types'
-import type { GoalKey } from '@agent-desk/shared'
+import type { GoalKey } from '@roomy-ai/shared'
 
 const COLUMN = 'w-full max-w-4xl min-w-0 mx-auto'
 // Messages get an extra `px-6` to match the ChatInput card's internal
@@ -112,7 +112,7 @@ export function AskAiView() {
   return (
     <FileDropZone
       onFiles={handleUpload}
-      overlayLabel="Drop to attach to Desk AI"
+      overlayLabel="Drop to attach to Roomy AI"
       className="flex h-full min-h-0 w-full flex-col"
     >
       {({ openPicker }) => (
@@ -121,7 +121,7 @@ export function AskAiView() {
           skipQuery={!askAiChat}
           developerMode={developerMode}
           isSending={isSending}
-          agentName="Desk AI"
+          agentName="Roomy AI"
           innerClassName="px-6 pt-8 pb-4 space-y-4"
           messageClassName={() => MESSAGE_COLUMN}
           statusClassName={MESSAGE_COLUMN}
@@ -150,7 +150,7 @@ export function AskAiView() {
                     setPillPrefill(undefined)
                     setPillGoal(null)
                   }}
-                  placeholder="Ask Desk AI anything…"
+                  placeholder="Ask Roomy AI anything…"
                   showGoalPicker
                   goal={pillGoal}
                   prefillValue={pillPrefill}

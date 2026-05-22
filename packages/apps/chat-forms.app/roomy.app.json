@@ -1,0 +1,19 @@
+{
+  "name": "chat-forms",
+  "displayName": "chat-forms",
+  "description": "A Roomy app with fragments for agents to ask the user structured questions via UI: yes-no, single-choice, multi-select, short-text, long-text, number, date, rating, and a multi-step wizard that combines them.",
+  "version": "0.2.0",
+  "capabilities": ["chats.write"],
+  "params": {},
+  "fragments": [
+    "yes-no",
+    "single-choice",
+    "multi-select",
+    "short-text",
+    "long-text",
+    "number",
+    "date",
+    "rating",
+    "multi-step"
+  ]
+}

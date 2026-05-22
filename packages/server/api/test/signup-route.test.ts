@@ -4,9 +4,9 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, queries } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
+import { Pool, runMigrations, queries } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
 import { createApp, type AppOptions } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearRateLimits } from "../src/auth/rateLimit.js";
@@ -58,14 +58,14 @@ function request(method: string, reqPath: string, body?: unknown): Promise<{ sta
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-signup-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-signup-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-signup-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-signup-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
   vault = new VaultStore(path.join(home, ".vaults"));
 
   server = createApp(appOpts());
@@ -73,51 +73,51 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query("DELETE FROM users WHERE username NOT IN (?)", ["desk"]);
+  await pool.query("DELETE FROM users WHERE username NOT IN (?)", ["roomy"]);
   await clearSessions(pool);
   clearRateLimits();
-  prevSignupEnv = process.env.DESK_ENABLE_SIGNUP;
-  prevVaultPasswordEnv = process.env.DESK_VAULT_PASSWORD;
+  prevSignupEnv = process.env.ROOMY_ENABLE_SIGNUP;
+  prevVaultPasswordEnv = process.env.ROOMY_VAULT_PASSWORD;
 });
 
 afterAll(async () => {
-  if (prevSignupEnv === undefined) delete process.env.DESK_ENABLE_SIGNUP;
-  else process.env.DESK_ENABLE_SIGNUP = prevSignupEnv;
-  if (prevVaultPasswordEnv === undefined) delete process.env.DESK_VAULT_PASSWORD;
-  else process.env.DESK_VAULT_PASSWORD = prevVaultPasswordEnv;
+  if (prevSignupEnv === undefined) delete process.env.ROOMY_ENABLE_SIGNUP;
+  else process.env.ROOMY_ENABLE_SIGNUP = prevSignupEnv;
+  if (prevVaultPasswordEnv === undefined) delete process.env.ROOMY_VAULT_PASSWORD;
+  else process.env.ROOMY_VAULT_PASSWORD = prevVaultPasswordEnv;
   server.close();
   server.closeAllConnections?.();
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 describe("GET /auth/signup-status", () => {
   it("returns enabled: false by default", async () => {
-    delete process.env.DESK_ENABLE_SIGNUP;
+    delete process.env.ROOMY_ENABLE_SIGNUP;
     const res = await request("GET", "/auth/signup-status");
     expect(res.status).toBe(200);
     expect((res.body as { enabled: boolean }).enabled).toBe(false);
   });
 
-  it("returns enabled: true when DESK_ENABLE_SIGNUP=1", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+  it("returns enabled: true when ROOMY_ENABLE_SIGNUP=1", async () => {
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const res = await request("GET", "/auth/signup-status");
     expect(res.status).toBe(200);
     expect((res.body as { enabled: boolean }).enabled).toBe(true);
   });
 
   it("does not require authentication", async () => {
-    delete process.env.DESK_ENABLE_SIGNUP;
+    delete process.env.ROOMY_ENABLE_SIGNUP;
     const res = await request("GET", "/auth/signup-status");
     expect(res.status).toBe(200);
   });
 });
 
 describe("POST /auth/signup", () => {
-  it("refuses when DESK_ENABLE_SIGNUP is unset", async () => {
-    delete process.env.DESK_ENABLE_SIGNUP;
+  it("refuses when ROOMY_ENABLE_SIGNUP is unset", async () => {
+    delete process.env.ROOMY_ENABLE_SIGNUP;
     const res = await request("POST", "/auth/signup", {
       username: "alice",
       email: "alice@example.com",
@@ -128,7 +128,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("creates a user and returns a session token when enabled", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const res = await request("POST", "/auth/signup", {
       username: "alice",
       email: "alice@example.com",
@@ -144,9 +144,9 @@ describe("POST /auth/signup", () => {
     expect(user?.email).toBe("alice@example.com");
   });
 
-  it("does NOT auto-create a vault at signup, even with DESK_VAULT_PASSWORD set", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
-    process.env.DESK_VAULT_PASSWORD = "would-have-been-auto-applied";
+  it("does NOT auto-create a vault at signup, even with ROOMY_VAULT_PASSWORD set", async () => {
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_VAULT_PASSWORD = "would-have-been-auto-applied";
     const res = await request("POST", "/auth/signup", {
       username: "vaultless",
       email: "vaultless@example.com",
@@ -162,7 +162,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("rejects usernames that fail the pattern", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const bad = await request("POST", "/auth/signup", {
       username: "x",
       email: "alice@example.com",
@@ -178,7 +178,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("rejects malformed emails", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const res = await request("POST", "/auth/signup", {
       username: "alice",
       email: "not-an-email",
@@ -188,7 +188,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("rejects passwords shorter than 12 characters", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const res = await request("POST", "/auth/signup", {
       username: "alice",
       email: "alice@example.com",
@@ -198,7 +198,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("rejects the documented seed password", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const res = await request("POST", "/auth/signup", {
       username: "alice",
       email: "alice@example.com",
@@ -208,7 +208,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("rejects duplicate usernames", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const ok = await request("POST", "/auth/signup", {
       username: "alice",
       email: "alice@example.com",
@@ -224,7 +224,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("rejects duplicate emails", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const ok = await request("POST", "/auth/signup", {
       username: "alice",
       email: "alice@example.com",
@@ -240,7 +240,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("rate-limits after 5 attempts per IP per minute", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     let last;
     for (let i = 0; i < 6; i++) {
       last = await request("POST", "/auth/signup", {
@@ -253,7 +253,7 @@ describe("POST /auth/signup", () => {
   });
 
   it("allows the new user to log in with the chosen password", async () => {
-    process.env.DESK_ENABLE_SIGNUP = "1";
+    process.env.ROOMY_ENABLE_SIGNUP = "1";
     const signupRes = await request("POST", "/auth/signup", {
       username: "alice",
       email: "alice@example.com",

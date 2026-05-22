@@ -1,7 +1,7 @@
-# Desk app storage interaction
+# Roomy app storage interaction
 
 Use this when the user asks you to inspect, import, export, migrate, fix,
-or otherwise CRUD records for an existing Desk app.
+or otherwise CRUD records for an existing Roomy app.
 
 This is an operational data skill, not the normal way to implement app
 features. When authoring or modifying app UI, update the app source and use
@@ -18,7 +18,7 @@ directory and read the most specific guide available:
    collection like `habits`, prefer `fragments/habits/skill.md`; do not
    just read the first `skill.md` returned by glob.
 2. App-level `skill.md` if the app has one.
-3. `desk.app.json`, `fragments/*/desk.fragment.json`, and the app source
+3. `roomy.app.json`, `fragments/*/roomy.fragment.json`, and the app source
    only if the skill files do not define the storage contract.
 
 If multiple fragment skills exist and the target is unclear, read all
@@ -34,7 +34,7 @@ after you finish so the next agent does not have to reverse-engineer it.
 
 When you are authoring or modifying app UI, use
 `getStorageClient()` from `src/storage/client.ts`. The client talks to
-`window.desk.storage` and enforces the app's declared `storage.read` and
+`window.roomy.storage` and enforces the app's declared `storage.read` and
 `storage.write` capabilities.
 
 Do not add direct HTTP calls to `/apps/.../storage/...` in app code. Do
@@ -72,7 +72,7 @@ Storage location:
 <name>.app/.storage/data.sqlite
 ```
 
-The database may not exist yet. Desk creates it lazily the first time the
+The database may not exist yet. Roomy creates it lazily the first time the
 running app uses storage. If the user asked you to create or import records
 and `.storage/data.sqlite` is missing, create the `.storage/` directory,
 open `data.sqlite`, and initialize the schema below before writing records.
@@ -106,7 +106,7 @@ Keep `doc` valid JSON. Collection names must match
 `^[a-z][a-z0-9_-]{0,62}$`; document IDs must match
 `^[A-Za-z0-9_-]{1,128}$`.
 
-Use Node's `node:sqlite` module for direct CRUD. The Desk sandbox has Node,
+Use Node's `node:sqlite` module for direct CRUD. The Roomy sandbox has Node,
 while `sqlite3` and `python3` CLIs may be absent. Do not start with the
 `sqlite3` CLI. Do not use Python unless you have already verified it exists.
 If the Node script fails, fix the Node script; never fall back to a mock or
@@ -161,9 +161,9 @@ Adapt the collection, document IDs, and JSON document shape to the app's
 own skill contract before running it.
 
 Never create a parallel fallback store such as `.storage/docs.json`,
-`localStorage` seed files, TypeScript constants, or ad-hoc JSON files. Desk
+`localStorage` seed files, TypeScript constants, or ad-hoc JSON files. Roomy
 app storage is the SQLite `docs` table in `.storage/data.sqlite`; anything
-else will be invisible to the app and to the Desk storage API.
+else will be invisible to the app and to the Roomy storage API.
 
 After writes, verify with a fresh SQLite read from `data.sqlite` and print
 the rows you read back. A successful CRUD operation means the `docs` table

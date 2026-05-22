@@ -13,11 +13,11 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, seedIfEmpty, queries } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, seedIfEmpty, queries } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -36,20 +36,20 @@ beforeAll(async () => {
   // that, so the run hits 401 from the rate limiter rather than the
   // assertion-meaningful status. The escape hatch is the documented
   // test affordance — production never sets it (see rateLimit.ts:56).
-  process.env.DESK_RATE_LIMIT_DISABLED = "1";
+  process.env.ROOMY_RATE_LIMIT_DISABLED = "1";
 
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-msg-fire-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-msg-fire-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  process.env.DESK_SEED_USERNAME = "msgfire-user";
-  process.env.DESK_SEED_PASSWORD = "pw";
+  process.env.ROOMY_SEED_USERNAME = "msgfire-user";
+  process.env.ROOMY_SEED_PASSWORD = "pw";
   await seedIfEmpty(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-msg-fire-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-msg-fire-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   runManager = createRunManager({
     pool,
@@ -84,14 +84,14 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  delete process.env.DESK_RATE_LIMIT_DISABLED;
+  delete process.env.ROOMY_RATE_LIMIT_DISABLED;
   await clearSessions(pool);
   clearConnections();
   server?.close();
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 function postJson(pathStr: string, body: unknown, bearer: string | null): Promise<{ status: number; body: unknown }> {
@@ -595,11 +595,11 @@ describe("Summary versioning via summary-history", () => {
     const versionsA = (afterFirst.body as { versions: Array<{ body: string }> }).versions;
     expect(versionsA.length).toBe(1);
     expect(versionsA[0].body).toContain("vacation plans");
-    const historyDir = path.join(home, "desk", ".chats", chatId, "notes", ".history");
+    const historyDir = path.join(home, "roomy", ".chats", chatId, "notes", ".history");
     const historyFiles = await fs.readdir(historyDir);
     expect(historyFiles.some((name) => name.endsWith(`-${summaryId}.md`))).toBe(true);
     await expect(
-      fs.stat(path.join(home, "desk", ".chats", chatId, "summary-history")),
+      fs.stat(path.join(home, "roomy", ".chats", chatId, "summary-history")),
     ).rejects.toThrow();
 
     await userRequest(
@@ -636,8 +636,8 @@ describe("Summary versioning via summary-history", () => {
     const requestId = await insertPendingMessage({ type: "summary_request" });
     const { childIds } = await runManager.fireMessage(requestId);
     const summaryId = childIds[0];
-    const legacyNoteDir = path.join(home, "desk", ".chats", chatId, "note-history");
-    const legacySummaryDir = path.join(home, "desk", ".chats", chatId, "summary-history");
+    const legacyNoteDir = path.join(home, "roomy", ".chats", chatId, "note-history");
+    const legacySummaryDir = path.join(home, "roomy", ".chats", chatId, "summary-history");
     await fs.mkdir(legacyNoteDir, { recursive: true });
     await fs.mkdir(legacySummaryDir, { recursive: true });
     await fs.writeFile(

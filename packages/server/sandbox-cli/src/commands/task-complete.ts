@@ -3,10 +3,10 @@ import { CliError, parseFlags } from "../errors.js";
 import { output } from "../index.js";
 
 export const usage =
-  "desk-agent task complete (--chat <thread-chat-id> | --message-id <anchor-id>) [--message <text>]";
+  "roomy-agent task complete (--chat <thread-chat-id> | --message-id <anchor-id>) [--message <text>]";
 
 export const help = `\
-desk-agent task complete — mark a task done and (optionally) deliver a
+roomy-agent task complete — mark a task done and (optionally) deliver a
 result message back to the parent thread.
 
 This is the "I'm finished, here's how it went" verb. The server flips the
@@ -32,17 +32,17 @@ Optional:
                          paste the whole transcript.
 
 Recurring tasks (--cron) cannot be completed — they're meant to keep
-firing. Use \`desk-agent task cancel\` to stop them entirely.
+firing. Use \`roomy-agent task cancel\` to stop them entirely.
 
 Already-terminal tasks (succeeded/cancelled/failed) cannot be completed
 again — the call returns 400.
 
 Examples:
   # From inside the task's thread chat
-  desk-agent task complete --chat ch_thread_xyz
+  roomy-agent task complete --chat ch_thread_xyz
 
   # From anywhere, when you have the anchor id
-  desk-agent task complete --message-id msg_anchor_abc \\
+  roomy-agent task complete --message-id msg_anchor_abc \\
       --message "Audited 12 PRs. 3 need follow-up: #145, #161, #163."
 
 Exit codes:

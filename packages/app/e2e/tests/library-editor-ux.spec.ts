@@ -17,7 +17,7 @@ async function uploadFile(
   body: string,
   contentType: string,
 ): Promise<void> {
-  const boundary = `----desk-e2e-${Math.random().toString(16).slice(2)}`;
+  const boundary = `----roomy-e2e-${Math.random().toString(16).slice(2)}`;
   const buf = Buffer.concat([
     Buffer.from(
       `--${boundary}\r\n` +

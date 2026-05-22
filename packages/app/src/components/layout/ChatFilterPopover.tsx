@@ -9,7 +9,7 @@ import {
   DropdownMenuTrigger,
   Switch,
   Button,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import type { ChatGoalKind } from '@/data/ui-types'
 
 export interface ChatFilterValues {

@@ -23,7 +23,7 @@ function inferType(mime: string, name: string, isDir = false): ContextItem["type
   // library renders the app icon + ContextDetail picks the AppPreview
   // variant. Issue #47, PR-E.
   if (isDir && name.endsWith(".app") && name !== ".app") return "app";
-  if (mime === "application/vnd.desk.app+directory") return "app";
+  if (mime === "application/vnd.roomy.app+directory") return "app";
   if (mime === "text/markdown") return "note";
   if (mime.startsWith("text/uri-list")) return "link";
   return "file";

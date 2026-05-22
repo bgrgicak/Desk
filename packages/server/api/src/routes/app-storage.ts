@@ -27,19 +27,19 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { type Pool, queries } from "@agent-desk/db";
+import { type Pool, queries } from "@roomy-ai/db";
 import {
   ForbiddenError,
   NotFoundError,
   UnauthorizedError,
   ValidationError,
-} from "@agent-desk/shared";
+} from "@roomy-ai/shared";
 import {
   chatArtifactsDir,
   validateLibrarySubpath,
   workspaceRootPath,
   type StorageContext,
-} from "@agent-desk/storage";
+} from "@roomy-ai/storage";
 
 const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
 const COLLECTION_PATTERN = /^[a-z][a-z0-9_-]{0,62}$/;
@@ -109,13 +109,13 @@ function parseCookies(req: IncomingMessage): Record<string, string> {
 }
 
 function chatCookieName(chatId: string, appName: string): string {
-  return `desk_app_${chatId}_${appName}`;
+  return `roomy_app_${chatId}_${appName}`;
 }
 
 // Shared prefix for every library-scope cookie. The full cookie name
-// is `desk_libapp_<workspaceId>_<appName>`; the workspaceId is encoded
+// is `roomy_libapp_<workspaceId>_<appName>`; the workspaceId is encoded
 // at request time so cross-workspace replay fails the verify step.
-const LIBRARY_COOKIE_PREFIX = "desk_libapp_";
+const LIBRARY_COOKIE_PREFIX = "roomy_libapp_";
 
 function normalizeLibraryAppPath(appPathOrName: string): { appPath: string; appName: string } | null {
   const appPath = appPathOrName.endsWith(".app") || appPathOrName.includes("/")

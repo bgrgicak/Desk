@@ -2,9 +2,9 @@ import * as fs from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import * as path from "node:path";
 import { Readable } from "node:stream";
-import { type Pool } from "@agent-desk/db";
+import { type Pool } from "@roomy-ai/db";
 import ignore, { type Ignore } from "ignore";
-import { NotFoundError, ValidationError } from "@agent-desk/shared";
+import { NotFoundError, ValidationError } from "@roomy-ai/shared";
 import {
   workspaceRootPath,
   trashDir,
@@ -235,7 +235,7 @@ async function walk(
   return { files, folders, appDirs };
 }
 
-const APP_DIR_MIME = "application/vnd.desk.app+directory";
+const APP_DIR_MIME = "application/vnd.roomy.app+directory";
 
 /**
  * Resolves a workspace-root-relative path to the actual on-disk directory
@@ -1042,7 +1042,7 @@ export async function createLibraryLink(
 
 /**
  * Deletes a library entry (file OR folder) by moving it into
- * `~/Desk/.trash/library/{timestamp}-{basename}`. The trash layout
+ * `~/Roomy/.trash/library/{timestamp}-{basename}`. The trash layout
  * mirrors the live layout loosely so an operator can dig items back out
  * by hand.
  */

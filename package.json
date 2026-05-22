@@ -1,29 +1,29 @@
 {
-  "name": "desk",
+  "name": "roomy",
   "private": true,
   "type": "module",
   "workspaces": [
     "packages/server/*",
     "packages/app",
     "packages/app-scaffold",
-    "packages/agent-desk-cli",
+    "packages/cli",
     "packages/ui",
-    "packages/desk-apps"
+    "packages/apps"
   ],
   "scripts": {
-    "preinstall": "node -e \"const want='23';const got=process.versions.node;if(got.split('.')[0]!==want){console.error('\\n  Desk requires Node '+want+'.x (pinned by .nvmrc + engines). Found: '+got+'.\\n  Install via nvm/fnm/mise/asdf, then re-run npm install. The .nvmrc pin will pick up automatically.\\n');process.exit(1)}\"",
+    "preinstall": "node -e \"const want='23';const got=process.versions.node;if(got.split('.')[0]!==want){console.error('\\n  Roomy requires Node '+want+'.x (pinned by .nvmrc + engines). Found: '+got+'.\\n  Install via nvm/fnm/mise/asdf, then re-run npm install. The .nvmrc pin will pick up automatically.\\n');process.exit(1)}\"",
     "dev": "packages/server/setup/scripts/dev.sh",
-    "dev:app": "npm -w @agent-desk/app run dev",
+    "dev:app": "npm -w @roomy-ai/app run dev",
     "dev:desktop": "cd packages/desktop && npm run dev",
     "build": "npm run build:packages",
-    "build:server": "npm -w @agent-desk/shared run build && npm -w @agent-desk/db run build && npm -w @agent-desk/storage run build && npm -w @agent-desk/ui run build && npm -w @agent-desk/desk-apps run build && npm -w @agent-desk/runtime run build && npm -w @agent-desk/scheduler run build && npm -w @agent-desk/api run build && npm -w @agent-desk/sandbox-cli run build",
-    "build:packages": "npm run build:server && npm -w @agent-desk/app-scaffold run build && npm -w @agent-desk/app run build",
+    "build:server": "npm -w @roomy-ai/shared run build && npm -w @roomy-ai/db run build && npm -w @roomy-ai/storage run build && npm -w @roomy-ai/ui run build && npm -w @roomy-ai/apps run build && npm -w @roomy-ai/runtime run build && npm -w @roomy-ai/scheduler run build && npm -w @roomy-ai/api run build && npm -w @roomy-ai/sandbox-cli run build",
+    "build:packages": "npm run build:server && npm -w @roomy-ai/app-scaffold run build && npm -w @roomy-ai/app run build",
     "ci:local": "scripts/ci-local.sh",
-    "openapi": "npm run openapi:dump --workspace=@agent-desk/api",
+    "openapi": "npm run openapi:dump --workspace=@roomy-ai/api",
     "typecheck": "npm run build:server && npm -ws --if-present run typecheck",
     "test": "vitest run --passWithNoTests",
     "test:host": "vitest run --passWithNoTests",
-    "test:e2e": "npm -w @agent-desk/app run test:e2e",
+    "test:e2e": "npm -w @roomy-ai/app run test:e2e",
     "knip": "knip --no-progress",
     "lint": "eslint .",
     "prepare": "cp scripts/pre-commit.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit"

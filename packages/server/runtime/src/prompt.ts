@@ -1,11 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { type GoalKey, type WorkspaceKind } from "@agent-desk/shared";
+import { type GoalKey, type WorkspaceKind } from "@roomy-ai/shared";
 import {
   userMemoryIndexPath,
   workspaceMemoryIndexPath,
-} from "@agent-desk/storage";
+} from "@roomy-ai/storage";
 
 /**
  * System-prompt rendering pipeline.
@@ -64,7 +64,7 @@ export interface RenderPromptInput {
   includeGoalAutodetect?: boolean;
   runMode?: "chat" | "scheduled-task" | "summary" | "reflection";
   /**
-   * DESK_HOME root used to read the user / workspace memory index files.
+   * ROOMY_HOME root used to read the user / workspace memory index files.
    * When unset, memory injection is skipped (lets unit tests render the
    * prompt without a real home tree).
    */
@@ -106,12 +106,12 @@ function readMemoryIndex(filePath: string, fallback: string, label: string): str
 
 function userMemoryFragment(home: string): string {
   const body = readMemoryIndex(userMemoryIndexPath(home), EMPTY_USER_MEMORY, "User");
-  return `<!-- Desk user memory index -->\n${body}`;
+  return `<!-- Roomy user memory index -->\n${body}`;
 }
 
 function workspaceMemoryFragment(home: string, slug: string): string {
   const body = readMemoryIndex(workspaceMemoryIndexPath(home, slug), EMPTY_WORKSPACE_MEMORY, "Workspace");
-  return `<!-- Desk workspace memory index -->\n${body}`;
+  return `<!-- Roomy workspace memory index -->\n${body}`;
 }
 
 type Fragment = (input: RenderPromptInput) => string | null;
@@ -128,8 +128,8 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
       userName: input.userName,
     }),
   // Always-loaded routing rule for chat turns. Tells the agent when
-  // "as a task" / substantial project work should become a Desk task
-  // (via `desk-agent task schedule`) instead of being implemented
+  // "as a task" / substantial project work should become a Roomy task
+  // (via `roomy-agent task schedule`) instead of being implemented
   // inline. Skipped for summary and reflection runs — those have their
   // own fixed shape and never spawn user-facing tasks.
   (input) =>
@@ -151,7 +151,7 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
         `Chat summaries:   ~/.chats/${input.chatId}/notes/\n`
       : "";
     const attachArtifactInstruction = input.chatId
-      ? `**Surface in chat.** When you create, significantly update, or retrieve from the current chat/workspace library an artifact the user is asking to see, run \`desk-agent chat attach-artifact --chat ${input.chatId} "<path>"\` as the last step before replying. This applies to files, apps, directories, images, and library items. Library search is scoped to the current chat/workspace. For directories, pass the directory path. Quote paths. Reply only after the attach command succeeds, fails, or no attachable current-workspace path exists; report failures inline. Load \`desk-cli-chat-attach-artifact\` if you need syntax details or examples.`
+      ? `**Surface in chat.** When you create, significantly update, or retrieve from the current chat/workspace library an artifact the user is asking to see, run \`roomy-agent chat attach-artifact --chat ${input.chatId} "<path>"\` as the last step before replying. This applies to files, apps, directories, images, and library items. Library search is scoped to the current chat/workspace. For directories, pass the directory path. Quote paths. Reply only after the attach command succeeds, fails, or no attachable current-workspace path exists; report failures inline. Load \`roomy-cli-chat-attach-artifact\` if you need syntax details or examples.`
       : "";
     return loadAndSub("artifacts.md", { chatPaths, attachArtifactInstruction });
   },
@@ -190,7 +190,7 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
       : workspaceMemoryFragment(input.home, input.workspaceSlug),
   (input) =>
     input.runMode !== "summary" && input.runMode !== "reflection" && input.goal ? loadAndSub(`goal/${input.goal}.md`, {}) : null,
-  (input) => input.runMode === "summary" || input.runMode === "reflection" ? null : loadAndSub("desk-skills.md", {}),
+  (input) => input.runMode === "summary" || input.runMode === "reflection" ? null : loadAndSub("roomy-skills.md", {}),
   // Hub-only section. Explains the hub's extra abilities (cross-workspace
   // FS read, cross-workspace API call, pinning, route_to_workspace
   // handoff). Only rendered when the request originates from the hub

@@ -1,4 +1,4 @@
-import { cn } from '@agent-desk/ui'
+import { cn } from '@roomy-ai/ui'
 import { useGetMeQuery, useGetWorkspacesQuery } from '@/store/api'
 import { useAvatarUrl } from '@/hooks/use-avatar'
 import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'

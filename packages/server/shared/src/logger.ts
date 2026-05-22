@@ -4,7 +4,7 @@
  * `no-console` lint rule has a place to point disciplined callers at.
  *
  * The wrapper is deliberately small — no transports, no rotation, no
- * formatters. desk-server writes JSON-per-line to stdout/stderr; an
+ * formatters. roomy-server writes JSON-per-line to stdout/stderr; an
  * operator running it under systemd / launchd captures the stream into
  * a journal / log file of their choice. Pretty-printing for human
  * readers stays out of the binary (no `pino-pretty` dependency); use
@@ -20,7 +20,7 @@
  *   request-scoped pattern.
  *
  * Levels: `debug`, `info`, `warn`, `error`, `fatal`. `info` is the
- * default at runtime; set `DESK_LOG_LEVEL` to override.
+ * default at runtime; set `ROOMY_LOG_LEVEL` to override.
  */
 
 import { pino, type Logger as PinoLogger } from "pino";
@@ -131,7 +131,7 @@ const REDACT_PATHS = [
 ];
 
 const root: PinoLogger = pino({
-  level: process.env.DESK_LOG_LEVEL ?? "info",
+  level: process.env.ROOMY_LOG_LEVEL ?? "info",
   redact: {
     paths: REDACT_PATHS,
     censor: REDACT_PLACEHOLDER,
@@ -164,7 +164,7 @@ export const log: Logger = root;
 /**
  * Module-scoped child logger. Use at the top of a server module:
  *
- *     import { withModule } from "@agent-desk/shared/logger";
+ *     import { withModule } from "@roomy-ai/shared/logger";
  *     const log = withModule("scheduler.runs");
  *
  * The resulting child carries `{ module: "scheduler.runs" }` on every

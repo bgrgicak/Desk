@@ -8,7 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import {
   useGetVaultStatusQuery,
   useSetupVaultMutation,

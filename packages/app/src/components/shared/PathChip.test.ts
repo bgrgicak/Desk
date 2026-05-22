@@ -3,18 +3,18 @@ import { displayBasename, pathChipHref, workspaceRelativePath } from './PathChip
 
 describe('PathChip path classification', () => {
   it('maps sandbox absolute paths to workspace-relative library paths', () => {
-    expect(workspaceRelativePath('/home/agent/Desk')).toBe('Desk')
+    expect(workspaceRelativePath('/home/agent/Roomy')).toBe('Roomy')
     expect(workspaceRelativePath('~/Projects/Alpha')).toBe('Projects/Alpha')
   })
 })
 
 describe('displayBasename', () => {
   it('returns the filename for file paths', () => {
-    expect(displayBasename('~/Desk/desk-dev/Desk/README.md')).toBe('README.md')
+    expect(displayBasename('~/Roomy/roomy-dev/Roomy/README.md')).toBe('README.md')
   })
 
   it('returns the folder name for paths with a trailing slash', () => {
-    expect(displayBasename('~/Desk/desk-dev/Desk/.claude/worktrees/some-branch/')).toBe(
+    expect(displayBasename('~/Roomy/roomy-dev/Roomy/.claude/worktrees/some-branch/')).toBe(
       'some-branch',
     )
   })

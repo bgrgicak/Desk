@@ -1,0 +1,56 @@
+# roomy-server systemd unit (example).
+#
+# Drop into /etc/systemd/system/roomy-server.service (system-wide) or
+# ~/.config/systemd/user/roomy-server.service (per-user). Edit the User,
+# Group, WorkingDirectory and ExecStart paths for your install, then:
+#
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now roomy-server
+#   journalctl --user -u roomy-server -f
+#
+# For system-wide service drop the `--user` flags.
+#
+# This unit assumes you've already built the server (`npm run build:server`)
+# and have Node.js 23 on PATH. The Health-aware restart is wired through
+# the GET /health endpoint added in this PR.
+
+[Unit]
+Description=Roomy personal AI assistant — API + sandbox supervisor
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=roomy
+Group=roomy
+WorkingDirectory=/opt/roomy
+# Environment file with ROOMY_HOME, ROOMY_DB_PATH, ROOMY_VAULT_PASSWORD,
+# ROOMY_SECRET_KEY_PATH, and optionally ROOMY_ALLOWED_ORIGINS.
+# Keep this file mode 0600.
+EnvironmentFile=/etc/roomy/roomy-server.env
+ExecStart=/usr/bin/node /opt/roomy/packages/server/api/dist/main.js
+# Send SIGTERM to trigger the bounded graceful shutdown (see
+# ROOMY_SHUTDOWN_GRACE_MS, default 30s). Kill harder than that only as
+# a backstop.
+KillSignal=SIGTERM
+TimeoutStopSec=40s
+Restart=on-failure
+RestartSec=3s
+
+# Hardening — leave these on unless you have a reason to relax them.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# Only writable path. ROOMY_HOME lives here.
+ReadWritePaths=/var/lib/roomy
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=false  # node JIT needs this off
+
+[Install]
+WantedBy=default.target

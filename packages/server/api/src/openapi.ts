@@ -1,9 +1,9 @@
 /**
- * Generates the OpenAPI 3.1.0 specification for the Desk API.
+ * Generates the OpenAPI 3.1.0 specification for the Roomy API.
  * Covers all v1 routes with request/response shapes.
  */
 
-import { GOAL_KEYS } from "@agent-desk/shared";
+import { GOAL_KEYS } from "@roomy-ai/shared";
 
 interface OpenApiSpec {
   openapi: string;
@@ -17,9 +17,9 @@ export function generateOpenApiSpec(): OpenApiSpec {
   return {
     openapi: "3.1.0",
     info: {
-      title: "Desk API",
+      title: "Roomy API",
       version: "1.0.0",
-      description: "HTTP + WS gateway for the Desk personal AI assistant.",
+      description: "HTTP + WS gateway for the Roomy personal AI assistant.",
     },
     security: [{ bearerAuth: [] }],
     components: {
@@ -70,10 +70,10 @@ export function generateOpenApiSpec(): OpenApiSpec {
                 schema: {
                   type: "object",
                   properties: {
-                    username: { type: "string" },
+                    email: { type: "string", format: "email" },
                     password: { type: "string" },
                   },
-                  required: ["username", "password"],
+                  required: ["email", "password"],
                 },
               },
             },
@@ -88,7 +88,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/auth/signup": {
         post: {
           summary: "Register a new user",
-          description: "Disabled by default. Operators opt in via the DESK_ENABLE_SIGNUP=1 env var; otherwise this endpoint returns 400 and the SPA hides the link. When enabled, creates a user row, bootstraps a hub workspace, sets up the per-user vault if DESK_VAULT_PASSWORD is set, and returns a session token. Rate-limited per IP (5/minute).",
+          description: "Disabled by default. Operators opt in via the ROOMY_ENABLE_SIGNUP=1 env var; otherwise this endpoint returns 400 and the SPA hides the link. When enabled, creates a user row, bootstraps a hub workspace, sets up the per-user vault if ROOMY_VAULT_PASSWORD is set, and returns a session token. Rate-limited per IP (5/minute).",
           security: [],
           requestBody: {
             required: true,
@@ -97,8 +97,8 @@ export function generateOpenApiSpec(): OpenApiSpec {
                 schema: {
                   type: "object",
                   properties: {
-                    username: { type: "string", description: "3–32 chars: letters, digits, underscore, dash" },
-                    email: { type: "string", format: "email" },
+                    username: { type: "string", description: "Display name the agent uses to address the user. 1–80 characters, no control chars. Not unique." },
+                    email: { type: "string", format: "email", description: "Login identifier. Unique." },
                     password: { type: "string", description: "≥ 12 chars; must not equal the documented seed password" },
                   },
                   required: ["username", "email", "password"],
@@ -109,7 +109,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
           responses: {
             "200": { description: "Session token", content: { "application/json": { schema: { type: "object", properties: { token: { type: "string" } } } } } },
             "400": { description: "Signup disabled or input invalid" },
-            "409": { description: "Username or email already taken" },
+            "409": { description: "Email already taken" },
             "429": { description: "Too many attempts; see Retry-After header" },
           },
         },
@@ -137,7 +137,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
       },
       "/auth/auto-login": {
         post: {
-          summary: "Auto-login as the local Desk owner",
+          summary: "Auto-login as the local Roomy owner",
           security: [],
           responses: {
             "200": { description: "Session token", content: { "application/json": { schema: { type: "object", properties: { token: { type: "string" } } } } } },
@@ -482,7 +482,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
         },
         delete: {
           summary: "Delete chat (cascades messages + on-disk dirs)",
-          description: "Cancels any pending/recurring scheduler entries owned by the chat's messages, deletes the chat row (FK ON DELETE CASCADE drops all messages), and moves the chat's on-disk directories (`.chats/{chatId}/` hidden state and `chats/{chatId}/` attachments) to `~/Desk/.trash/`. Emits a `chat.deleted` WS event.",
+          description: "Cancels any pending/recurring scheduler entries owned by the chat's messages, deletes the chat row (FK ON DELETE CASCADE drops all messages), and moves the chat's on-disk directories (`.chats/{chatId}/` hidden state and `chats/{chatId}/` attachments) to `~/Roomy/.trash/`. Emits a `chat.deleted` WS event.",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
           responses: {
             "200": { description: "OK", content: { "application/json": { schema: { $ref: "#/components/schemas/Ok" } } } },
@@ -575,7 +575,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
       "/chats/{id}/messages/{messageId}/logs": {
         get: {
           summary: "Stream a message's execution log file",
-          description: "Returns the accumulated stdout/stderr from an executing or completed message. Served directly from ~/Desk/desk/.chats/{chatId}/logs/{messageId}.log — no DB involvement. 404 if no log file exists yet.",
+          description: "Returns the accumulated stdout/stderr from an executing or completed message. Served directly from ~/Roomy/roomy/.chats/{chatId}/logs/{messageId}.log — no DB involvement. 404 if no log file exists yet.",
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "messageId", in: "path", required: true, schema: { type: "string" } },
@@ -714,7 +714,7 @@ export function generateOpenApiSpec(): OpenApiSpec {
           responses: { "200": { description: "Moved" }, "400": { description: "Invalid body or destination exists" }, "404": { description: "Source not in workspace or not found" } },
         },
         delete: {
-          summary: "Delete a library entry (moves it to ~/Desk/.trash/)",
+          summary: "Delete a library entry (moves it to ~/Roomy/.trash/)",
           description: "Works for both files and folders. Folders are recursively moved to the trash.",
           parameters: [
             { name: "path", in: "query", required: true, schema: { type: "string" } },

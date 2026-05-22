@@ -54,7 +54,7 @@ export const PROVIDER_KEY_VARS = [
 export type ProviderKeyName = (typeof PROVIDER_KEY_VARS)[number];
 
 /**
- * Non-model service credentials that Desk can forward into sandboxes.
+ * Non-model service credentials that Roomy can forward into sandboxes.
  * These live in the same encrypted vault-backed Settings → Connections flow
  * as provider keys, but are used by command-line tools rather than pi's
  * model provider auto-detection.
@@ -129,7 +129,7 @@ export const MANAGED_CONNECTIONS = {
 
 export const LOCAL_FILESYSTEM_CONNECTION_KIND = "local-filesystem" as const;
 export const LOCAL_FILESYSTEM_PROVIDER_ID = "local_filesystem" as const;
-export const LOCAL_FILESYSTEM_MOUNT_MARKER = ".desk-local-filesystem-mount.json" as const;
+export const LOCAL_FILESYSTEM_MOUNT_MARKER = ".roomy-local-filesystem-mount.json" as const;
 export const LOCAL_FILESYSTEM_CAPABILITIES = [
   "local_filesystem.read",
   "local_filesystem.write",

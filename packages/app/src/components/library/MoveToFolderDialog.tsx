@@ -8,7 +8,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import type { Folder } from '@/data/ui-types'
 import type { MoveTarget } from '@/store/selectors/library'
 

@@ -2,8 +2,8 @@ import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react
 import {
   ArrowRight, Paperclip, X,
 } from 'lucide-react'
-import { cn } from '@agent-desk/ui'
-import { type GoalKey as SharedGoalKey } from '@agent-desk/shared'
+import { cn } from '@roomy-ai/ui'
+import { type GoalKey as SharedGoalKey } from '@roomy-ai/shared'
 import {
   ComposerPickers,
   getGoalPlaceholder,

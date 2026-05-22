@@ -3,11 +3,11 @@ import type { IncomingMessage } from "node:http";
 /**
  * Sliding-window in-memory rate limiter shared by the high-risk auth /
  * vault endpoints. We don't depend on Redis or anything cross-process —
- * Desk is single-node by design, so the in-memory map is enough.
+ * Roomy is single-node by design, so the in-memory map is enough.
  *
  * Each named bucket holds an independent set of keys and configuration.
  * Limits reset implicitly when the process restarts, which is the
- * documented behaviour: an attacker who can already crash desk-server
+ * documented behaviour: an attacker who can already crash roomy-server
  * has bigger problems than a bypassable rate limit, and operators who
  * use this expect the simple semantics.
  *
@@ -50,10 +50,10 @@ export interface RateLimitDecision {
 export function consumeRateLimit(name: string, key: string, now: number = Date.now()): RateLimitDecision {
   // Operator escape hatch: tests and one-off scripts that hammer the
   // server with logins (e2e harness in particular) can disable the
-  // limiter via DESK_RATE_LIMIT_DISABLED=1. Production never sets this.
+  // limiter via ROOMY_RATE_LIMIT_DISABLED=1. Production never sets this.
   // Read at call time, not at module load, so flipping the env between
   // spawn and request still works in fixtures.
-  if (process.env.DESK_RATE_LIMIT_DISABLED === "1") {
+  if (process.env.ROOMY_RATE_LIMIT_DISABLED === "1") {
     return { allowed: true, retryAfterMs: 0 };
   }
   const bucket = buckets.get(name);
@@ -76,7 +76,7 @@ export function consumeRateLimit(name: string, key: string, now: number = Date.n
 /**
  * Sweep evicts keys whose newest stamp is older than the bucket's
  * window. Bounds Map growth — without this an attacker spraying random
- * keys (e.g. spoofed X-Forwarded-For when DESK_TRUST_PROXY=1) could
+ * keys (e.g. spoofed X-Forwarded-For when ROOMY_TRUST_PROXY=1) could
  * grow the limiter state without bound.
  *
  * Exported so tests can run it deterministically without waiting for
@@ -130,16 +130,16 @@ export function clearRateLimits(name?: string): void {
 /**
  * Returns the client IP used as the per-IP key in the limiter buckets.
  *
- * X-Forwarded-For is honoured *only* when DESK_TRUST_PROXY=1 is set.
+ * X-Forwarded-For is honoured *only* when ROOMY_TRUST_PROXY=1 is set.
  * Without it, an attacker who can reach the API directly (or who can
  * tunnel into a loopback port through a misconfigured Docker
  * publication) could trivially bypass the per-IP cap by sending a
- * fresh fake XFF on every request. Operators who deploy desk-server
+ * fresh fake XFF on every request. Operators who deploy roomy-server
  * behind nginx/caddy/Vite-preview set the env var; the default loopback
  * configuration uses req.socket.remoteAddress and ignores XFF entirely.
  *
- * When DESK_TRUST_PROXY=1, the first segment of XFF is used (RFC 7239:
- * "client IP" comes first; the rest is the proxy chain). DESK doesn't
+ * When ROOMY_TRUST_PROXY=1, the first segment of XFF is used (RFC 7239:
+ * "client IP" comes first; the rest is the proxy chain). Roomy doesn't
  * support a configurable hop count — operators with multi-hop chains
  * need to terminate XFF at the outermost trusted proxy.
  *
@@ -149,7 +149,7 @@ export function clearRateLimits(name?: string): void {
  * limit on missing IP).
  */
 export function getClientIp(req: IncomingMessage): string {
-  if (process.env.DESK_TRUST_PROXY === "1") {
+  if (process.env.ROOMY_TRUST_PROXY === "1") {
     const xff = req.headers["x-forwarded-for"];
     const xffStr = Array.isArray(xff) ? xff[0] : xff;
     if (xffStr) {
@@ -163,8 +163,8 @@ export function getClientIp(req: IncomingMessage): string {
 // ── Default buckets used by auth + vault routes ──────────────────────
 
 defineRateLimit("auth.login", { windowMs: 60_000, max: 10 });        // 10/min/IP
-defineRateLimit("auth.signup", { windowMs: 60_000, max: 5 });        // 5/min/IP — abuse cap when DESK_ENABLE_SIGNUP is on
-defineRateLimit("auth.autoLogin", { windowMs: 60_000, max: 10 });    // 10/min/IP — auto-login when DESK_AUTO_LOGIN is on
+defineRateLimit("auth.signup", { windowMs: 60_000, max: 5 });        // 5/min/IP — abuse cap when ROOMY_ENABLE_SIGNUP is on
+defineRateLimit("auth.autoLogin", { windowMs: 60_000, max: 10 });    // 10/min/IP — auto-login when ROOMY_AUTO_LOGIN is on
 defineRateLimit("vault.unlock.ip", { windowMs: 60_000, max: 10 });   // 10/min/IP
 defineRateLimit("vault.unlock.user", { windowMs: 300_000, max: 20 }); // 20/5min/user
 defineRateLimit("me.password", { windowMs: 300_000, max: 10 });      // 10/5min/user

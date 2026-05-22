@@ -1,19 +1,19 @@
 /**
- * Static-serve for the @agent-desk/app SPA.
+ * Static-serve for the @roomy-ai/app SPA.
  *
- * Active only when DESK_SERVE_APP=1 (the CLI sets this for published
+ * Active only when ROOMY_SERVE_APP=1 (the CLI sets this for published
  * installs; dev never sets it because Vite serves the SPA on :5173 with
  * /api/* proxied here). Without that env, the API behaves exactly as
  * before — no static fallback, no SPA index served.
  *
  * Lookup order for the dist directory:
- *   1. DESK_APP_DIST env var (the CLI points this at the @agent-desk/app
+ *   1. ROOMY_APP_DIST env var (the CLI points this at the @roomy-ai/app
  *      install location it resolves at boot).
  *   2. ../../app/dist relative to this file (the monorepo dev fallback so
- *      a developer can flip DESK_SERVE_APP=1 locally to exercise the
+ *      a developer can flip ROOMY_SERVE_APP=1 locally to exercise the
  *      production code path without a published install).
- *   3. require.resolve('@agent-desk/app/package.json') — walks node_modules
- *      so the api package itself can pull in @agent-desk/app via npm.
+ *   3. require.resolve('@roomy-ai/app/package.json') — walks node_modules
+ *      so the api package itself can pull in @roomy-ai/app via npm.
  */
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -47,7 +47,7 @@ function mimeFor(path: string): string {
 }
 
 export function resolveAppDist(): string | null {
-  const envDist = process.env.DESK_APP_DIST;
+  const envDist = process.env.ROOMY_APP_DIST;
   if (envDist && envDist.length > 0) return resolve(envDist);
 
   const here = fileURLToPath(import.meta.url);

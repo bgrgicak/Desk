@@ -1,8 +1,8 @@
-# Desk Server Architecture Outline
+# Roomy Server Architecture Outline
 
 ## Objective
 
-Create a developer-ready Desk server architecture with three planning horizons:
+Create a developer-ready Roomy server architecture with three planning horizons:
 
 * **Now**: detailed, implementation-oriented architecture
 * **Next**: rough expansion plan
@@ -33,11 +33,11 @@ External entrypoint for clients.
 * Agents have limited tool access; they cannot invoke tools outside their assigned surface
 * Each agent can have its own tool allowlist, enforced per-agent rather than globally
 
-### 2.1 Desk App Iframe Boundary
+### 2.1 Roomy App Iframe Boundary
 
-Agent-authored Desk apps are treated as untrusted static frontends. The parent SPA renders them in iframes with scripts enabled but without `allow-same-origin`, giving app JavaScript an opaque browser origin instead of first-party access to Desk session storage, local storage, cookies, or parent DOM.
+Agent-authored Roomy apps are treated as untrusted static frontends. The parent SPA renders them in iframes with scripts enabled but without `allow-same-origin`, giving app JavaScript an opaque browser origin instead of first-party access to Roomy session storage, local storage, cookies, or parent DOM.
 
-The server authenticates app HTML entrypoints with per-app sessions and injects `window.desk` into those HTML responses. Non-HTML build assets are served as unprivileged subresources because opaque sandbox origins do not send the app-session cookie for module-script loads. Any privileged Desk operation must go through the parent-mediated `window.desk` postMessage bridge, where the parent validates the source iframe, bridge key, app scope, and declared capability before making the host API call.
+The server authenticates app HTML entrypoints with per-app sessions and injects `window.roomy` into those HTML responses. Non-HTML build assets are served as unprivileged subresources because opaque sandbox origins do not send the app-session cookie for module-script loads. Any privileged Roomy operation must go through the parent-mediated `window.roomy` postMessage bridge, where the parent validates the source iframe, bridge key, app scope, and declared capability before making the host API call.
 
 ### 3. Control Plane / Orchestrator
 
@@ -84,10 +84,10 @@ Software that runs inside the sandbox.
 * Streaming partial output
 * Temporary runtime state
 * Agent identity and scoped credentials accompany every host-bound tool call; the Tool API session token is injected into the sandbox as an environment variable, so the host Tool API can resolve the caller and apply the allowlist check
-* Desk-managed pi skills are generated on the host under `${DESK_HOME}/Desk/.skills/<skill-name>/SKILL.md`, mounted read-only at `/opt/desk-skills`, and symlinked to `~/.config/pi/skills/` inside the sandbox. The base system prompt keeps short behavior rules and tells agents to load `desk-cli*` reference skills or `desk-goal-*` goal skills only when needed.
-* The sandbox image includes platform-pinned browser/display tooling for visual work: Playwright `1.60.0-alpha-1777669338000`, Firefox installed through Playwright into `/opt/playwright-browsers`, `@playwright/mcp` `0.0.73`, and Xvfb on `DISPLAY=:99` at `1920x1080x24`. The Playwright version is pinned to the MCP server's declared dependency so browser revisions stay aligned. Pi gets the Playwright MCP server from managed config at `/etc/pi/pi.json`, so every workspace can inspect rendered pages and take screenshots without `.deskrc` setup. The measured uncompressed image-size delta for browser tooling was +262,534,030 bytes, about +250 MiB (`desk/sandbox:v1` 613,897,093 bytes vs baseline 351,363,063 bytes on 2026-05-06).
-* The sandbox image also includes broad text/document conversion tools: `pandoc` for DOCX, ODT, RTF, HTML, EPUB, LaTeX, and similar source formats, plus `poppler-utils`/`pdftotext` for text PDFs. Agents access them through `desk-agent file to-markdown`, which provides one Markdown/text conversion interface. The measured image-size delta for adding these converters was +39,381,874 bytes, about +37.6 MiB (`desk/sandbox:v1` 653,278,967 bytes vs 613,897,093 bytes on 2026-05-06). OCR and LibreOffice are intentionally excluded from the default image because they add substantially more weight.
-* Browser and document tooling follow the sandbox image partition rule: bake in tools needed by most workspaces, expensive to install on demand, or version-sensitive enough to need platform pinning. Firefox is the default browser because it keeps the image smaller than Chromium; CDP-specific Chromium workflows, OCR, and full LibreOffice compatibility remain workspace-installed via `.deskrc` when needed.
+* Roomy-managed pi skills are generated on the host under `${ROOMY_HOME}/Roomy/.skills/<skill-name>/SKILL.md`, mounted read-only at `/opt/roomy-skills`, and symlinked to `~/.config/pi/skills/` inside the sandbox. The base system prompt keeps short behavior rules and tells agents to load `roomy-cli*` reference skills or `roomy-goal-*` goal skills only when needed.
+* The sandbox image includes platform-pinned browser/display tooling for visual work: Playwright `1.60.0-alpha-1777669338000`, Firefox installed through Playwright into `/opt/playwright-browsers`, `@playwright/mcp` `0.0.73`, and Xvfb on `DISPLAY=:99` at `1920x1080x24`. The Playwright version is pinned to the MCP server's declared dependency so browser revisions stay aligned. Pi gets the Playwright MCP server from managed config at `/etc/pi/pi.json`, so every workspace can inspect rendered pages and take screenshots without `.roomyrc` setup. The measured uncompressed image-size delta for browser tooling was +262,534,030 bytes, about +250 MiB (`roomy/sandbox:v1` 613,897,093 bytes vs baseline 351,363,063 bytes on 2026-05-06).
+* The sandbox image also includes broad text/document conversion tools: `pandoc` for DOCX, ODT, RTF, HTML, EPUB, LaTeX, and similar source formats, plus `poppler-utils`/`pdftotext` for text PDFs. Agents access them through `roomy-agent file to-markdown`, which provides one Markdown/text conversion interface. The measured image-size delta for adding these converters was +39,381,874 bytes, about +37.6 MiB (`roomy/sandbox:v1` 653,278,967 bytes vs 613,897,093 bytes on 2026-05-06). OCR and LibreOffice are intentionally excluded from the default image because they add substantially more weight.
+* Browser and document tooling follow the sandbox image partition rule: bake in tools needed by most workspaces, expensive to install on demand, or version-sensitive enough to need platform pinning. Firefox is the default browser because it keeps the image smaller than Chromium; CDP-specific Chromium workflows, OCR, and full LibreOffice compatibility remain workspace-installed via `.roomyrc` when needed.
 
 ### 7. Tool Layer
 
@@ -108,7 +108,7 @@ Critical boundary for file access.
 * Read/write enforcement
 * Controlled exposure into sandboxes
 * Attachment resolution for chat/project context
-* Mediate access to user-owned Desk storage and workspace-attached external directories
+* Mediate access to user-owned Roomy storage and workspace-attached external directories
 * Prepare for later controlled sharing using Linux mounts and filesystem permissions
 
 ### 9. Physical File Storage
@@ -117,36 +117,36 @@ Detailed now-phase design.
 
 #### 9.1 Purpose
 
-Physical File Storage is the durable host-side storage substrate for Desk. It stores agent operational data outside sandbox container filesystems, so sandbox restarts or rebuilds do not destroy state.
+Physical File Storage is the durable host-side storage substrate for Roomy. It stores agent operational data outside sandbox container filesystems, so sandbox restarts or rebuilds do not destroy state.
 
 #### 9.2 Storage identity model
 
-* Each real Desk user is assigned a real host Linux user account
+* Each real Roomy user is assigned a real host Linux user account
 * That account has a standard home directory at a path such as `/home/user-123/`
 * The user account must be capable of interactive login
-* That home directory is the primary durable storage root for that user’s Desk data
+* That home directory is the primary durable storage root for that user’s Roomy data
 * Agents do not execute as those host Linux users; execution still occurs inside isolated sandboxes
 * Host user storage identity and sandbox execution identity must remain separate
 * This model is intended to remain compatible with the long-term agentic OS direction
 
 #### 9.3 What is stored here
 
-The user home directory stores Desk-managed data such as:
+The user home directory stores Roomy-managed data such as:
 
 * Workspace-owned files and attachments
 * Chat-owned attachments and related durable artifacts
-* Notes, scratch files, and user-level Desk data
+* Notes, scratch files, and user-level Roomy data
 * Imported or synced material assigned to the user’s workspaces
 * User-granted external directories from the same home tree, such as `~/Projects/NAME` or broader paths like `~/`, when explicitly attached to a workspace
 * Later, controlled shared data and richer OS-level integrations
 
 #### 9.4 What is not the source of truth here
 
-The filesystem is the storage substrate, but not the only Desk source of truth.
+The filesystem is the storage substrate, but not the only Roomy source of truth.
 
 * SQLite remains the authoritative metadata layer for user-to-home mapping, workspace and chat structure, file registry, ownership, grants, and audit metadata
 * SQLite is the sole database; it also serves as the context/session store and supports any required sync patterns
-* Linux ownership and permissions enforce low-level boundaries but do not replace Desk metadata
+* Linux ownership and permissions enforce low-level boundaries but do not replace Roomy metadata
 
 #### 9.5 Recommended directory layout
 
@@ -154,7 +154,7 @@ Example host layout:
 
 ```text
 /home/user-123/
-  Desk/
+  Roomy/
     workspaces/
       ws_abc/
         files/
@@ -177,7 +177,7 @@ Example host layout:
 Example sandbox persistent storage layout:
 
 ```text
-/home/desk/sandboxes/
+/home/roomy/sandboxes/
   sandbox_001/
     home/
     cache/
@@ -188,18 +188,18 @@ Example sandbox persistent storage layout:
 Guidelines:
 
 * The real user home directory is the durable root, not an app-owned pseudo-home under another parent
-* Desk-managed data should live under a clearly defined subtree such as `~/Desk/` to avoid colliding with unrelated user files
-* Durable Desk-owned storage should be organized by user-owned workspace and chat context, not by agent
-* A workspace may also be granted access to selected user directories outside `~/Desk/`, such as `~/Projects/NAME`
+* Roomy-managed data should live under a clearly defined subtree such as `~/Roomy/` to avoid colliding with unrelated user files
+* Durable Roomy-owned storage should be organized by user-owned workspace and chat context, not by agent
+* A workspace may also be granted access to selected user directories outside `~/Roomy/`, such as `~/Projects/NAME`
 * Broader home-directory attachment, such as `~/`, is a later capability and not part of the now phase
-* These external directories remain user-owned paths; Desk should treat them as attached or shared workspace sources rather than relocating them into `~/Desk/`
+* These external directories remain user-owned paths; Roomy should treat them as attached or shared workspace sources rather than relocating them into `~/Roomy/`
 * Outputs are primarily stored in SQLite rather than as durable files by default
 * Stable files and attachments should have IDs or stable names that map cleanly from SQLite
 * Persistent sandbox storage is a separate subsystem from user-owned durable storage
 
 #### 9.6 Linux account strategy
 
-* Create one real host Linux user per Desk user
+* Create one real host Linux user per Roomy user
 * Use a controlled naming scheme such as `user-123` or another stable system-compatible username
 * The account must support normal login because it is part of the long-term OS foundation
 * Use the account as the durable storage owner and future OS identity boundary
@@ -220,9 +220,9 @@ The preferred now-phase model is:
 
 * Stable persistent sandbox volume for the sandbox home/environment
 * Stable mount root inside the sandbox for workspace and chat attachments
-* Dynamically mount and unmount selected paths from the user’s Desk storage tree and approved external workspace directories as runs require them
+* Dynamically mount and unmount selected paths from the user’s Roomy storage tree and approved external workspace directories as runs require them
 * Keep projection and mount bookkeeping outside the sandbox as part of File Manager and runtime orchestration
-* Preserve the distinction between Desk-managed storage, workspace-attached user directories, and persistent sandbox storage
+* Preserve the distinction between Roomy-managed storage, workspace-attached user directories, and persistent sandbox storage
 * Avoid container restarts when changing which files are available to an active warm sandbox
 
 #### 9.9 Ownership and permission model
@@ -230,14 +230,14 @@ The preferred now-phase model is:
 At the host filesystem level:
 
 * The user home directory is owned by the corresponding Linux user
-* Desk-managed files under `~/Desk/` inherit that user-owned storage boundary
+* Roomy-managed files under `~/Roomy/` inherit that user-owned storage boundary
 * External directories such as `~/Projects/NAME` remain ordinary user-owned filesystem paths even when attached to a workspace
-* Broad access should be denied by default outside explicit Desk policy or future sharing mechanisms
+* Broad access should be denied by default outside explicit Roomy policy or future sharing mechanisms
 
-At the Desk policy level:
+At the Roomy policy level:
 
 * The user defines what each agent may access within the user-owned data tree, including any workspace-attached external directories
-* Desk persists those grants in SQLite
+* Roomy persists those grants in SQLite
 * File Manager and orchestration enforce the allowed projections into the sandbox
 * Agents are execution actors, not the durable storage owners
 
@@ -247,13 +247,13 @@ Create:
 
 * Create Linux user
 * Create home directory
-* Create the initial `~/Desk/` subtree and standard subdirectories
+* Create the initial `~/Roomy/` subtree and standard subdirectories
 * Create persistent sandbox storage roots outside the user home
 * Register mappings and metadata in SQLite
 
 Use:
 
-* Resolve allowed workspace/chat/file paths through Desk policy
+* Resolve allowed workspace/chat/file paths through Roomy policy
 * Resolve any workspace-attached external directories granted by the user
 * Dynamically mount selected user-owned paths into the sandbox as runs require them Persist:
 * Persist structured message outputs to SQLite
@@ -261,7 +261,7 @@ Use:
 * Keep long-lived environment state in persistent sandbox storage Cleanup:
 * Support retention and cleanup for cache, stale attachments, and sandbox state according to policy Delete/deprovision:
 * Disable the user account according to system policy
-* Archive or remove Desk-managed data according to retention policy
+* Archive or remove Roomy-managed data according to retention policy
 
 #### 9.11 File classes to distinguish in metadata
 
@@ -277,7 +277,7 @@ This matters for retention, UI presentation, cleanup, and later sharing rules.
 
 #### 9.12 Audit and traceability
 
-Desk should be able to answer:
+Roomy should be able to answer:
 
 * Which user storage path contains a file
 * Which run created or modified it
@@ -291,7 +291,7 @@ Now:
 
 * Per-user real Linux account
 * Per-user home directory at `/home/<user>/`
-* Desk-managed subtree under the user home
+* Roomy-managed subtree under the user home
 * Persistent sandbox storage outside the user home
 * Dynamic mount/unmount of workspace and chat paths into warm sandboxes
 * SQLite-backed registry and grants
@@ -350,7 +350,7 @@ Stored in SQLite.
 
 * Dynamic mount/unmount of selected paths from the user home tree into warm sandboxes
 
-* Support projection of both Desk-managed paths and workspace-attached external directories
+* Support projection of both Roomy-managed paths and workspace-attached external directories
 
 * Separate persistent sandbox storage from dynamically mounted user-owned data
 

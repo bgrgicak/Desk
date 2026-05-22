@@ -25,21 +25,21 @@ function collectLinks(tree: Root): Link[] {
 }
 
 describe('remarkEntityIds', () => {
-  it('converts chat ids in plain text to desk-entity links', () => {
+  it('converts chat ids in plain text to roomy-entity links', () => {
     const links = collectLinks(transform('Open cht_VBC2TUA8lwIcVctX4iq3v now.'))
     expect(links).toHaveLength(1)
-    expect(links[0].url).toBe('desk-entity:chat:cht_VBC2TUA8lwIcVctX4iq3v')
+    expect(links[0].url).toBe('roomy-entity:chat:cht_VBC2TUA8lwIcVctX4iq3v')
   })
 
-  it('converts workspace ids in plain text to desk-entity links', () => {
+  it('converts workspace ids in plain text to roomy-entity links', () => {
     const links = collectLinks(transform('Workspace wks_9gX8d6tQ1uHFWbODZFeEG'))
     expect(links).toHaveLength(1)
-    expect(links[0].url).toBe('desk-entity:workspace:wks_9gX8d6tQ1uHFWbODZFeEG')
+    expect(links[0].url).toBe('roomy-entity:workspace:wks_9gX8d6tQ1uHFWbODZFeEG')
   })
 
   it('converts an inlineCode node whose entire value is an entity id', () => {
     const links = collectLinks(transform('Use `cht_abc123`'))
-    expect(links.map(l => l.url)).toContain('desk-entity:chat:cht_abc123')
+    expect(links.map(l => l.url)).toContain('roomy-entity:chat:cht_abc123')
   })
 
   it('does not convert inlineCode that only begins with an entity id', () => {

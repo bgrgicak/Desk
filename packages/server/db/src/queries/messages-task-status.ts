@@ -1,7 +1,7 @@
 import {
   computeTaskStatus,
   type Message,
-} from "@agent-desk/shared";
+} from "@roomy-ai/shared";
 import type { Pool } from "../pool.js";
 import { rowToMessage } from "./messages-internal.js";
 

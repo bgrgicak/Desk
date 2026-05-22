@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { Button, Input, Textarea, cn } from '@agent-desk/ui'
+import { Button, Input, Textarea, cn } from '@roomy-ai/ui'
 import { ROOM_PALETTE } from '@/components/rooms/palette'
 import { roomColor } from '@/components/rooms/roomColor'
 import { initialsOf } from '@/lib/initials'

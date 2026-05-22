@@ -5,7 +5,7 @@
     "packages/app/public/sw.js"
   ],
   "ignoreDependencies": [
-    "@agent-desk/desktop",
+    "@roomy-ai/desktop",
     "nx"
   ],
   "workspaces": {
@@ -15,10 +15,10 @@
         "vitest.config.ts"
       ]
     },
-    "packages/agent-desk-cli": {
+    "packages/cli": {
       "entry": [
-        "src/desk.mjs",
-        "test/desk.test.mjs"
+        "src/roomy.mjs",
+        "test/roomy.test.mjs"
       ]
     },
     "packages/app": {

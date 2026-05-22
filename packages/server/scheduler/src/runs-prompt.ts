@@ -1,5 +1,5 @@
-import { type Pool, queries } from "@agent-desk/db";
-import type { Message } from "@agent-desk/shared";
+import { type Pool, queries } from "@roomy-ai/db";
+import type { Message } from "@roomy-ai/shared";
 import {
   CHAT_SUMMARY_PROMPT,
   formatMessageForPrompt,

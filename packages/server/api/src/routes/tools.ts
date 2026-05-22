@@ -1,12 +1,12 @@
-import { type Pool } from "@agent-desk/db";
-import { NotFoundError, PROVIDER_KEY_VARS, ValidationError } from "@agent-desk/shared";
-import { queries } from "@agent-desk/db";
+import { type Pool } from "@roomy-ai/db";
+import { NotFoundError, PROVIDER_KEY_VARS, ValidationError } from "@roomy-ai/shared";
+import { queries } from "@roomy-ai/db";
 import {
   listModels as runtimeListModels,
   resolveLocalSourceEnv,
   SandboxExecError,
   type ModelRef,
-} from "@agent-desk/runtime";
+} from "@roomy-ai/runtime";
 import { resolveProviderKeys } from "../providerKeys.js";
 import type { VaultStore } from "../vault/store.js";
 
@@ -103,7 +103,7 @@ function resolveModelListingSource(
  * `openai/<name>` (authed via OPENAI_API_KEY) and `openai-codex/<name>`
  * (authed via the ChatGPT subscription OAuth blob). Pi emits whichever
  * channels it has credentials for. We relabel `openai-codex/<name>` to
- * the Desk-only `codex/<name>` (provider="codex") so the picker can brand
+ * the Roomy-only `codex/<name>` (provider="codex") so the picker can brand
  * it as "Codex"; the runtime translates the prefix back to `openai-codex`
  * at run time. `openai/<name>` passes through unchanged.
  */

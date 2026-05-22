@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Check } from 'lucide-react'
-import { Button, Input, Textarea, cn } from '@agent-desk/ui'
+import { Button, Input, Textarea, cn } from '@roomy-ai/ui'
 import { getSessionToken, setSessionToken } from '@/auth/session'
 import { extractApiError } from '@/lib/api-error'
 
@@ -126,6 +126,8 @@ function CarouselPanel() {
 // ── Step forms ────────────────────────────────────────────────────────────────
 
 interface AccountData {
+  // Stored on the server as `username` but presented to the user as
+  // their display name — what the agent calls them in conversation.
   username: string
   email: string
   password: string
@@ -143,14 +145,13 @@ function AccountStep({ data, onChange }: {
   return (
     <div className="space-y-4">
       <div className="space-y-1.5">
-        <label className="text-xs font-medium text-muted-foreground">Username</label>
+        <label className="text-xs font-medium text-muted-foreground">Your name</label>
         <Input
           autoFocus
-          autoComplete="username"
-          autoCapitalize="none"
+          autoComplete="name"
           value={data.username}
           onChange={e => onChange({ username: e.target.value })}
-          placeholder="e.g. jsmith"
+          placeholder="What should we call you?"
         />
       </div>
 
@@ -421,7 +422,7 @@ export function SignupScreen({ onSignIn, onComplete }: SignupScreenProps) {
     if (step === 0) return 'Set up workspace'
     if (step === 1) return 'Set up AI'
     const hasCredentials = aiSetup.kind && aiSetup.apiKey.trim()
-    return hasCredentials ? 'Go to Desk' : 'Skip to Desk'
+    return hasCredentials ? 'Go to Roomy' : 'Skip to Roomy'
   })()
 
   const handlePrimary = async () => {

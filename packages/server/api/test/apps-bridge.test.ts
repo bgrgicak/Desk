@@ -36,8 +36,8 @@ describe("BRIDGE_SCRIPT_BODY", () => {
     expect(BRIDGE_SCRIPT_BODY).toContain("document.fonts.ready.then(v)");
   });
 
-  it("posts a desk.app.resize message keyed to the bridge", () => {
-    expect(BRIDGE_SCRIPT_BODY).toContain('"desk.app.resize"');
+  it("posts a roomy.app.resize message keyed to the bridge", () => {
+    expect(BRIDGE_SCRIPT_BODY).toContain('"roomy.app.resize"');
     expect(BRIDGE_SCRIPT_BODY).toContain("key:c.bridgeKey");
   });
 

@@ -21,7 +21,7 @@ import {
   Alert,
   AlertDescription,
   cn,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { useCompactViewport } from '@/hooks/use-compact-viewport'
 import { PreferenceRow } from '@/components/settings/shared'
@@ -65,7 +65,7 @@ const USER_PREFS_DEFAULTS: UserPrefsShape = {
 }
 
 function userPrefsKey(userId: string): string {
-  return `desk.userprefs.${userId}`
+  return `roomy.userprefs.${userId}`
 }
 
 function loadUserPrefs(userId: string | undefined): UserPrefsShape {
@@ -100,7 +100,7 @@ const LANGUAGE_OPTIONS: { value: string; label: string }[] = [
 ]
 
 function accountPrefsKey(userId: string): string {
-  return `desk.account.${userId}`
+  return `roomy.account.${userId}`
 }
 
 function loadLanguage(userId: string | undefined): string {

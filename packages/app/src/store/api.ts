@@ -121,7 +121,7 @@ const baseQuery: BaseQueryFn<
     result.error.status === 401
   ) {
     try {
-      sessionStorage.removeItem("desk.session.token");
+      sessionStorage.removeItem("roomy.session.token");
     } catch {
       /* ignore */
     }

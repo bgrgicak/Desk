@@ -16,7 +16,7 @@ const SERVER_ENTRY = path.join(
   "main.js",
 );
 
-export interface DiskServer {
+export interface RoomyServer {
   url: string;
   /** Filesystem path to the SQLite DB the spawned server is using. */
   dbPath: string;
@@ -26,7 +26,7 @@ export interface DiskServer {
   stop(): Promise<void>;
 }
 
-export interface StartDeskServerOptions {
+export interface StartRoomyServerOptions {
   username?: string;
   password?: string;
   runId?: string;
@@ -57,12 +57,12 @@ async function waitForHealth(url: string, timeoutMs = 30_000): Promise<void> {
     }
     await new Promise((r) => setTimeout(r, 200));
   }
-  throw new Error(`desk-server health check failed: ${String(lastErr)}`);
+  throw new Error(`roomy-server health check failed: ${String(lastErr)}`);
 }
 
-export async function startDeskServer(
-  opts: StartDeskServerOptions = {},
-): Promise<DiskServer> {
+export async function startRoomyServer(
+  opts: StartRoomyServerOptions = {},
+): Promise<RoomyServer> {
   const runId =
     opts.runId ??
     `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`.replace(
@@ -72,52 +72,52 @@ export async function startDeskServer(
 
   // Per-run sqlite file under a unique temp dir so parallel runs don't
   // trample each other.
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), `desk-app-e2e-db-${runId}-`));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), `roomy-app-e2e-db-${runId}-`));
   const dbPath = path.join(dbDir, "test.sqlite3");
 
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), `desk-app-e2e-${runId}-`));
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), `roomy-app-e2e-${runId}-`));
   const port = await pickFreePort();
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     NODE_ENV: "test",
     PORT: String(port),
-    // The api server reads DESK_DB_PATH and creates the file on first
+    // The api server reads ROOMY_DB_PATH and creates the file on first
     // open via better-sqlite3. No admin DB or migration ceremony needed
     // — main.ts runs migrations against an empty file the same way it
     // does in production.
-    DESK_DB_PATH: dbPath,
-    DESK_HOME: home,
-    DESK_SEED_USERNAME: opts.username ?? "e2e",
-    DESK_SEED_PASSWORD: opts.password ?? "e2e",
-    DESK_AUTO_LOGIN: "off",
+    ROOMY_DB_PATH: dbPath,
+    ROOMY_HOME: home,
+    ROOMY_SEED_USERNAME: opts.username ?? "e2e",
+    ROOMY_SEED_PASSWORD: opts.password ?? "e2e",
+    ROOMY_AUTO_LOGIN: "off",
     // Use the fake sandbox driver so task runs complete instantly without
     // needing Docker or API keys.
-    DESK_SANDBOX_DRIVER: "fake",
+    ROOMY_SANDBOX_DRIVER: "fake",
     // Slow down each fake driver step so the page has time to observe
     // running=true before the agent turn completes. The spinner tests
     // (sidebar-running-spinner.spec.ts) rely on this window.
-    DESK_FAKE_DRIVER_STEP_DELAY_MS: "500",
+    ROOMY_FAKE_DRIVER_STEP_DELAY_MS: "500",
     // Poll every 2 s so scheduler e2e tests don't have to wait a full minute.
-    DESK_SCHEDULER_POLL_INTERVAL_MS: "2000",
+    ROOMY_SCHEDULER_POLL_INTERVAL_MS: "2000",
     // The current app UI bounces to `workspaces[0]` and expects the seeded
-    // "Desk" project workspace to live there. The hub workspace would sort
+    // "Roomy" project workspace to live there. The hub workspace would sort
     // first if auto-created, breaking every test that selects the default
     // workspace. UI affordances for the hub are out of scope for this
     // change set — opt out at boot until the UI catches up.
-    DESK_HUB_AUTO_CREATE: "off",
+    ROOMY_HUB_AUTO_CREATE: "off",
     // Auto-setup and unlock the per-user vault on boot so e2e tests can
     // read and write provider keys without going through the vault UI flow.
-    // DESK_VAULT_AUTO_SETUP is opt-in (default off) outside test fixtures,
+    // ROOMY_VAULT_AUTO_SETUP is opt-in (default off) outside test fixtures,
     // so app users get the real "pick your own password" modal experience.
-    DESK_VAULT_PASSWORD: "e2e-vault-password",
-    DESK_VAULT_AUTO_SETUP: "on",
-    DESK_FAKE_DRIVER_LOG_PROVIDER_KEYS: "1",
+    ROOMY_VAULT_PASSWORD: "e2e-vault-password",
+    ROOMY_VAULT_AUTO_SETUP: "on",
+    ROOMY_FAKE_DRIVER_LOG_PROVIDER_KEYS: "1",
     // The e2e suite logs in for every spec, which makes the per-IP
     // auth.login rate-limit (10/min by default) fire and 429 later
     // tests. Disable rate limiting in the test fixture — production
     // never sets this.
-    DESK_RATE_LIMIT_DISABLED: "1",
+    ROOMY_RATE_LIMIT_DISABLED: "1",
   };
 
   const child: ChildProcess = spawn("node", [SERVER_ENTRY], {
@@ -127,11 +127,11 @@ export async function startDeskServer(
 
   // Surface server logs — helpful when a test fails mysteriously.
   child.stdout?.on("data", (b: Buffer) => {
-    if (process.env.DESK_E2E_VERBOSE)
-      process.stdout.write(`[desk-server] ${b}`);
+    if (process.env.ROOMY_E2E_VERBOSE)
+      process.stdout.write(`[roomy-server] ${b}`);
   });
   child.stderr?.on("data", (b: Buffer) => {
-    process.stderr.write(`[desk-server] ${b}`);
+    process.stderr.write(`[roomy-server] ${b}`);
   });
 
   const url = `http://127.0.0.1:${port}`;

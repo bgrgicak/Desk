@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Desk API",
+    "title": "Roomy API",
     "version": "1.0.0",
-    "description": "HTTP + WS gateway for the Desk personal AI assistant."
+    "description": "HTTP + WS gateway for the Roomy personal AI assistant."
   },
   "security": [
     {
@@ -117,7 +117,7 @@
     "/auth/signup": {
       "post": {
         "summary": "Register a new user",
-        "description": "Disabled by default. Operators opt in via the DESK_ENABLE_SIGNUP=1 env var; otherwise this endpoint returns 400 and the SPA hides the link. When enabled, creates a user row, bootstraps a hub workspace, sets up the per-user vault if DESK_VAULT_PASSWORD is set, and returns a session token. Rate-limited per IP (5/minute).",
+        "description": "Disabled by default. Operators opt in via the ROOMY_ENABLE_SIGNUP=1 env var; otherwise this endpoint returns 400 and the SPA hides the link. When enabled, creates a user row, bootstraps a hub workspace, sets up the per-user vault if ROOMY_VAULT_PASSWORD is set, and returns a session token. Rate-limited per IP (5/minute).",
         "security": [],
         "requestBody": {
           "required": true,
@@ -205,7 +205,7 @@
     },
     "/auth/auto-login": {
       "post": {
-        "summary": "Auto-login as the local Desk owner",
+        "summary": "Auto-login as the local Roomy owner",
         "security": [],
         "responses": {
           "200": {
@@ -1325,7 +1325,7 @@
       },
       "delete": {
         "summary": "Delete chat (cascades messages + on-disk dirs)",
-        "description": "Cancels any pending/recurring scheduler entries owned by the chat's messages, deletes the chat row (FK ON DELETE CASCADE drops all messages), and moves the chat's on-disk directories (`.chats/{chatId}/` hidden state and `chats/{chatId}/` attachments) to `~/Desk/.trash/`. Emits a `chat.deleted` WS event.",
+        "description": "Cancels any pending/recurring scheduler entries owned by the chat's messages, deletes the chat row (FK ON DELETE CASCADE drops all messages), and moves the chat's on-disk directories (`.chats/{chatId}/` hidden state and `chats/{chatId}/` attachments) to `~/Roomy/.trash/`. Emits a `chat.deleted` WS event.",
         "parameters": [
           {
             "name": "id",
@@ -1567,7 +1567,7 @@
     "/chats/{id}/messages/{messageId}/logs": {
       "get": {
         "summary": "Stream a message's execution log file",
-        "description": "Returns the accumulated stdout/stderr from an executing or completed message. Served directly from ~/Desk/desk/.chats/{chatId}/logs/{messageId}.log — no DB involvement. 404 if no log file exists yet.",
+        "description": "Returns the accumulated stdout/stderr from an executing or completed message. Served directly from ~/Roomy/roomy/.chats/{chatId}/logs/{messageId}.log — no DB involvement. 404 if no log file exists yet.",
         "parameters": [
           {
             "name": "id",
@@ -1872,7 +1872,7 @@
         }
       },
       "delete": {
-        "summary": "Delete a library entry (moves it to ~/Desk/.trash/)",
+        "summary": "Delete a library entry (moves it to ~/Roomy/.trash/)",
         "description": "Works for both files and folders. Folders are recursively moved to the trash.",
         "parameters": [
           {

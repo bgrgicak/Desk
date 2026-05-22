@@ -4,10 +4,10 @@ import { CliError, parseFlags } from "../errors.js";
 import { output } from "../index.js";
 
 export const usage =
-  "desk-agent app create --chat <id> [--template <path>] <name>";
+  "roomy-agent app create --chat <id> [--template <path>] <name>";
 
 export const help = `\
-desk-agent app create — clone the Desk app scaffold into a new chat-artifact
+roomy-agent app create — clone the Roomy app scaffold into a new chat-artifact
 app directory. The result is a self-contained Vite project with
 node_modules/ pre-installed, ready to \`npm run verify\`.
 
@@ -17,7 +17,7 @@ Required:
 
 Optional:
   --template <path>    Override the default scaffold source. Defaults to
-                       \`/opt/desk-template/app\`. Use only for tests.
+                       \`/opt/roomy-template/app\`. Use only for tests.
 
 The new app is created at:
   ~/.chats/<chatId>/artifacts/<name>.app/
@@ -44,7 +44,7 @@ export async function run(argv: string[]): Promise<void> {
   if (typeof chatId !== "string" || !chatId) {
     throw new CliError("INVALID_ARGS", "Missing --chat <id>. Usage:\n" + usage);
   }
-  const currentChatId = process.env.DESK_CHAT_ID;
+  const currentChatId = process.env.ROOMY_CHAT_ID;
   if (currentChatId && chatId !== currentChatId) {
     throw new CliError(
       "WRONG_CHAT",
@@ -70,7 +70,7 @@ export async function run(argv: string[]): Promise<void> {
   const templatePath =
     typeof templateOverride === "string" && templateOverride
       ? templateOverride
-      : process.env.DESK_APP_TEMPLATE ?? "/opt/desk-template/app";
+      : process.env.ROOMY_APP_TEMPLATE ?? "/opt/roomy-template/app";
 
   await assertDirectory(templatePath, "TEMPLATE_NOT_FOUND");
 
@@ -129,7 +129,7 @@ async function pathExists(p: string): Promise<boolean> {
 async function substituteName(appDir: string, name: string): Promise<void> {
   // Files that contain `__APP_NAME__` placeholders. Keep this list narrow —
   // a blanket recursive replace would risk touching node_modules content.
-  const targets = ["desk.app.json", "package.json", "README.md"];
+  const targets = ["roomy.app.json", "package.json", "README.md"];
   for (const rel of targets) {
     const file = path.join(appDir, rel);
     let contents: string;

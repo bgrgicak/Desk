@@ -11,9 +11,9 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, runMigrations, queries, hashPassword } from "@agent-desk/db";
-import { ensureLayout, type StorageContext } from "@agent-desk/storage";
-import { generateId } from "@agent-desk/shared";
+import { Pool, runMigrations, queries, hashPassword } from "@roomy-ai/db";
+import { ensureLayout, type StorageContext } from "@roomy-ai/storage";
+import { generateId } from "@roomy-ai/shared";
 import {
   buildSendMessageBodyFromForm,
   sendMessage,
@@ -28,14 +28,14 @@ let agentId: string;
 let storage: StorageContext;
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-chat-goals-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-chat-goals-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-chat-goals-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-chat-goals-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
   storage = { pool, home };
 
   userId = generateId("user");
@@ -72,7 +72,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 async function freshChat(): Promise<string> {

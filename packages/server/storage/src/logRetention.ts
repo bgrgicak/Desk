@@ -5,7 +5,7 @@ import { trashDir } from "./layout.js";
 /**
  * Walks every workspace's `.chats/{chatId}/logs/` directory and enforces
  * a per-chat retention cap. Oldest files beyond `maxFiles` are moved to
- * `~/Desk/.trash/logs/` (matching the trash-on-delete convention used
+ * `~/Roomy/.trash/logs/` (matching the trash-on-delete convention used
  * elsewhere). Returns the total number of files evicted.
  *
  * Retention is per-chat, not global, so a chat with a lot of activity
@@ -26,7 +26,7 @@ export async function enforceLogRetention(
   } catch {
     return { scanned: 0, evicted: 0 };
   }
-  // Workspaces sit directly under $DESK_HOME with non-dot slugs. Skip the
+  // Workspaces sit directly under $ROOMY_HOME with non-dot slugs. Skip the
   // legacy `workspaces/` parent in case migration left it behind.
   const workspaceSlugs = entries
     .filter((e) => e.isDirectory() && !e.name.startsWith(".") && e.name !== "workspaces")

@@ -1,4 +1,4 @@
--- Per-Desk-chat opencode-serve session.
+-- Per-Roomy-chat opencode-serve session.
 --
 -- Each chat owns one long-lived opencode session that turns are appended
 -- to. Threads are themselves chats (see 0036), so each thread gets its

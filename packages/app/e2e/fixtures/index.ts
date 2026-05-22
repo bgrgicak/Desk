@@ -27,7 +27,7 @@ interface Handle {
 }
 
 function readHandle(): Handle {
-  const file = path.join(os.tmpdir(), "desk-app-e2e-handle.json");
+  const file = path.join(os.tmpdir(), "roomy-app-e2e-handle.json");
   const raw = fs.readFileSync(file, "utf8");
   return JSON.parse(raw) as Handle;
 }
@@ -35,8 +35,8 @@ function readHandle(): Handle {
 /**
  * Playwright `test` extended with server URL + auth helpers.
  *
- * The disposable desk-server is started once by `globalSetup` and its URL
- * is persisted in /tmp/desk-app-e2e-handle.json. Each test gets a fresh
+ * The disposable roomy-server is started once by `globalSetup` and its URL
+ * is persisted in /tmp/roomy-app-e2e-handle.json. Each test gets a fresh
  * login token.
  */
 export const test = base.extend<Fixtures>({

@@ -1,6 +1,6 @@
 import { basename } from "node:path/posix";
 import { type Pool, transact } from "../pool.js";
-import type { Message } from "@agent-desk/shared";
+import type { Message } from "@roomy-ai/shared";
 import {
   bumpIsoAbove,
   MAX_REQUEUE_ATTEMPTS,

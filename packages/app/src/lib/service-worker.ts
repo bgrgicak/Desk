@@ -83,7 +83,7 @@ async function promptForUpdate(worker: ServiceWorker): Promise<void> {
   // bundle was built). Ask the waiting worker for its own VERSION constant
   // so the toast can name the new version the user is upgrading to.
   const newVersion = await fetchWorkerVersion(worker)
-  toast('A new version of Desk is available', {
+  toast('A new version of Roomy is available', {
     id: 'sw-update', // de-dupe in case updatefound fires twice
     description: newVersion
       ? `Reload to update from ${__APP_VERSION__} to ${newVersion}.`

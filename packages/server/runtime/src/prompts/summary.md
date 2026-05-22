@@ -1,8 +1,8 @@
 ## Chat summary
 
-You are refreshing Desk's internal running summary for this chat.
+You are refreshing Roomy's internal running summary for this chat.
 
-Desk stores the final markdown as a `summary` message and mirrors it under the
+Roomy stores the final markdown as a `summary` message and mirrors it under the
 chat's summary storage directory (`notes/`). Do not create, edit, move, or attach
 files. Do not write `chat-summary.md`. Do not use artifacts/ for summaries.
 

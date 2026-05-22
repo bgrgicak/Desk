@@ -10,7 +10,7 @@ function renderChip(element: React.ReactNode): string {
 
 describe('EntityChip', () => {
   it('renders workspace chips as real links', () => {
-    const markup = renderChip(<EntityChip kind="workspace" id="wks_123" title="Desk" />)
+    const markup = renderChip(<EntityChip kind="workspace" id="wks_123" title="Roomy" />)
 
     expect(markup).toContain('<a')
     expect(markup).toContain('href="/w/wks_123/pinned"')

@@ -1,21 +1,21 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type Pool } from "@agent-desk/db";
-import { queries } from "@agent-desk/db";
+import { type Pool } from "@roomy-ai/db";
+import { queries } from "@roomy-ai/db";
 import {
   AppManifestSchema,
   FragmentManifestSchema,
   NotFoundError,
   type AppManifest,
   type FragmentManifest,
-} from "@agent-desk/shared";
+} from "@roomy-ai/shared";
 import {
   workspaceRootPath,
   loadGitignoreFrame,
   isGitIgnored,
   type IgnoreFrame,
   type StorageContext,
-} from "@agent-desk/storage";
+} from "@roomy-ai/storage";
 
 export interface SearchResult {
   type: "file" | "chat" | "message";
@@ -127,8 +127,8 @@ function classifyFileKind(relPath: string): { kind: SearchKind; chatId: string |
 }
 
 function libraryItemKindForPath(relPath: string): LibraryItemSearchResult["kind"] {
-  if (relPath.endsWith("/desk.app.json")) return "app";
-  if (relPath.endsWith("/desk.fragment.json")) return "fragment";
+  if (relPath.endsWith("/roomy.app.json")) return "app";
+  if (relPath.endsWith("/roomy.fragment.json")) return "fragment";
   const ext = path.extname(relPath).toLowerCase();
   return ext === ".md" || ext === ".markdown" || ext === ".txt" ? "note" : "doc";
 }
@@ -432,11 +432,11 @@ export async function findLibraryItems(
     results.push(result);
   }
 
-  // Global apps live at ${DESK_HOME}/.apps/ on the host and are mounted at
-  // /opt/desk-apps/ inside every sandbox. They appear in every workspace's
-  // library — agents reach them through the same `desk-agent find library`
+  // Global apps live at ${ROOMY_HOME}/.apps/ on the host and are mounted at
+  // /opt/roomy-apps/ inside every sandbox. They appear in every workspace's
+  // library — agents reach them through the same `roomy-agent find library`
   // pathway as user-authored apps and attach them with the same
-  // `desk-agent chat attach-artifact <path>` command using the in-sandbox
+  // `roomy-agent chat attach-artifact <path>` command using the in-sandbox
   // path embedded in the hit.
   const globalItems = await collectGlobalAppLibraryItems(storage, query);
   for (const item of globalItems) {
@@ -454,8 +454,8 @@ export async function findLibraryItems(
 /** Sentinel slug used on `LibraryItemSearchResult.workspaceSlug` for global apps.
  *  Built-ins aren't workspace-scoped; this lets the result shape stay uniform
  *  while still being distinguishable from any real workspace slug. */
-const GLOBAL_APPS_SLUG = "_desk_apps";
-const GLOBAL_APPS_SANDBOX_PREFIX = "/opt/desk-apps";
+const GLOBAL_APPS_SLUG = "_roomy_apps";
+const GLOBAL_APPS_SANDBOX_PREFIX = "/opt/roomy-apps";
 const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
 
 function matchesQuery(query: string, name: string, description: string): boolean {
@@ -483,7 +483,7 @@ async function collectGlobalAppLibraryItems(
     const appDir = path.join(appsRoot, entry);
     const appStat = await fs.stat(appDir).catch(() => null);
     if (!appStat?.isDirectory()) continue;
-    const appManifest = await readManifest(path.join(appDir, "desk.app.json"), "app") as AppManifest | null;
+    const appManifest = await readManifest(path.join(appDir, "roomy.app.json"), "app") as AppManifest | null;
     if (!appManifest) continue;
     const appLastModified = new Date(appStat.mtimeMs).toISOString();
     const appDescription = appManifest.description ?? "";
@@ -512,7 +512,7 @@ async function collectGlobalAppLibraryItems(
       const fragmentStat = await fs.stat(fragmentDir).catch(() => null);
       if (!fragmentStat?.isDirectory()) continue;
       const fragmentManifest = await readManifest(
-        path.join(fragmentDir, "desk.fragment.json"),
+        path.join(fragmentDir, "roomy.fragment.json"),
         "fragment",
       ) as FragmentManifest | null;
       if (!fragmentManifest) continue;

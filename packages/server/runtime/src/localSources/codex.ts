@@ -22,7 +22,7 @@ import type { LocalSource, LocalSourceStatus } from "./types.js";
 
 /** Resolves the host's `~/.codex/auth.json` path. Override-able for tests. */
 export function defaultCodexAuthPath(): string {
-  if (process.env.DESK_CODEX_AUTH_PATH) return process.env.DESK_CODEX_AUTH_PATH;
+  if (process.env.ROOMY_CODEX_AUTH_PATH) return process.env.ROOMY_CODEX_AUTH_PATH;
   return path.join(os.homedir(), ".codex", "auth.json");
 }
 

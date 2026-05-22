@@ -88,7 +88,7 @@ describe('isMessageVisible', () => {
   it('keeps structured skill/read payloads with error words developer-only', () => {
     const skillPayload = message({
       type: 'events',
-      log: [{ kind: 'stderr', line: '<path>/home/agent/.config/pi/skills/desk-goal-app/SKILL.md</path> <type>file</type> <content>error handling notes</content>' }],
+      log: [{ kind: 'stderr', line: '<path>/home/agent/.config/pi/skills/roomy-goal-app/SKILL.md</path> <type>file</type> <content>error handling notes</content>' }],
     })
 
     expect(isMessageVisible(skillPayload, false)).toBe(false)
@@ -99,7 +99,7 @@ describe('isMessageVisible', () => {
   it('keeps escaped structured skill payloads with error words developer-only', () => {
     const skillPayload = message({
       type: 'events',
-      log: [{ kind: 'stderr', line: '&lt;skill_content name="desk-cli-task-schedule"&gt;failure modes and error handling&lt;/skill_content&gt;' }],
+      log: [{ kind: 'stderr', line: '&lt;skill_content name="roomy-cli-task-schedule"&gt;failure modes and error handling&lt;/skill_content&gt;' }],
     })
 
     expect(isMessageVisible(skillPayload, false)).toBe(false)
@@ -390,7 +390,7 @@ describe('findFailedOrDiagnosticAgentTurn', () => {
             type: 'tool',
             part: {
               tool: 'skill',
-              content: '<skill_content name="desk-cli-task-schedule">failure modes and error handling</skill_content>',
+              content: '<skill_content name="roomy-cli-task-schedule">failure modes and error handling</skill_content>',
             },
           },
         }],
@@ -410,7 +410,7 @@ describe('findFailedOrDiagnosticAgentTurn', () => {
         type: 'events',
         log: [
           { kind: 'event', event: { type: 'tool', part: { tool: 'skill' } } },
-          { kind: 'unparsed', line: '<skill_content name="desk-goal-app">reference text</skill_content>' },
+          { kind: 'unparsed', line: '<skill_content name="roomy-goal-app">reference text</skill_content>' },
         ],
       }, { role: 'agent', id: '3' }),
     ]
@@ -427,7 +427,7 @@ describe('findFailedOrDiagnosticAgentTurn', () => {
       message({
         type: 'events',
         log: [
-          { kind: 'stderr', line: '<path>/home/agent/.config/pi/skills/desk-goal-app/SKILL.md</path> <type>file</type> <content>failure modes and error handling</content>' },
+          { kind: 'stderr', line: '<path>/home/agent/.config/pi/skills/roomy-goal-app/SKILL.md</path> <type>file</type> <content>failure modes and error handling</content>' },
         ],
       }, { role: 'agent', id: '3' }),
     ]
@@ -444,7 +444,7 @@ describe('findFailedOrDiagnosticAgentTurn', () => {
       message({
         type: 'events',
         log: [
-          { kind: 'stderr', line: '&lt;skill_content name="desk-goal-app"&gt;failure modes and error handling&lt;/skill_content&gt;' },
+          { kind: 'stderr', line: '&lt;skill_content name="roomy-goal-app"&gt;failure modes and error handling&lt;/skill_content&gt;' },
         ],
       }, { role: 'agent', id: '3' }),
     ]

@@ -6,7 +6,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { generateOpenApiSpec } from "../openapi.js";
-import { withModule } from "@agent-desk/shared/logger";
+import { withModule } from "@roomy-ai/shared/logger";
 const log = withModule("api/scripts/dump-openapi");
 
 const spec = generateOpenApiSpec();

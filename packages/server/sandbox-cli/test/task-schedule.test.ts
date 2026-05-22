@@ -16,7 +16,7 @@ beforeEach(() => {
   postJsonMock.mockResolvedValue({ id: "msg_x" });
 });
 
-describe("desk-agent task schedule", () => {
+describe("roomy-agent task schedule", () => {
   it("posts a manual task (no schedule) with chat + content", async () => {
     await run(["--chat", "ch_a", "buy", "milk"]);
     expect(postJsonMock).toHaveBeenCalledWith("/sandbox/messages", {

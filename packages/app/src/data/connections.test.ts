@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { LOCAL_FILESYSTEM_CONNECTION_KIND } from '@agent-desk/shared'
+import { LOCAL_FILESYSTEM_CONNECTION_KIND } from '@roomy-ai/shared'
 import {
   MODEL_CONNECTION_KINDS,
   isModelConnectionKind,

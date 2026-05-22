@@ -21,7 +21,7 @@ import {
   RadioGroup,
   RadioGroupItem,
   Calendar as CalendarPicker,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import type { Task } from '@/data/ui-types'
 import { StatusBadge } from './task-badges'
 import { buildCron, type Unit, type ScheduleParams } from './schedule-utils'

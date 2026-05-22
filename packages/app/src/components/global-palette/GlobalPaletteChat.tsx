@@ -73,7 +73,7 @@ export function GlobalPaletteChat() {
               key={m.id}
               message={toServerMessage(m)}
               isFirstInGroup={i === 0 || visibleMessages[i - 1].role !== m.role}
-              agentName="Desk AI"
+              agentName="Roomy AI"
               developerMode={developerMode}
             />
           ))}

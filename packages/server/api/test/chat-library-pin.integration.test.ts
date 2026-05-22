@@ -14,11 +14,11 @@ import * as net from "node:net";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, queries, hashPassword } from "@agent-desk/db";
-import { ensureLayout } from "@agent-desk/storage";
-import { createRunManager } from "@agent-desk/scheduler";
-import { generateId } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, queries, hashPassword } from "@roomy-ai/db";
+import { ensureLayout } from "@roomy-ai/storage";
+import { createRunManager } from "@roomy-ai/scheduler";
+import { generateId } from "@roomy-ai/shared";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
 import { clearConnections } from "../src/ws/registry.js";
@@ -133,19 +133,19 @@ async function writeLibraryFile(slug: string, relPath: string, body: string): Pr
 async function writeLibraryApp(slug: string, relPath: string): Promise<string> {
   const abs = path.join(home, slug, relPath);
   await fs.mkdir(abs, { recursive: true });
-  await fs.writeFile(path.join(abs, "desk.app.json"), JSON.stringify({ name: path.basename(relPath, ".app") }));
+  await fs.writeFile(path.join(abs, "roomy.app.json"), JSON.stringify({ name: path.basename(relPath, ".app") }));
   return relPath.split(path.sep).join("/");
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-chat-library-pin-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-chat-library-pin-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-chat-library-pin-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-chat-library-pin-"));
   await ensureLayout(home);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 
   const runManager = createRunManager({
     pool,
@@ -168,7 +168,7 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
-  delete process.env.DESK_HOME;
+  delete process.env.ROOMY_HOME;
 });
 
 describe("POST /chats/:id/library-refs", () => {
@@ -234,7 +234,7 @@ describe("POST /chats/:id/library-refs", () => {
     expect(pinnedApps[0]).toMatchObject({
       path: `.chats/${chatId}/attachments/demo.app`,
       kind: "attachment",
-      mime: "application/vnd.desk.app+directory",
+      mime: "application/vnd.roomy.app+directory",
       isDir: true,
     });
   });

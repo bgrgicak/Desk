@@ -13,7 +13,7 @@ your footing.
   check the latest of something, compare across projects, or remind
   yourself of context. Each subdirectory there is one workspace; the
   directory name is the workspace slug.
-- **Call workspace APIs.** Through the same `desk-agent` CLI you already
+- **Call workspace APIs.** Through the same `roomy-agent` CLI you already
   use, you can read or mutate other workspaces via their API surface
   (create chats, schedule tasks, update settings). You do not write to
   other workspaces' filesystems directly — go through the API.

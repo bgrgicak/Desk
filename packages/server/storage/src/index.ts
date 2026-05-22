@@ -8,7 +8,7 @@ export {
   chatAttachmentsDir,
   chatArtifactsDir,
   chatsDir,
-  resolveDeskHome,
+  resolveRoomyHome,
   resolveHostPath,
   tmpDir,
   trashDir,

@@ -3,12 +3,12 @@
 // next to the bundled JS so the built artifact is self-contained.
 //
 // - `src/prompts/**` → `dist/prompts/**`  (read by `prompt.ts`)
-// - `../sandbox-cli/skill.md` → `dist/sandbox-cli-skill.md`  (materialized as Desk skills)
-// - `../../app-scaffold/AGENTS.md` → `dist/app-scaffold-agents.md`  (the desk-app-scaffold skill body)
-// - `src/app-storage-skill.md` → `dist/app-storage-skill.md`  (the desk-app-storage skill body)
-// - `src/skills/persistence.md` → `dist/persistence-skill.md`  (the desk-persistence skill body)
+// - `../sandbox-cli/skill.md` → `dist/sandbox-cli-skill.md`  (materialized as Roomy skills)
+// - `../../app-scaffold/AGENTS.md` → `dist/app-scaffold-agents.md`  (the roomy-app-scaffold skill body)
+// - `src/app-storage-skill.md` → `dist/app-storage-skill.md`  (the roomy-app-storage skill body)
+// - `src/skills/persistence.md` → `dist/persistence-skill.md`  (the roomy-persistence skill body)
 //
-// Source-mode (tsx / vitest with the `@agent-desk/dev` export condition)
+// Source-mode (tsx / vitest with the `@roomy-ai/dev` export condition)
 // reads these files from `src/` and `../sandbox-cli/` directly; the dist
 // copies exist only for shipped builds.
 
@@ -60,18 +60,18 @@ const persistenceSkillDest = path.join(runtimeRoot, "dist", "persistence-skill.m
 fs.mkdirSync(path.dirname(persistenceSkillDest), { recursive: true });
 fs.copyFileSync(persistenceSkillSrc, persistenceSkillDest);
 
-// Mirror the @agent-desk/desk-apps source tree into dist/desk-apps/ so the
+// Mirror the @roomy-ai/apps source tree into dist/roomy-apps/ so the
 // built runtime artifact is self-contained. `writeBuiltinApps` reads from
 // this location in built mode (and from the workspace path in source mode).
-const deskAppsSrc = path.resolve(runtimeRoot, "..", "..", "desk-apps");
-const deskAppsDest = path.join(runtimeRoot, "dist", "desk-apps");
-fs.rmSync(deskAppsDest, { recursive: true, force: true });
-if (fs.existsSync(deskAppsSrc)) {
+const roomyAppsSrc = path.resolve(runtimeRoot, "..", "..", "apps");
+const roomyAppsDest = path.join(runtimeRoot, "dist", "roomy-apps");
+fs.rmSync(roomyAppsDest, { recursive: true, force: true });
+if (fs.existsSync(roomyAppsSrc)) {
   // Only copy `*.app/` directories — skip package.json, scripts/, README.
-  for (const entry of fs.readdirSync(deskAppsSrc)) {
+  for (const entry of fs.readdirSync(roomyAppsSrc)) {
     if (!entry.endsWith(".app")) continue;
-    const entryStat = fs.statSync(path.join(deskAppsSrc, entry));
+    const entryStat = fs.statSync(path.join(roomyAppsSrc, entry));
     if (!entryStat.isDirectory()) continue;
-    copyTree(path.join(deskAppsSrc, entry), path.join(deskAppsDest, entry));
+    copyTree(path.join(roomyAppsSrc, entry), path.join(roomyAppsDest, entry));
   }
 }

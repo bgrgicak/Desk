@@ -1,7 +1,7 @@
 import { memo, useState, type MouseEvent, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { ChevronRight, FileText, Folder, Wrench, AlertTriangle, Paperclip, ListTodo, Reply, MessagesSquare, Copy, ThumbsUp, ThumbsDown, Check } from 'lucide-react'
-import { cn } from '@agent-desk/ui'
+import { cn } from '@roomy-ai/ui'
 import type { AgentEvent, AgentLogEntry, AttachmentRef, MessageContent, ServerMessage } from '@/store/types'
 import { appAttachmentToPreview } from '@/components/context/AppPreview'
 import { getRelativeTime } from '@/data/ui-types'
@@ -623,7 +623,7 @@ function ArtifactRefRow({ workspaceId, chatId, path, name, mime, params, onClick
       onDelete={handleDelete}
     />
   )
-  // Global app previews (path starts with /opt/desk-apps/) don't need a
+  // Global app previews (path starts with /opt/roomy-apps/) don't need a
   // workspaceId — only a chatId — so allow rendering without workspaceId
   // in that case. Other previews still require a workspaceId.
   const isGlobalPreviewPath = appAttachmentToPreview(path)?.scope === 'global'
@@ -1065,7 +1065,7 @@ function CollapsibleChip({
 
 function translateSandboxPaths(text: string, workspacePath?: string): string {
   if (!workspacePath) return text
-  return text.replaceAll('/home/agent', `~/Desk/${workspacePath}`)
+  return text.replaceAll('/home/agent', `~/Roomy/${workspacePath}`)
 }
 
 /** Extract the most relevant file path from a tool_use event's input object. */

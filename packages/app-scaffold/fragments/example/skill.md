@@ -1,17 +1,17 @@
 # Example fragment
 
-A placeholder fragment shipped with the Desk app scaffold. It demonstrates
+A placeholder fragment shipped with the Roomy app scaffold. It demonstrates
 the standalone-fragment shape (single root component, mounted at `#root`)
 without doing anything useful.
 
 ## Behavior
 
 - Shows a "Clicked N times" button and a Reset button.
-- All state is local React state — no Desk API calls.
+- All state is local React state — no Roomy API calls.
 
 ## Capabilities
 
-None. This fragment doesn't talk to the Desk API.
+None. This fragment doesn't talk to the Roomy API.
 
 ## Storage contract
 

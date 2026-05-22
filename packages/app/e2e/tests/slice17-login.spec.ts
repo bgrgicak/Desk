@@ -17,7 +17,7 @@ async function simulateSignedOut(page: import("@playwright/test").Page): Promise
   await page.goto(APP_URL);
   await page.evaluate(() => {
     try {
-      sessionStorage.removeItem('desk.session.token');
+      sessionStorage.removeItem('roomy.session.token');
     } catch { /* ignore */ }
   });
   await page.reload();

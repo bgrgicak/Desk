@@ -14,7 +14,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ensureLayout, ensureWorkspaceLayout } from "@agent-desk/storage";
+import { ensureLayout, ensureWorkspaceLayout } from "@roomy-ai/storage";
 import { createOrReuse, stopSandbox, sandboxImage } from "../../src/docker.js";
 import { listModels } from "../../src/models.js";
 import { execInSandbox } from "../../src/sandboxExec.js";
@@ -31,7 +31,7 @@ try {
 }
 // Pi requires at least one authenticated provider to list any models.
 // Any test API key suffices; the listing itself is local to the sandbox.
-const TEST_PROVIDER_KEY = process.env.DESK_TEST_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
+const TEST_PROVIDER_KEY = process.env.ROOMY_TEST_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
 if (!TEST_PROVIDER_KEY) SKIP = true;
 const describeIf = SKIP ? describe.skip : describe;
 
@@ -41,16 +41,16 @@ const testWorkspaceSlug = "models-int-test";
 
 beforeAll(async () => {
   if (SKIP) return;
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-models-int-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-models-int-"));
   await ensureLayout(home);
   await ensureWorkspaceLayout(home, testWorkspaceSlug);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 });
 
 afterAll(async () => {
   if (SKIP) return;
   if (engineForSetup) {
-    await engineForSetup.remove(`desk-sandbox-${testWorkspaceId}`, true).catch(() => {});
+    await engineForSetup.remove(`roomy-sandbox-${testWorkspaceId}`, true).catch(() => {});
   }
   if (home) await rmTempTree(home);
 });

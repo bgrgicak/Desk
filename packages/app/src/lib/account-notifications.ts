@@ -27,11 +27,11 @@ export const NOTIFICATIONS_DEFAULTS: NotificationsShape = {
 }
 
 export function notificationsKey(userId: string): string {
-  return `desk.notifications.${userId}`
+  return `roomy.notifications.${userId}`
 }
 
 export function desktopNotificationPromptOfferedKey(userId: string): string {
-  return `desk.notifications.desktopPromptOffered.${userId}`
+  return `roomy.notifications.desktopPromptOffered.${userId}`
 }
 
 export function loadNotifications(userId: string | undefined): NotificationsShape {
@@ -145,7 +145,7 @@ function openChatNotification(chatId: string, workspaceId?: string | null, messa
 function showNotification(msg: ServerMessage, workspaceId?: string | null, chatTitle?: string | null): void {
   const notification = new Notification(chatNotificationTitle(chatTitle), {
     body: messagePreview(msg),
-    tag: `desk-chat-${msg.chatId}`,
+    tag: `roomy-chat-${msg.chatId}`,
   })
   notification.onclick = (event) => {
     event.preventDefault()

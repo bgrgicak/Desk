@@ -1,10 +1,10 @@
 {
-  "name": "@agent-desk/sandbox-cli",
+  "name": "@roomy-ai/sandbox-cli",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "bin": {
-    "desk-agent": "dist/desk.js"
+    "roomy-agent": "dist/roomy.js"
   },
   "scripts": {
     "build": "node build.mjs",

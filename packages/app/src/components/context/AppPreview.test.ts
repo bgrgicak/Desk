@@ -13,28 +13,28 @@ import {
 describe('parseChatAppManifestPath', () => {
   it('extracts the chatId + appName from a chat-artifact manifest path', () => {
     expect(
-      parseChatAppManifestPath('.chats/cht_abc/artifacts/my-app.app/desk.app.json'),
+      parseChatAppManifestPath('.chats/cht_abc/artifacts/my-app.app/roomy.app.json'),
     ).toEqual({ chatId: 'cht_abc', appName: 'my-app' })
   })
 
   it('rejects paths that point at the directory or other files', () => {
     expect(parseChatAppManifestPath('.chats/cht_abc/artifacts/my-app.app')).toBeNull()
     expect(parseChatAppManifestPath('.chats/cht_abc/artifacts/notes.md')).toBeNull()
-    expect(parseChatAppManifestPath('my-app.app/desk.app.json')).toBeNull()
+    expect(parseChatAppManifestPath('my-app.app/roomy.app.json')).toBeNull()
   })
 })
 
 describe('parseLibraryAppManifestPath', () => {
   it('extracts the appName at the workspace root', () => {
-    expect(parseLibraryAppManifestPath('todo.app/desk.app.json'))
+    expect(parseLibraryAppManifestPath('todo.app/roomy.app.json'))
       .toEqual({ appName: 'todo' })
   })
   it('extracts the appName under a subfolder', () => {
-    expect(parseLibraryAppManifestPath('Projects/Q2/todo.app/desk.app.json'))
+    expect(parseLibraryAppManifestPath('Projects/Q2/todo.app/roomy.app.json'))
       .toEqual({ appName: 'todo' })
   })
   it('rejects chat-artifact paths', () => {
-    expect(parseLibraryAppManifestPath('.chats/cht_x/artifacts/my-app.app/desk.app.json'))
+    expect(parseLibraryAppManifestPath('.chats/cht_x/artifacts/my-app.app/roomy.app.json'))
       .toBeNull()
   })
 })
@@ -51,7 +51,7 @@ describe('parseLibraryAppDirPath', () => {
   })
   it('rejects paths that aren\'t `.app/` directories', () => {
     expect(parseLibraryAppDirPath('todo.txt')).toBeNull()
-    expect(parseLibraryAppDirPath('todo.app/desk.app.json')).toBeNull()
+    expect(parseLibraryAppDirPath('todo.app/roomy.app.json')).toBeNull()
   })
 })
 
@@ -61,7 +61,7 @@ describe('parseChatAppDirPath', () => {
       .toEqual({ chatId: 'cht_abc', appName: 'todo' })
   })
   it('rejects manifest-suffixed paths', () => {
-    expect(parseChatAppDirPath('.chats/cht_abc/artifacts/todo.app/desk.app.json'))
+    expect(parseChatAppDirPath('.chats/cht_abc/artifacts/todo.app/roomy.app.json'))
       .toBeNull()
   })
 })
@@ -72,7 +72,7 @@ describe('appAttachmentToPreview', () => {
       .toEqual({ scope: 'chat', chatId: 'cht_a', appName: 'todo' })
   })
   it('routes chat manifest paths to the chat scope', () => {
-    expect(appAttachmentToPreview('.chats/cht_a/artifacts/todo.app/desk.app.json'))
+    expect(appAttachmentToPreview('.chats/cht_a/artifacts/todo.app/roomy.app.json'))
       .toEqual({ scope: 'chat', chatId: 'cht_a', appName: 'todo' })
   })
   it('routes library dir paths to the library scope', () => {
@@ -80,7 +80,7 @@ describe('appAttachmentToPreview', () => {
       .toEqual({ scope: 'library', appName: 'todo', appPath: 'todo.app' })
   })
   it('routes library manifest paths to the library scope', () => {
-    expect(appAttachmentToPreview('Projects/todo.app/desk.app.json'))
+    expect(appAttachmentToPreview('Projects/todo.app/roomy.app.json'))
       .toEqual({ scope: 'library', appName: 'todo', appPath: 'Projects/todo.app' })
   })
   it('routes chat-fragment paths to the chat scope with fragment set', () => {
@@ -98,47 +98,47 @@ describe('appAttachmentToPreview', () => {
     expect(appAttachmentToPreview('.chats/cht_a/attachments/photo.png')).toBeNull()
   })
 
-  it('routes /opt/desk-apps/<name>.app/dist/fragments/<frag> to the global scope', () => {
+  it('routes /opt/roomy-apps/<name>.app/dist/fragments/<frag> to the global scope', () => {
     expect(
-      appAttachmentToPreview('/opt/desk-apps/chat-forms.app/dist/fragments/yes-no'),
+      appAttachmentToPreview('/opt/roomy-apps/chat-forms.app/dist/fragments/yes-no'),
     ).toEqual({ scope: 'global', appName: 'chat-forms', fragment: 'yes-no' })
   })
 
-  it('routes /opt/desk-apps/<name>.app (app-only) to the global scope without a fragment', () => {
+  it('routes /opt/roomy-apps/<name>.app (app-only) to the global scope without a fragment', () => {
     expect(
-      appAttachmentToPreview('/opt/desk-apps/chat-forms.app'),
+      appAttachmentToPreview('/opt/roomy-apps/chat-forms.app'),
     ).toEqual({ scope: 'global', appName: 'chat-forms' })
   })
 })
 
 describe('parseGlobalAppPath', () => {
-  it('extracts fragment from /opt/desk-apps/<name>.app/dist/fragments/<frag>', () => {
+  it('extracts fragment from /opt/roomy-apps/<name>.app/dist/fragments/<frag>', () => {
     expect(
-      parseGlobalAppPath('/opt/desk-apps/chat-forms.app/dist/fragments/yes-no'),
+      parseGlobalAppPath('/opt/roomy-apps/chat-forms.app/dist/fragments/yes-no'),
     ).toEqual({ appName: 'chat-forms', fragment: 'yes-no' })
   })
 
-  it('extracts app from /opt/desk-apps/<name>.app even without dist/fragments tail', () => {
+  it('extracts app from /opt/roomy-apps/<name>.app even without dist/fragments tail', () => {
     expect(
-      parseGlobalAppPath('/opt/desk-apps/chat-forms.app'),
+      parseGlobalAppPath('/opt/roomy-apps/chat-forms.app'),
     ).toEqual({ appName: 'chat-forms' })
     expect(
-      parseGlobalAppPath('/opt/desk-apps/chat-forms.app/dist'),
+      parseGlobalAppPath('/opt/roomy-apps/chat-forms.app/dist'),
     ).toEqual({ appName: 'chat-forms' })
     expect(
-      parseGlobalAppPath('/opt/desk-apps/chat-forms.app/dist/index.html'),
+      parseGlobalAppPath('/opt/roomy-apps/chat-forms.app/dist/index.html'),
     ).toEqual({ appName: 'chat-forms' })
   })
 
-  it('rejects paths outside the /opt/desk-apps/ prefix', () => {
+  it('rejects paths outside the /opt/roomy-apps/ prefix', () => {
     expect(parseGlobalAppPath('chat-forms.app/dist/fragments/yes-no')).toBeNull()
-    expect(parseGlobalAppPath('/opt/desk-apps/notes/file.md')).toBeNull()
+    expect(parseGlobalAppPath('/opt/roomy-apps/notes/file.md')).toBeNull()
     expect(parseGlobalAppPath('.chats/cht_a/artifacts/chat-forms.app')).toBeNull()
   })
 
   it('rejects snake_case fragment names (URL matcher requires kebab-case)', () => {
     expect(
-      parseGlobalAppPath('/opt/desk-apps/chat-forms.app/dist/fragments/yes_no'),
+      parseGlobalAppPath('/opt/roomy-apps/chat-forms.app/dist/fragments/yes_no'),
     ).toBeNull()
   })
 })

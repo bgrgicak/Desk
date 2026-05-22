@@ -14,9 +14,9 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool, queries, runMigrations } from "@agent-desk/db";
-import { generateId } from "@agent-desk/shared";
-import { ensureWorkspaceLayout } from "@agent-desk/storage";
+import { Pool, queries, runMigrations } from "@roomy-ai/db";
+import { generateId } from "@roomy-ai/shared";
+import { ensureWorkspaceLayout } from "@roomy-ai/storage";
 import { detectEngine } from "../../src/engine.js";
 import { sandboxImage } from "../../src/docker.js";
 import { productionReflectWorkspace } from "../../src/reflectFn.js";
@@ -51,8 +51,8 @@ let agentId: string;
 
 beforeAll(async () => {
   if (SKIP) return;
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-reflect-runtime-"));
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-reflect-runtime-db-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-reflect-runtime-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-reflect-runtime-db-"));
   pool = new Pool({ path: path.join(dbDir, "test.sqlite3") });
   await runMigrations(pool);
   userId = generateId("user");

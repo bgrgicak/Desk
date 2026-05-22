@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 async function createSessionDir(): Promise<{ dir: string; file: string }> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-pi-session-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-pi-session-"));
   const file = path.join(dir, "session.jsonl");
   return { dir, file };
 }

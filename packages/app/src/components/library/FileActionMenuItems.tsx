@@ -7,7 +7,7 @@ import {
   PinOff,
   Trash2,
 } from 'lucide-react'
-import { DropdownMenuItem, DropdownMenuSeparator } from '@agent-desk/ui'
+import { DropdownMenuItem, DropdownMenuSeparator } from '@roomy-ai/ui'
 import { ShowInHomeMenuItem } from '@/components/shared/ShowInHomeMenuItem'
 import type { HomePinRef } from '@/hooks/use-home-pins'
 

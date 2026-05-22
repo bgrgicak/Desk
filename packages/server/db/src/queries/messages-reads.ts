@@ -1,5 +1,5 @@
 import type { Pool } from "../pool.js";
-import type { Message, TaskStatus } from "@agent-desk/shared";
+import type { Message, TaskStatus } from "@roomy-ai/shared";
 import {
   FULL_MESSAGE_SELECT,
   FULL_MESSAGE_SELECT_M,

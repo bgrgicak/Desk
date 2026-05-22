@@ -2,7 +2,7 @@ import { createReadStream } from "node:fs";
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
 import { extname as pathExtname, join as pathJoin, normalize as pathNormalize, sep as pathSep } from "node:path";
-import { workspaceRootPath } from "@agent-desk/storage";
+import { workspaceRootPath } from "@roomy-ai/storage";
 import * as appsRoutes from "../routes/apps.js";
 import { handleAppStorageRequest } from "../routes/app-storage.js";
 import * as chatRoutes from "../routes/chats.js";
@@ -120,9 +120,9 @@ export async function dispatchApps(
 
   // Global-scope variant: /apps/global/:chatId/:appName/dist/* and the
   // companion POST /apps/global/:chatId/:appName/issue. Resolves
-  // built-in apps from `${DESK_HOME}/.apps/` (populated by
-  // `writeBuiltinApps` from @agent-desk/desk-apps on server start) and
-  // mounted into every sandbox at `/opt/desk-apps/`.
+  // built-in apps from `${ROOMY_HOME}/.apps/` (populated by
+  // `writeBuiltinApps` from @roomy-ai/apps on server start) and
+  // mounted into every sandbox at `/opt/roomy-apps/`.
   if (segments[0] === "apps" && segments[1] === "global" && segments.length >= 4) {
     if (method === "POST" && segments.length === 5 && segments[4] === "issue") {
       const issuerId = await requireBearerForApps(pool, req);
@@ -200,7 +200,7 @@ export async function dispatchApps(
       return true;
     }
     // /apps/* is skipped by the global auth middleware; resolve the user
-    // here from Bearer header, ?token= query param, or desk-app-token cookie.
+    // here from Bearer header, ?token= query param, or roomy-app-token cookie.
     let appsUserId: string;
     {
       let tokenHeader = req.headers.authorization;
@@ -213,8 +213,8 @@ export async function dispatchApps(
           const cookieToken = cookieHeader
             .split(";")
             .map((c) => c.trim())
-            .find((c) => c.startsWith("desk-app-token="))
-            ?.slice("desk-app-token=".length);
+            .find((c) => c.startsWith("roomy-app-token="))
+            ?.slice("roomy-app-token=".length);
           if (cookieToken) tokenHeader = `Bearer ${decodeURIComponent(cookieToken)}`;
         }
       }
@@ -234,7 +234,7 @@ export async function dispatchApps(
     // the gate on every chunk. We re-enforce here so a user still on
     // the documented public seed credential cannot read app dist
     // payloads (which can carry vendored chunks of the rest of the
-    // app surface).  enforceMustChangePassword throws DeskError
+    // app surface).  enforceMustChangePassword throws RoomyError
     // (FORBIDDEN) on a gated user; the outer catch maps it to 403.
     await enforceMustChangePassword(pool, appsUserId, method, "/apps");
     await requireOwnedWorkspace(pool, wsId, appsUserId);
@@ -307,7 +307,7 @@ export async function dispatchApps(
 
     const appQueryToken = query.get("token");
     const appTokenCookie = appQueryToken
-      ? `desk-app-token=${encodeURIComponent(appQueryToken)}; HttpOnly; SameSite=Strict; Path=/api/apps/`
+      ? `roomy-app-token=${encodeURIComponent(appQueryToken)}; HttpOnly; SameSite=Strict; Path=/api/apps/`
       : null;
 
     try {

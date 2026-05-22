@@ -2,9 +2,9 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Pool } from "@agent-desk/db";
-import { runMigrations, queries } from "@agent-desk/db";
-import { generateId } from "@agent-desk/shared";
+import { Pool } from "@roomy-ai/db";
+import { runMigrations, queries } from "@roomy-ai/db";
+import { generateId } from "@roomy-ai/shared";
 import {
   createRunManager,
   runDailyReflection,
@@ -36,12 +36,12 @@ async function createMessage(chatId: string, role: "user" | "agent", text: strin
 }
 
 beforeAll(async () => {
-  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "desk-reflection-db-"));
+  const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-reflection-db-"));
   dbPath = path.join(dbDir, "test.sqlite3");
   pool = new Pool({ path: dbPath });
   await runMigrations(pool);
 
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-reflection-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-reflection-"));
 
   userId = generateId("user");
   await pool.query(
@@ -400,7 +400,7 @@ describe("runWorkspaceReflection", () => {
     // The agent file the reflection sandbox writes ends up with the
     // `model:` line passed via `input.agent.model`. Pi exposes
     // OAuth-authed OpenAI under the provider id `openai-codex`; `codex`
-    // is a Desk-side UI relabel. Without translation here the daemon
+    // is a Roomy-side UI relabel. Without translation here the daemon
     // resolves the agent against an unknown provider and 500s every
     // reflection.
     let captured: WorkspaceReflectionInput | null = null;

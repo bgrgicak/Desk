@@ -22,7 +22,7 @@ describe('inlineAppPreviewFor', () => {
 
   it('previews app manifest refs through the same app resolver', () => {
     expect(
-      inlineAppPreviewFor('task-list.app/desk.app.json', 'desk.app.json', 'application/json'),
+      inlineAppPreviewFor('task-list.app/roomy.app.json', 'roomy.app.json', 'application/json'),
     ).toEqual({ scope: 'library', appName: 'task-list', appPath: 'task-list.app' })
   })
 

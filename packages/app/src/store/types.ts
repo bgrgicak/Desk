@@ -9,17 +9,17 @@ import type {
   MessageState as SharedMessageState,
   User,
   Workspace,
-} from "@agent-desk/shared";
+} from "@roomy-ai/shared";
 
 /**
  * Server entity types — mirror of `packages/server/shared/src/entities.ts`.
- * Duplicated (not imported) because @agent-desk/app isn't in the server's
+ * Duplicated (not imported) because @roomy-ai/app isn't in the server's
  * TS path. Kept narrow: only the fields the UI actually reads.
  */
 
 // Re-export the shared envelope types so client code and server agree
 // by definition.  `MessageContent`, `MessageRole`, `MessageState`,
-// `AgentEvent` and `AgentLogEntry` all live in `@agent-desk/shared`
+// `AgentEvent` and `AgentLogEntry` all live in `@roomy-ai/shared`
 // alongside their Zod schemas; the app used to carry parallel
 // definitions that drifted from the shared ones (e.g. the app's
 // `MessageContentTextSchema` lacked the optional `goal` field).
@@ -30,7 +30,7 @@ export type AgentLogEntry = SharedAgentLogEntry;
 export type MessageContent = SharedMessageContent;
 
 /**
- * Server user type — re-exported from `@agent-desk/shared` so the
+ * Server user type — re-exported from `@roomy-ai/shared` so the
  * `mustChangePassword` flag (and any future fields) flow through to
  * the app without a parallel definition.  See UserSchema for the
  * source of truth.
@@ -39,7 +39,7 @@ export type ServerUser = User;
 
 /**
  * Server agent / workspace types — re-exported from
- * `@agent-desk/shared` so the API contract has a single source of
+ * `@roomy-ai/shared` so the API contract has a single source of
  * truth.  The `ServerWorkspaceAgent` membership row is server-side
  * only (no shared schema yet) since it pairs an Agent with its
  * workspace enrollment timestamp.
@@ -90,7 +90,7 @@ export interface WorkspaceConnectorGrant {
 }
 
 /**
- * Server chat type — re-exported from `@agent-desk/shared` so both
+ * Server chat type — re-exported from `@roomy-ai/shared` so both
  * sides of the API agree on the shape by definition (the same Zod
  * schema is parsed on the server and inferred here).  The list-meta
  * fields (kind / running / failed / lastMessage) are optional in the

@@ -6,7 +6,7 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
-} from '@agent-desk/ui'
+} from '@roomy-ai/ui'
 import { buildCron, describeCron, parseCron, type ScheduleParams, type Unit } from './schedule-utils'
 
 // ── Value & helpers ────────────────────────────────────────────────────────────

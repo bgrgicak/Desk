@@ -2,8 +2,8 @@ import { writeErrorAndExit } from "./errors.js";
 import { COMMANDS } from "./commands.js";
 
 /**
- * `desk` — the in-sandbox CLI used by the pi agent to call back into
- * the host desk-server. The only command today is `task schedule`; new
+ * `roomy-agent` — the in-sandbox CLI used by the pi agent to call back into
+ * the host roomy-server. The only command today is `task schedule`; new
  * commands plug in through COMMANDS as additional `<group> <action>`
  * entries.
  */
@@ -17,13 +17,13 @@ export function output(data: unknown): void {
 }
 
 async function printHelp(): Promise<void> {
-  const lines: string[] = ["Usage: desk <command> [options]", "", "Commands:"];
+  const lines: string[] = ["Usage: roomy-agent <command> [options]", "", "Commands:"];
   for (const loader of Object.values(COMMANDS)) {
     const cmd = await loader();
     lines.push(`  ${cmd.usage}`);
   }
   lines.push("");
-  lines.push("Run `desk-agent <command> --help` for full documentation.");
+  lines.push("Run `roomy-agent <command> --help` for full documentation.");
   process.stdout.write(lines.join("\n") + "\n");
 }
 

@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type Pool } from "@agent-desk/db";
+import { type Pool } from "@roomy-ai/db";
 import { resolveHostPath, workspaceRootPath } from "./layout.js";
 
 /**

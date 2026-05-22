@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ensureLayout, ensureWorkspaceLayout } from "@agent-desk/storage";
+import { ensureLayout, ensureWorkspaceLayout } from "@roomy-ai/storage";
 import { sandboxImage } from "../../src/docker.js";
 import { createDriver, type LogEvent } from "../../src/driver.js";
 import { detectEngine, type Engine } from "../../src/engine.js";
@@ -29,28 +29,28 @@ if (!CODEX_AUTH_ENV) SKIP = true;
 const describeIf = SKIP ? describe.skip : describe;
 
 let home: string;
-const originalDeskHome = process.env.DESK_HOME;
+const originalRoomyHome = process.env.ROOMY_HOME;
 const workspaceId = "wks_model_fallback_int";
 const workspaceSlug = "model-fallback-int";
 
 beforeAll(async () => {
   if (SKIP) return;
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-model-fallback-int-"));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-model-fallback-int-"));
   await ensureLayout(home);
   await ensureWorkspaceLayout(home, workspaceSlug);
-  process.env.DESK_HOME = home;
+  process.env.ROOMY_HOME = home;
 });
 
 afterAll(async () => {
   if (SKIP) return;
   if (engineForSetup) {
-    await engineForSetup.remove(`desk-sandbox-${workspaceId}`, true).catch(() => {});
+    await engineForSetup.remove(`roomy-sandbox-${workspaceId}`, true).catch(() => {});
   }
   if (home) await rmTempTree(home);
-  if (originalDeskHome === undefined) {
-    delete process.env.DESK_HOME;
+  if (originalRoomyHome === undefined) {
+    delete process.env.ROOMY_HOME;
   } else {
-    process.env.DESK_HOME = originalDeskHome;
+    process.env.ROOMY_HOME = originalRoomyHome;
   }
 });
 

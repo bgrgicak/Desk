@@ -1,5 +1,5 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
-import { ConflictError, ValidationError } from "@agent-desk/shared";
+import { ConflictError, ValidationError } from "@roomy-ai/shared";
 import * as libraryRoutes from "../routes/library.js";
 import { parseBody, sendJson } from "../http/io.js";
 import { parseMultipartFileStream } from "../http/multipart.js";

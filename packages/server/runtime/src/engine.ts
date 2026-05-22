@@ -7,7 +7,7 @@
  *     (rootlesskit owns one user namespace per uid). So a host that already
  *     runs `containerd-rootless` (e.g. nerdctl, Lima, k3s-rootless) cannot
  *     also start `dockerd-rootless`. Forcing docker as the only option
- *     turns those hosts into "Desk doesn't work here".
+ *     turns those hosts into "Roomy doesn't work here".
  *   - `docker` and `nerdctl` CLIs accept nearly identical flags for the
  *     operations we use (`run`, `exec`, `inspect`, `ps`, `image inspect`,
  *     `pull`, `top`, `stop`, `rm`, `info`). Wrapping them with one shared
@@ -18,7 +18,7 @@
  * handful of inspects — subprocess overhead is negligible vs the LLM call.
  *
  * Detection order (`detectEngine()`):
- *   1. `DESK_CONTAINER_ENGINE=docker|nerdctl` env override
+ *   1. `ROOMY_CONTAINER_ENGINE=docker|nerdctl` env override
  *   2. `docker info` returns 0 → docker
  *   3. `nerdctl info` (with `XDG_RUNTIME_DIR` populated) returns 0 → nerdctl
  *   4. throw with a message naming both binaries
@@ -29,11 +29,11 @@ import { execFile } from "node:child_process";
 import { PassThrough, type Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
-import { DeskError } from "@agent-desk/shared";
+import { RoomyError } from "@roomy-ai/shared";
 
 const execFileAsync = promisify(execFile);
 const ENGINE_COMMAND_TIMEOUT_MS = parseInt(
-  process.env.DESK_CONTAINER_ENGINE_TIMEOUT_MS ?? "10000",
+  process.env.ROOMY_CONTAINER_ENGINE_TIMEOUT_MS ?? "10000",
   10,
 );
 const REMOVE_IN_PROGRESS_POLL_MS = 100;
@@ -208,7 +208,7 @@ export class PortPublishConflictError extends Error {
   }
 }
 
-export class ContainerRuntimeUnavailableError extends DeskError {
+export class ContainerRuntimeUnavailableError extends RoomyError {
   constructor(message: string) {
     super("RUNTIME_UNAVAILABLE", message);
     this.name = "ContainerRuntimeUnavailableError";
@@ -439,7 +439,7 @@ class CliEngine implements Engine {
             .map((m) => `${m.Source}:${m.Destination}:${m.Mode || "rw"}`);
     // Image-id source-of-truth differs too. Docker exposes
     // .Image = "sha256:…" (the digest). nerdctl exposes the reference
-    // used at create time (e.g. "docker.io/desk/sandbox:v1"). Resolve
+    // used at create time (e.g. "docker.io/roomy/sandbox:v1"). Resolve
     // refs to digests so callers can compare against `imageId()`.
     let imageId = raw.Image;
     if (imageId && !imageId.startsWith("sha256:")) {
@@ -898,13 +898,13 @@ export function _resetEngineCache(): void {
 }
 
 /**
- * Pick the active engine for this host. Honors `DESK_CONTAINER_ENGINE` if
+ * Pick the active engine for this host. Honors `ROOMY_CONTAINER_ENGINE` if
  * set; otherwise probes docker first, then nerdctl, then throws.
  */
 export async function detectEngine(): Promise<Engine> {
   if (_engine) return _engine;
 
-  const override = process.env.DESK_CONTAINER_ENGINE as EngineName | undefined;
+  const override = process.env.ROOMY_CONTAINER_ENGINE as EngineName | undefined;
   const order: EngineName[] = override
     ? [override]
     : ["docker", "nerdctl"];
@@ -919,7 +919,7 @@ export async function detectEngine(): Promise<Engine> {
   }
   throw new ContainerRuntimeUnavailableError(
     `No container runtime available. Tried: ${errors.join(", ")}. ` +
-      `Install docker or nerdctl, or set DESK_CONTAINER_ENGINE.`,
+      `Install docker or nerdctl, or set ROOMY_CONTAINER_ENGINE.`,
   );
 }
 

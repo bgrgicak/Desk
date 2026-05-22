@@ -1,7 +1,7 @@
-import { type Pool } from "@agent-desk/db";
-import { queries } from "@agent-desk/db";
-import { NotFoundError } from "@agent-desk/shared";
-import type { Workspace, Agent, Chat, Message } from "@agent-desk/shared";
+import { type Pool } from "@roomy-ai/db";
+import { queries } from "@roomy-ai/db";
+import { NotFoundError } from "@roomy-ai/shared";
+import type { Workspace, Agent, Chat, Message } from "@roomy-ai/shared";
 
 /**
  * Ownership checks for per-request authorization. Each helper returns the

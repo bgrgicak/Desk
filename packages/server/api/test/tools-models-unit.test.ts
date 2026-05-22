@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@agent-desk/db", () => ({
+vi.mock("@roomy-ai/db", () => ({
   queries: {
     workspaces: {
       list: vi.fn(),
@@ -18,7 +18,7 @@ vi.mock("../src/providerKeys.js", () => ({
   resolveProviderKeys: vi.fn(),
 }));
 
-vi.mock("@agent-desk/runtime", () => ({
+vi.mock("@roomy-ai/runtime", () => ({
   listModels: vi.fn(),
   resolveLocalSourceEnv: vi.fn(async () => ({})),
   SandboxExecError: class SandboxExecError extends Error {
@@ -32,13 +32,13 @@ vi.mock("@agent-desk/runtime", () => ({
   },
 }));
 
-import { queries } from "@agent-desk/db";
+import { queries } from "@roomy-ai/db";
 import { resolveProviderKeys } from "../src/providerKeys.js";
-import { listModels as runtimeListModels } from "@agent-desk/runtime";
+import { listModels as runtimeListModels } from "@roomy-ai/runtime";
 import { listModels, expandOpenAiBySource } from "../src/routes/tools.js";
 
 const fakePool = {} as never;
-const fakeWorkspace = { id: "wks_test", path: "desk", user_id: "usr_1", name: "Desk" };
+const fakeWorkspace = { id: "wks_test", path: "roomy", user_id: "usr_1", name: "Roomy" };
 
 const FREE_MODELS = [
   { id: "anthropic/claude-haiku-4-5", provider: "anthropic" },
@@ -90,7 +90,7 @@ describe("listModels — decryption failure fallback", () => {
   });
 });
 
-describe("expandOpenAiBySource — pi's openai-codex/* → Desk's codex/* relabel", () => {
+describe("expandOpenAiBySource — pi's openai-codex/* → Roomy's codex/* relabel", () => {
   it("relabels openai-codex/* → codex/* and passes other providers through", () => {
     const models = [
       { id: "anthropic/claude-haiku-4-5", provider: "anthropic" },
@@ -101,7 +101,7 @@ describe("expandOpenAiBySource — pi's openai-codex/* → Desk's codex/* relabe
     ];
     const out = expandOpenAiBySource(models);
 
-    // openai-codex/* gets the Desk UI prefix; runtime translates it back.
+    // openai-codex/* gets the Roomy UI prefix; runtime translates it back.
     expect(out.find((m) => m.id === "codex/gpt-5.4")?.provider).toBe("codex");
     expect(out.find((m) => m.id === "codex/gpt-5.5")?.provider).toBe("codex");
     // The raw openai-codex/* entries are replaced, not duplicated.
@@ -143,7 +143,7 @@ describe("listModels — happy path", () => {
   it("re-IDs pi's openai-codex/* as 'codex/*' when only Codex auth is active", async () => {
     vi.mocked(queries.workspaces.list).mockResolvedValue([fakeWorkspace] as never);
     vi.mocked(resolveProviderKeys).mockResolvedValue({});
-    const { resolveLocalSourceEnv } = await import("@agent-desk/runtime");
+    const { resolveLocalSourceEnv } = await import("@roomy-ai/runtime");
     vi.mocked(resolveLocalSourceEnv as unknown as (..._args: unknown[]) => Promise<Record<string, string>>)
       .mockResolvedValue({ PI_AUTH_JSON_BASE64: "abc" });
     // Mirrors pi's real output with only the OAuth blob present: only the
@@ -163,7 +163,7 @@ describe("listModels — happy path", () => {
   it("emits both openai/* and codex/* when pi lists both channels", async () => {
     vi.mocked(queries.workspaces.list).mockResolvedValue([fakeWorkspace] as never);
     vi.mocked(resolveProviderKeys).mockResolvedValue({ OPENAI_API_KEY: "sk-test" });
-    const { resolveLocalSourceEnv } = await import("@agent-desk/runtime");
+    const { resolveLocalSourceEnv } = await import("@roomy-ai/runtime");
     vi.mocked(resolveLocalSourceEnv as unknown as (..._args: unknown[]) => Promise<Record<string, string>>)
       .mockResolvedValue({ PI_AUTH_JSON_BASE64: "abc" });
     vi.mocked(runtimeListModels).mockResolvedValue(BOTH_OPENAI_CHANNELS);

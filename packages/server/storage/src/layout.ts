@@ -1,30 +1,30 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { ValidationError, ID_PREFIXES } from "@agent-desk/shared";
+import { ValidationError, ID_PREFIXES } from "@roomy-ai/shared";
 
 /**
- * Single source of truth for resolving the Desk on-disk root.
+ * Single source of truth for resolving the Roomy on-disk root.
  *
  * Returns the **data root** — the directory that contains `.database/`,
  * `.memory/`, `.skills/`, plus one directory per workspace, directly (no
- * "Desk" sub-segment).
+ * "Roomy" sub-segment).
  *
  * Every subsystem that touches files (API uploads, scheduler runs, runtime
  * bind-mounts) MUST go through this so they all land on the same tree. A
- * silent split — API writing to `$HOME` while the runtime mounts `/opt/desk`
+ * silent split — API writing to `$HOME` while the runtime mounts `/opt/roomy`
  * — caused user uploads to vanish from inside sandboxes.
  *
  * Resolution order:
- *   1. Explicit `DESK_HOME` env var (set by dev.sh to `$HOME/Desk`, by
+ *   1. Explicit `ROOMY_HOME` env var (set by dev.sh to `$HOME/Roomy`, by
  *      sandbox-entrypoint to `$HOME=/home/agent` = workspace root).
- *   2. `$HOME/Desk` — sensible default when running on the host without
+ *   2. `$HOME/Roomy` — sensible default when running on the host without
  *      explicit configuration.
- *   3. `/home/desk/Desk` — last-ditch fallback for headless environments.
+ *   3. `/home/roomy/Roomy` — last-ditch fallback for headless environments.
  */
-export function resolveDeskHome(): string {
-  if (process.env.DESK_HOME) return process.env.DESK_HOME;
-  const userHome = process.env.HOME ?? "/home/desk";
-  return path.join(userHome, "Desk");
+export function resolveRoomyHome(): string {
+  if (process.env.ROOMY_HOME) return process.env.ROOMY_HOME;
+  const userHome = process.env.HOME ?? "/home/roomy";
+  return path.join(userHome, "Roomy");
 }
 
 /**
@@ -38,7 +38,7 @@ const RESERVED_SLUGS = new Set(["workspaces"]);
 /**
  * Resolves the absolute path of a workspace's root directory.
  *
- * Each workspace gets its own subdirectory directly under `$DESK_HOME/{slug}/`.
+ * Each workspace gets its own subdirectory directly under `$ROOMY_HOME/{slug}/`.
  * The `slug` is the `path` column on `workspaces` — derived from the
  * workspace name at create time and renamed in lock-step on rename.
  */
@@ -75,11 +75,11 @@ function validateSlug(slug: string): void {
 }
 
 /**
- * Ensures the global Desk layout exists: `.tmp/` and `.trash/`. Idempotent
+ * Ensures the global Roomy layout exists: `.tmp/` and `.trash/`. Idempotent
  * — safe to call on every boot.
  *
  * Per-workspace directories are created by `ensureWorkspaceLayout`. Each
- * workspace lands directly under `$DESK_HOME/{slug}/` — there is no
+ * workspace lands directly under `$ROOMY_HOME/{slug}/` — there is no
  * `workspaces/` parent in the new layout.
  */
 export async function ensureLayout(home: string): Promise<void> {
@@ -89,8 +89,8 @@ export async function ensureLayout(home: string): Promise<void> {
 }
 
 /**
- * Migrates from the legacy `$DESK_HOME/workspaces/{slug}/` layout to the
- * flat `$DESK_HOME/{slug}/` layout. Walks `workspaces/`, renames each
+ * Migrates from the legacy `$ROOMY_HOME/workspaces/{slug}/` layout to the
+ * flat `$ROOMY_HOME/{slug}/` layout. Walks `workspaces/`, renames each
  * sub-directory up one level, then removes the now-empty parent.
  *
  * Idempotent — returns `{ migrated: 0 }` when no legacy directory exists.
@@ -200,9 +200,9 @@ export function tmpDir(home: string): string {
  * Path helpers for the memory system.
  *
  * Memory has three on-disk roots:
- *   - User memory:      $DESK_HOME/.memory/
- *   - Workspace memory: $DESK_HOME/<slug>/.memory/
- *   - Chat memory:      existing $DESK_HOME/<slug>/.chats/<id>/notes/ (covered elsewhere)
+ *   - User memory:      $ROOMY_HOME/.memory/
+ *   - Workspace memory: $ROOMY_HOME/<slug>/.memory/
+ *   - Chat memory:      existing $ROOMY_HOME/<slug>/.chats/<id>/notes/ (covered elsewhere)
  *
  * The user and workspace roots each contain an always-injected index file
  * (`memory.md` / `workspace.md`), arbitrary topic files referenced by the
@@ -238,34 +238,34 @@ function validateJournalDate(date: string): void {
   }
 }
 
-/** Absolute path to the user memory root: `$DESK_HOME/.memory/`. */
+/** Absolute path to the user memory root: `$ROOMY_HOME/.memory/`. */
 export function userMemoryDir(home: string): string {
   return path.join(home, MEMORY_DIR);
 }
 
-/** Absolute path to the user memory index file: `$DESK_HOME/.memory/memory.md`. */
+/** Absolute path to the user memory index file: `$ROOMY_HOME/.memory/memory.md`. */
 export function userMemoryIndexPath(home: string): string {
   return path.join(userMemoryDir(home), USER_MEMORY_INDEX);
 }
 
-/** Absolute path to a user memory topic file: `$DESK_HOME/.memory/<topic>.md`. */
+/** Absolute path to a user memory topic file: `$ROOMY_HOME/.memory/<topic>.md`. */
 export function userMemoryTopicPath(home: string, topic: string): string {
   validateTopicFilename(topic);
   return path.join(userMemoryDir(home), topic);
 }
 
-/** Absolute path to the user journal directory: `$DESK_HOME/.memory/journal/`. */
+/** Absolute path to the user journal directory: `$ROOMY_HOME/.memory/journal/`. */
 export function userJournalDir(home: string): string {
   return path.join(userMemoryDir(home), JOURNAL_DIR);
 }
 
-/** Absolute path to a user journal entry: `$DESK_HOME/.memory/journal/<YYYY-MM-DD>.md`. */
+/** Absolute path to a user journal entry: `$ROOMY_HOME/.memory/journal/<YYYY-MM-DD>.md`. */
 export function userJournalPath(home: string, date: string): string {
   validateJournalDate(date);
   return path.join(userJournalDir(home), `${date}.md`);
 }
 
-/** Absolute path to a workspace memory root: `$DESK_HOME/<slug>/.memory/`. */
+/** Absolute path to a workspace memory root: `$ROOMY_HOME/<slug>/.memory/`. */
 export function workspaceMemoryDir(home: string, slug: string): string {
   return path.join(workspaceRoot(home, slug), MEMORY_DIR);
 }
@@ -373,7 +373,7 @@ export interface VirtualLibraryMount {
  * Used by every read/write helper that takes a library-relative path so
  * files projected into the listing from a connected host directory open
  * on the actual host file rather than 404'ing against a non-existent
- * `~/Desk/<slug>/Downloads/...` path.
+ * `~/Roomy/<slug>/Downloads/...` path.
  */
 export function resolveLibraryHostPath(
   home: string,
@@ -401,7 +401,7 @@ export function resolveLibraryHostPath(
 
 /**
  * Soft-deletes a workspace's on-disk directory by moving it to
- * `~/Desk/.trash/workspaces/{slug}-{timestamp}/`. Idempotent — returns
+ * `~/Roomy/.trash/workspaces/{slug}-{timestamp}/`. Idempotent — returns
  * `{ moved: false }` if the source doesn't exist.
  */
 export async function trashWorkspaceDir(
@@ -421,7 +421,7 @@ export async function trashWorkspaceDir(
 /**
  * Renames a workspace's directory from one slug to another. Creates the
  * parent if needed and fails cleanly if the destination already exists.
- * Both the old and new directory must sit directly under `~/Desk/`.
+ * Both the old and new directory must sit directly under `~/Roomy/`.
  */
 export async function renameWorkspaceDir(
   home: string,

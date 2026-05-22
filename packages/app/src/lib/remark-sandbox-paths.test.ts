@@ -35,39 +35,39 @@ function collectLinks(tree: Root): Link[] {
 describe('sandboxToUserPath', () => {
   it('translates /home/agent prefix to workspace path', () => {
     expect(sandboxToUserPath(`${SANDBOX_HOME}/foo/bar.md`, WS)).toBe(
-      `~/Desk/${WS}/foo/bar.md`,
+      `~/Roomy/${WS}/foo/bar.md`,
     )
   })
 
   it('translates ~/ prefix to workspace path', () => {
     expect(sandboxToUserPath('~/notes.md', WS)).toBe(
-      `~/Desk/${WS}/notes.md`,
+      `~/Roomy/${WS}/notes.md`,
     )
   })
 
   it('translates bare ~/  (sandbox root)', () => {
-    expect(sandboxToUserPath('~/', WS)).toBe(`~/Desk/${WS}/`)
+    expect(sandboxToUserPath('~/', WS)).toBe(`~/Roomy/${WS}/`)
   })
 })
 
 // ── remarkSandboxPaths plugin ─────────────────────────────────────────────────
 
 describe('remarkSandboxPaths', () => {
-  it('converts an /home/agent path in plain text to a desk-path link', () => {
+  it('converts an /home/agent path in plain text to a roomy-path link', () => {
     const tree = transform('See /home/agent/report.md for details.')
     const links = collectLinks(tree)
     expect(links).toHaveLength(1)
     expect(links[0].url).toBe(
-      `desk-path:${encodeURIComponent(`${SANDBOX_HOME}/report.md`)}`,
+      `roomy-path:${encodeURIComponent(`${SANDBOX_HOME}/report.md`)}`,
     )
   })
 
-  it('converts a ~/ path in text to a desk-path link', () => {
+  it('converts a ~/ path in text to a roomy-path link', () => {
     const tree = transform('Open ~/notes.md please.')
     const links = collectLinks(tree)
     expect(links).toHaveLength(1)
-    expect(links[0].url).toContain('desk-path:')
-    expect(decodeURIComponent(links[0].url.replace('desk-path:', ''))).toBe(
+    expect(links[0].url).toContain('roomy-path:')
+    expect(decodeURIComponent(links[0].url.replace('roomy-path:', ''))).toBe(
       '~/notes.md',
     )
   })
@@ -80,37 +80,37 @@ describe('remarkSandboxPaths', () => {
 
   it('converts markdown links whose href is an /home/agent path', () => {
     const tree = transform('Open [the report](/home/agent/report.md).')
-    const links = collectLinks(tree).filter((l) => l.url.startsWith('desk-path:'))
+    const links = collectLinks(tree).filter((l) => l.url.startsWith('roomy-path:'))
     expect(links).toHaveLength(1)
-    expect(decodeURIComponent(links[0].url.replace('desk-path:', ''))).toBe(
+    expect(decodeURIComponent(links[0].url.replace('roomy-path:', ''))).toBe(
       '/home/agent/report.md',
     )
     expect(links[0].children).toEqual([
-      { type: 'text', value: `~/Desk/${WS}/report.md` },
+      { type: 'text', value: `~/Roomy/${WS}/report.md` },
     ])
   })
 
   it('preserves trailing slashes for markdown links to directories', () => {
     const tree = transform('Open [the folder](/home/agent/projects/).')
-    const links = collectLinks(tree).filter((l) => l.url.startsWith('desk-path:'))
+    const links = collectLinks(tree).filter((l) => l.url.startsWith('roomy-path:'))
     expect(links).toHaveLength(1)
-    expect(decodeURIComponent(links[0].url.replace('desk-path:', ''))).toBe(
+    expect(decodeURIComponent(links[0].url.replace('roomy-path:', ''))).toBe(
       '/home/agent/projects/',
     )
   })
 
   it('converts markdown links whose href is a ~/ path', () => {
     const tree = transform('Open [notes](~/notes.md).')
-    const links = collectLinks(tree).filter((l) => l.url.startsWith('desk-path:'))
+    const links = collectLinks(tree).filter((l) => l.url.startsWith('roomy-path:'))
     expect(links).toHaveLength(1)
-    expect(decodeURIComponent(links[0].url.replace('desk-path:', ''))).toBe(
+    expect(decodeURIComponent(links[0].url.replace('roomy-path:', ''))).toBe(
       '~/notes.md',
     )
   })
 
   it('does NOT convert an inlineCode node whose value has a prefix before the path', () => {
     const tree = transform('Run `cd /home/agent/src`')
-    const links = collectLinks(tree).filter((l) => l.url.startsWith('desk-path:'))
+    const links = collectLinks(tree).filter((l) => l.url.startsWith('roomy-path:'))
     expect(links).toHaveLength(0)
   })
 
@@ -118,14 +118,14 @@ describe('remarkSandboxPaths', () => {
     const tree = transform('Visit http://example.com/repo~/files here')
     const links = collectLinks(tree)
     // The ~/files inside a URL-like token preceded by a letter must not match.
-    const sandboxLinks = links.filter((l) => l.url.startsWith('desk-path:'))
+    const sandboxLinks = links.filter((l) => l.url.startsWith('roomy-path:'))
     expect(sandboxLinks).toHaveLength(0)
   })
 
   it('does NOT match a bare ~ without a following slash', () => {
     const tree = transform('Use ~ to refer to home.')
     const links = collectLinks(tree)
-    const sandboxLinks = links.filter((l) => l.url.startsWith('desk-path:'))
+    const sandboxLinks = links.filter((l) => l.url.startsWith('roomy-path:'))
     expect(sandboxLinks).toHaveLength(0)
   })
 
@@ -134,7 +134,7 @@ describe('remarkSandboxPaths', () => {
       'Check /home/agent/a.md and /home/agent/b.md both.',
     )
     const links = collectLinks(tree)
-    const sandboxLinks = links.filter((l) => l.url.startsWith('desk-path:'))
+    const sandboxLinks = links.filter((l) => l.url.startsWith('roomy-path:'))
     expect(sandboxLinks).toHaveLength(2)
   })
 
@@ -148,10 +148,10 @@ describe('remarkSandboxPaths', () => {
   it('strips trailing punctuation — path followed by period does not include it', () => {
     const tree = transform('See /home/agent/report.md.')
     const links = collectLinks(tree)
-    const sandboxLinks = links.filter((l) => l.url.startsWith('desk-path:'))
+    const sandboxLinks = links.filter((l) => l.url.startsWith('roomy-path:'))
     // The path itself should not include the trailing period.
     for (const link of sandboxLinks) {
-      expect(decodeURIComponent(link.url.replace('desk-path:', ''))).not.toMatch(/\.$/)
+      expect(decodeURIComponent(link.url.replace('roomy-path:', ''))).not.toMatch(/\.$/)
     }
   })
 })
