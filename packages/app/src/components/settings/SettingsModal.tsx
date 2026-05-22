@@ -137,6 +137,9 @@ import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'
 import { initialsOf } from '@/lib/initials'
 import { PreferenceRow } from '@/components/settings/shared'
 import { describeApiError } from '@/components/settings/errors'
+import { isVaultLockedError } from '@/lib/api-error'
+import { useAppDispatch } from '@/store/hooks'
+import { openVaultDialog } from '@/store/slices/uiSlice'
 
 // ── Brand marks ─────────────────────────────────────────────────────────────
 
@@ -1581,6 +1584,7 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<NavSection>(initialSection ?? 'workspace')
   const isCompactViewport = useCompactViewport()
+  const dispatch = useAppDispatch()
   const workspaceIcon = useWorkspaceIconUrl(workspace.id)
 
   useEffect(() => {
@@ -1841,6 +1845,14 @@ export function SettingsModal({
       await putProviderKeys({ [envKey]: value }).unwrap()
       return true
     } catch (err) {
+      if (isVaultLockedError(err)) {
+        // No toast here: the dialog is the actionable surface. The user
+        // re-submits this form after unlocking — we don't auto-retry
+        // because the value lives in component state, not in a Redux
+        // queue we could replay.
+        dispatch(openVaultDialog({}))
+        return false
+      }
       toast.error('Could not save provider key', { description: describeApiError(err) })
       return false
     }
@@ -1883,6 +1895,10 @@ export function SettingsModal({
       }
       setConnectionsFocus(null)
     } catch (err) {
+      if (isVaultLockedError(err)) {
+        dispatch(openVaultDialog({}))
+        return
+      }
       toast.error('Could not save connection', { description: describeApiError(err) })
     }
   }

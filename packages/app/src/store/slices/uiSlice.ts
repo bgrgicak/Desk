@@ -19,6 +19,11 @@ export interface UiState {
   /** Deep-link request from the global palette: open the SettingsModal at
    * the named section. AppShell consumes and clears. */
   pendingSettingsSection: SettingsSection | null;
+  /** Per-user vault password dialog. Driven by VaultGate on app load and
+   * by mutation error handlers that catch HTTP 423 (VAULT_LOCKED). When
+   * `forced` is true the user cannot dismiss the dialog (it's the app
+   * gate); otherwise it can be cancelled. */
+  vaultDialog: { open: boolean; forced: boolean };
 }
 
 const initialState: UiState = {
@@ -30,6 +35,7 @@ const initialState: UiState = {
   todaySheetOpen: false,
   pendingNewChatAgentId: null,
   pendingSettingsSection: null,
+  vaultDialog: { open: false, forced: false },
 };
 
 const slice = createSlice({
@@ -80,6 +86,21 @@ const slice = createSlice({
     ) {
       state.pendingSettingsSection = action.payload;
     },
+    openVaultDialog(
+      state,
+      action: PayloadAction<{ forced?: boolean } | undefined>,
+    ) {
+      state.vaultDialog = {
+        open: true,
+        // forced sticks once set — a save-triggered open shouldn't
+        // downgrade a gate-driven force, and a gate render shouldn't
+        // accidentally trap a user who opened the dialog manually.
+        forced: action.payload?.forced ?? state.vaultDialog.forced,
+      };
+    },
+    closeVaultDialog(state) {
+      state.vaultDialog = { open: false, forced: false };
+    },
   },
 });
 
@@ -93,6 +114,8 @@ export const {
   setTodaySheetOpen,
   setPendingNewChatAgentId,
   setPendingSettingsSection,
+  openVaultDialog,
+  closeVaultDialog,
 } = slice.actions;
 
 export default slice.reducer;

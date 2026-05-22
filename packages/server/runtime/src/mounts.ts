@@ -18,7 +18,7 @@ import { chatAttachmentsDir, summaryStorageDir, workspaceRootPath } from "@agent
  *
  * The workspace root *is* the agent's home directory inside the sandbox.
  * User-visible files live at the root; dot-prefixed entries (`.chats/`,
- * `.opencode/`, `.bashrc`, etc.) are hidden from the user's file-manager
+ * `.agents/`, `.bashrc`, etc.) are hidden from the user's file-manager
  * view by the universal dotfile convention — every listing/search API
  * skips them unless `showHidden` is set.
  *
@@ -29,7 +29,10 @@ import { chatAttachmentsDir, summaryStorageDir, workspaceRootPath } from "@agent
  */
 
 export const SANDBOX_HOME = "/home/agent";
-export const SKILLS_SANDBOX_DIR = `${SANDBOX_HOME}/.config/opencode/skills`;
+// Pi auto-discovers skills under `~/.agents/skills` (Agent Skills standard).
+// The host's bundled skills are mounted read-only at SKILLS_SANDBOX_MOUNT_DIR
+// and symlinked here by the sandbox entrypoint.
+export const SKILLS_SANDBOX_DIR = `${SANDBOX_HOME}/.agents/skills`;
 export const SKILLS_SANDBOX_MOUNT_DIR = "/opt/desk-skills";
 export const APPS_SANDBOX_MOUNT_DIR = "/opt/desk-apps";
 

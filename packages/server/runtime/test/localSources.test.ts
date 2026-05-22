@@ -140,4 +140,34 @@ describe("Codex local source", () => {
     const blob = JSON.parse(loadLocalSourceEnv("codex")!.OPENCODE_AUTH_CONTENT);
     expect(blob.openai.accountId).toBe("org-default");
   });
+
+  it("loadEnv() also emits PI_AUTH_JSON_BASE64 in pi's openai-codex shape", () => {
+    const access = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+    fs.writeFileSync(authPath, JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: access,
+        refresh_token: "rt_pi",
+        account_id: "acct_pi_123",
+      },
+    }));
+    const env = loadLocalSourceEnv("codex")!;
+    expect(env.PI_AUTH_JSON_BASE64).toBeTruthy();
+    const decoded = Buffer.from(env.PI_AUTH_JSON_BASE64, "base64").toString("utf8");
+    const parsed = JSON.parse(decoded);
+    // Pi looks up the OAuth provider by id `openai-codex`. The shape
+    // mirrors what pi's `oauth/openai-codex.js` writes after a real
+    // /login flow: {type: "oauth", access, refresh, accountId, expires}.
+    expect(parsed["openai-codex"].type).toBe("oauth");
+    expect(parsed["openai-codex"].access).toBe(access);
+    expect(parsed["openai-codex"].refresh).toBe("rt_pi");
+    expect(parsed["openai-codex"].accountId).toBe("acct_pi_123");
+    expect(typeof parsed["openai-codex"].expires).toBe("number");
+    // The two blobs are semantically equivalent — Codex auth, same
+    // tokens — but the provider-id key and the absence of `id_token`
+    // are what differ between the opencode-serve daemon path and pi.
+    const opencodeBlob = JSON.parse(env.OPENCODE_AUTH_CONTENT);
+    expect(opencodeBlob.openai.access).toBe(parsed["openai-codex"].access);
+    expect(opencodeBlob.openai.refresh).toBe(parsed["openai-codex"].refresh);
+  });
 });

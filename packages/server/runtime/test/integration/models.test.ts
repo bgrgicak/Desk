@@ -1,10 +1,14 @@
 /**
- * Integration test: queries the real `opencode models` list inside a real
- * Docker sandbox. Verifies the host → sandbox exec primitive and the parser
- * against OpenCode's actual output — the fake driver can't prove that.
+ * Integration test: queries the real `pi --list-models` output inside a
+ * real Docker sandbox. Verifies the host → sandbox exec primitive and the
+ * parser against pi's actual columnar output — the fake driver can't
+ * prove that.
  *
- * Gated on Docker availability. Does not require an API key (model listing
- * is a local registry query, not an API round-trip).
+ * Gated on Docker availability AND on a provider credential being
+ * present. Pi shows nothing until it has at least one authenticated
+ * provider, so the only useful integration assertion is "a real key
+ * yields real models." We use OPENAI_API_KEY because the openai model
+ * list is published locally and doesn't require an API round-trip.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
@@ -25,6 +29,10 @@ try {
 } catch {
   SKIP = true;
 }
+// Pi requires at least one authenticated provider to list any models.
+// Any test API key suffices; the listing itself is local to the sandbox.
+const TEST_PROVIDER_KEY = process.env.DESK_TEST_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
+if (!TEST_PROVIDER_KEY) SKIP = true;
 const describeIf = SKIP ? describe.skip : describe;
 
 let home: string;
@@ -57,10 +65,11 @@ describeIf("sandbox model listing (real Docker)", () => {
     await stopSandbox(handle);
   }, 60_000);
 
-  it("listModels returns real provider/model pairs from opencode", async () => {
+  it("listModels parses pi's column table into provider/model pairs", async () => {
     const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
 
-    const all = await listModels(testWorkspaceId, testWorkspaceSlug);
+    const providerKeys = { OPENAI_API_KEY: TEST_PROVIDER_KEY! };
+    const all = await listModels(testWorkspaceId, testWorkspaceSlug, { providerKeys });
     expect(all.length).toBeGreaterThan(0);
     for (const m of all) {
       expect(m.provider).toMatch(/^[A-Za-z0-9_.-]+$/);
@@ -68,15 +77,9 @@ describeIf("sandbox model listing (real Docker)", () => {
       expect(m.id.length).toBeGreaterThan(m.provider.length + 1);
     }
 
-    // Free opencode models must always be present — no API key required.
-    expect(all.some((m) => m.provider === "opencode")).toBe(true);
-
-    const filtered = await listModels(testWorkspaceId, testWorkspaceSlug, { provider: "opencode" });
-    expect(filtered.length).toBeGreaterThan(0);
-    expect(filtered.every((m) => m.provider === "opencode")).toBe(true);
-
-    // Keep the real integration pinned to a free opencode model that requires no API key.
-    expect(filtered.some((m) => m.id === "opencode/big-pickle")).toBe(true);
+    // OpenAI keys must surface at least one openai model since pi ships
+    // the full model registry locally — no API round-trip.
+    expect(all.some((m) => m.provider === "openai")).toBe(true);
 
     await stopSandbox(handle);
   }, 60_000);

@@ -9,9 +9,9 @@
  *  - Per-workspace enrollment toggles round-trip through the membership API.
  *
  * The Agents section no longer exposes a hardcoded model list; it queries
- * GET /tools/models. In the e2e lane there is no Docker/opencode, so the
- * picker surfaces an empty-state message instead of a real menu — which is
- * the fallback we want users to see when no provider keys are configured.
+ * GET /tools/models. In the e2e lane there is no Docker/pi, so the picker
+ * surfaces an empty-state message instead of a real menu — which is the
+ * fallback we want users to see when no provider keys are configured.
  */
 import { test, expect } from "../fixtures";
 
@@ -22,10 +22,12 @@ async function openAgentsTab(page: import("@playwright/test").Page) {
   // via useState(initialModel) on mount — open it before models resolve and
   // the Add agent button stays disabled with no way to pick one. The Desk
   // row's provider label is the readiness signal: it only renders once
-  // modelIndex has the seeded model.
+  // modelIndex has the seeded model. The seeded agent ships on
+  // `anthropic/claude-haiku-4-5`, which SettingsModal's providerLabel()
+  // renders as "Claude".
   await page
     .getByRole("dialog")
-    .getByText(/^OpenCode$/)
+    .getByText(/^Claude$/)
     .first()
     .waitFor({ state: "visible", timeout: 10_000 });
 }

@@ -108,7 +108,10 @@ export async function startDeskServer(
     DESK_HUB_AUTO_CREATE: "off",
     // Auto-setup and unlock the per-user vault on boot so e2e tests can
     // read and write provider keys without going through the vault UI flow.
+    // DESK_VAULT_AUTO_SETUP is opt-in (default off) outside test fixtures,
+    // so app users get the real "pick your own password" modal experience.
     DESK_VAULT_PASSWORD: "e2e-vault-password",
+    DESK_VAULT_AUTO_SETUP: "on",
     DESK_FAKE_DRIVER_LOG_PROVIDER_KEYS: "1",
     // The e2e suite logs in for every spec, which makes the per-IP
     // auth.login rate-limit (10/min by default) fire and 429 later

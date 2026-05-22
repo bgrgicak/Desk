@@ -48,6 +48,17 @@ const ALL_MODELS = [
   ...FREE_MODELS,
   { id: "openai/gpt-5", provider: "openai" },
 ];
+const CODEX_ONLY_MODELS = [
+  ...FREE_MODELS,
+  { id: "openai-codex/gpt-5.4", provider: "openai-codex" },
+  { id: "openai-codex/gpt-5.5", provider: "openai-codex" },
+];
+const BOTH_OPENAI_CHANNELS = [
+  ...FREE_MODELS,
+  { id: "openai/gpt-4o", provider: "openai" },
+  { id: "openai/gpt-5", provider: "openai" },
+  { id: "openai-codex/gpt-5.5", provider: "openai-codex" },
+];
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -79,53 +90,37 @@ describe("listModels — decryption failure fallback", () => {
   });
 });
 
-describe("expandOpenAiBySource — Codex vs OpenAI auth labeling", () => {
-  const models = [
-    { id: "opencode/big-pickle", provider: "opencode" },
-    { id: "openai/gpt-5.4", provider: "openai" },
-    { id: "openai/gpt-5.4-mini", provider: "openai" },
-    { id: "anthropic/claude-4-7", provider: "anthropic" },
-  ];
+describe("expandOpenAiBySource — pi's openai-codex/* → Desk's codex/* relabel", () => {
+  it("relabels openai-codex/* → codex/* and passes other providers through", () => {
+    const models = [
+      { id: "opencode/big-pickle", provider: "opencode" },
+      { id: "openai/gpt-5.4", provider: "openai" },
+      { id: "openai-codex/gpt-5.4", provider: "openai-codex" },
+      { id: "openai-codex/gpt-5.5", provider: "openai-codex" },
+      { id: "anthropic/claude-4-7", provider: "anthropic" },
+    ];
+    const out = expandOpenAiBySource(models);
 
-  it("re-IDs openai/* → codex/* when only Codex env is present", () => {
-    const out = expandOpenAiBySource(models, {}, { OPENCODE_AUTH_CONTENT: "blob" });
-    // No openai/* entries remain — the user has no OpenAI API key, so the
-    // openai-id path would 401 inside the sandbox.
-    expect(out.find((m) => m.id === "openai/gpt-5.4")).toBeUndefined();
-    expect(out.find((m) => m.id === "openai/gpt-5.4-mini")).toBeUndefined();
-    // The codex/* twins carry the Desk-only id the scheduler translates back
-    // to openai/* (with OPENAI_API_KEY stripped) at run time.
+    // openai-codex/* gets the Desk UI prefix; runtime translates it back.
     expect(out.find((m) => m.id === "codex/gpt-5.4")?.provider).toBe("codex");
-    expect(out.find((m) => m.id === "codex/gpt-5.4-mini")?.provider).toBe("codex");
-    // Non-openai providers are untouched.
+    expect(out.find((m) => m.id === "codex/gpt-5.5")?.provider).toBe("codex");
+    // The raw openai-codex/* entries are replaced, not duplicated.
+    expect(out.some((m) => m.id.startsWith("openai-codex/"))).toBe(false);
+    // openai/* (API-key path) passes through verbatim.
+    expect(out.find((m) => m.id === "openai/gpt-5.4")?.provider).toBe("openai");
+    // Non-OpenAI providers are untouched.
     expect(out.find((m) => m.id === "anthropic/claude-4-7")?.provider).toBe("anthropic");
     expect(out.find((m) => m.id === "opencode/big-pickle")?.provider).toBe("opencode");
   });
 
-  it("emits both openai/* and codex/* when both sources are active", () => {
-    const out = expandOpenAiBySource(
-      models,
-      { OPENAI_API_KEY: "sk-xxx" },
-      { OPENCODE_AUTH_CONTENT: "blob" },
-    );
-    // Cloud key path keeps the canonical openai id.
-    expect(out.find((m) => m.id === "openai/gpt-5.4")?.provider).toBe("openai");
-    expect(out.find((m) => m.id === "openai/gpt-5.4-mini")?.provider).toBe("openai");
-    // Subscription path is exposed as a separate codex/* entry so the model
-    // picker can offer both and the run path picks the right billing source.
-    expect(out.find((m) => m.id === "codex/gpt-5.4")?.provider).toBe("codex");
-    expect(out.find((m) => m.id === "codex/gpt-5.4-mini")?.provider).toBe("codex");
-  });
-
-  it("is a no-op when neither source is active", () => {
-    const out = expandOpenAiBySource(models, {}, {});
-    expect(out).toBe(models);
-  });
-
-  it("treats an empty OPENCODE_AUTH_CONTENT string as inactive", () => {
-    const out = expandOpenAiBySource(models, {}, { OPENCODE_AUTH_CONTENT: "" });
-    expect(out.find((m) => m.id === "openai/gpt-5.4")?.provider).toBe("openai");
-    expect(out.find((m) => m.id === "codex/gpt-5.4")).toBeUndefined();
+  it("is a no-op when pi did not emit any openai-codex/* models", () => {
+    const models = [
+      { id: "openai/gpt-5", provider: "openai" },
+      { id: "anthropic/claude-4-7", provider: "anthropic" },
+    ];
+    const out = expandOpenAiBySource(models);
+    expect(out.find((m) => m.id === "openai/gpt-5")?.provider).toBe("openai");
+    expect(out.some((m) => m.provider === "codex")).toBe(false);
   });
 });
 
@@ -145,20 +140,37 @@ describe("listModels — happy path", () => {
     });
   });
 
-  it("re-IDs openai/* models as 'codex/*' when only Codex is the active OpenAI source", async () => {
+  it("re-IDs pi's openai-codex/* as 'codex/*' when only Codex auth is active", async () => {
     vi.mocked(queries.workspaces.list).mockResolvedValue([fakeWorkspace] as never);
     vi.mocked(resolveProviderKeys).mockResolvedValue({});
     const { resolveLocalSourceEnv } = await import("@agent-desk/runtime");
     vi.mocked(resolveLocalSourceEnv as unknown as (..._args: unknown[]) => Promise<Record<string, string>>)
-      .mockResolvedValue({ OPENCODE_AUTH_CONTENT: "{\"openai\":{\"type\":\"oauth\"}}" });
-    vi.mocked(runtimeListModels).mockResolvedValue(ALL_MODELS);
+      .mockResolvedValue({ PI_AUTH_JSON_BASE64: "abc" });
+    // Mirrors pi's real output with only the OAuth blob present: only the
+    // openai-codex channel is listed.
+    vi.mocked(runtimeListModels).mockResolvedValue(CODEX_ONLY_MODELS);
 
     const models = await listModels(fakePool, undefined, { userId: "usr_1" });
-    // No openai/* survives — Codex-only users can't reach the cloud path.
+    // No raw openai-codex/* leaks through — it's relabeled.
+    expect(models.some((m) => m.id.startsWith("openai-codex/"))).toBe(false);
+    // No openai/* either — pi didn't list any (no API key).
     expect(models.some((m) => m.id.startsWith("openai/"))).toBe(false);
     const codex = models.filter((m) => m.id.startsWith("codex/"));
     expect(codex.length).toBeGreaterThan(0);
     expect(codex.every((m) => m.provider === "codex")).toBe(true);
+  });
+
+  it("emits both openai/* and codex/* when pi lists both channels", async () => {
+    vi.mocked(queries.workspaces.list).mockResolvedValue([fakeWorkspace] as never);
+    vi.mocked(resolveProviderKeys).mockResolvedValue({ OPENAI_API_KEY: "sk-test" });
+    const { resolveLocalSourceEnv } = await import("@agent-desk/runtime");
+    vi.mocked(resolveLocalSourceEnv as unknown as (..._args: unknown[]) => Promise<Record<string, string>>)
+      .mockResolvedValue({ PI_AUTH_JSON_BASE64: "abc" });
+    vi.mocked(runtimeListModels).mockResolvedValue(BOTH_OPENAI_CHANNELS);
+
+    const models = await listModels(fakePool, undefined, { userId: "usr_1" });
+    expect(models.find((m) => m.id === "openai/gpt-5")?.provider).toBe("openai");
+    expect(models.find((m) => m.id === "codex/gpt-5.5")?.provider).toBe("codex");
   });
 
   it("filters by provider", async () => {

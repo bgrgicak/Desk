@@ -33,15 +33,20 @@ else
   cp -rn /etc/skel/. "${HOME:-/home/agent}/" 2>/dev/null || true
 fi
 
+# Link the host-mounted skills bundle into pi's discovery path. Pi
+# auto-discovers skills under ~/.agents/skills (per Agent Skills standard),
+# walking from cwd up through parents; we symlink the read-only mount at
+# /opt/desk-skills into the home location so every pi invocation, from any
+# cwd, sees the Desk-bundled reference + goal skills.
 link_skills='skills_target=$1; skills_link=$2; mkdir -p "$(dirname "$skills_link")"; if [ -L "$skills_link" ]; then ln -sfn "$skills_target" "$skills_link"; elif [ ! -e "$skills_link" ]; then ln -s "$skills_target" "$skills_link"; elif [ -d "$skills_link" ] && rmdir "$skills_link" 2>/dev/null; then ln -s "$skills_target" "$skills_link"; fi'
 if [ "$(id -u)" = "0" ] && [ "${DESK_SANDBOX_AGENT_USER:-}" != "0:0" ]; then
-  runuser -u "${runtime_user:-agent}" -- sh -c "$link_skills" sh /opt/desk-skills "${HOME:-/home/agent}/.config/opencode/skills" || true
+  runuser -u "${runtime_user:-agent}" -- sh -c "$link_skills" sh /opt/desk-skills "${HOME:-/home/agent}/.agents/skills" || true
   # Mirror Desk-shipped global apps into every workspace at $HOME/.apps so
   # the agent can `ls ~/.apps/` to browse them. Discovery still goes through
   # `desk-agent find library` — the symlink is just an ergonomic affordance.
   runuser -u "${runtime_user:-agent}" -- sh -c "$link_skills" sh /opt/desk-apps "${HOME:-/home/agent}/.apps" || true
 else
-  sh -c "$link_skills" sh /opt/desk-skills "${HOME:-/home/agent}/.config/opencode/skills" || true
+  sh -c "$link_skills" sh /opt/desk-skills "${HOME:-/home/agent}/.agents/skills" || true
   sh -c "$link_skills" sh /opt/desk-apps "${HOME:-/home/agent}/.apps" || true
 fi
 
@@ -58,15 +63,6 @@ fi
 # rather than creating a "Desk" subdirectory inside the project files.
 export DESK_HOME="${HOME:-/home/agent}"
 
-# Xvfb is needed only when playwright-mcp is enabled (site/app-goal
-# chats). It costs ~68 MB resident at idle, which is a lot for the
-# majority of chats that never touch a browser. Don't auto-start it
-# here — the host runtime calls `ensureContainerXvfb` from
-# `opencodeServer.ts` when the workspace MCP config flips
-# playwright on, and that helper does an idempotent same-script start.
-# `$DISPLAY` is still exported so any process that DOES need it
-# inherits the right value once Xvfb is running.
-export DISPLAY="${DISPLAY:-:99}"
 touch /tmp/desk-entrypoint-ready
 
 exec "$@"

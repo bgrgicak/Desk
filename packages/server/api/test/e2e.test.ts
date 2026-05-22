@@ -1223,15 +1223,12 @@ describe.skipIf(!REAL_E2E_SANDBOX_AVAILABLE)(
     });
     expect(msgRes.status).toBe(201);
 
-    // Wait until the runtime writes the agent file (lands at
-    // <workspace>/.opencode/agents/<agentId>.md).
-    const agentFile = path.join(
-      realHome,
-      workspaceSlug,
-      ".opencode",
-      "agents",
-      `${agentId}.md`,
-    );
+    // Wait until the runtime writes the agent file. Pi reads
+    // <cwd>/AGENTS.md from cwd up through parent directories, so the
+    // driver now writes a single AGENTS.md at the workspace root instead
+    // of one file per agent under `.opencode/agents/`. The rendered body
+    // still contains the user-memory fragment we're asserting on.
+    const agentFile = path.join(realHome, workspaceSlug, "AGENTS.md");
     let body = "";
     for (let i = 0; i < 60; i++) {
       await new Promise((r) => setTimeout(r, 1000));

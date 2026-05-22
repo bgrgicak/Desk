@@ -40,7 +40,7 @@ export async function insert(
       data.id,
       data.userId,
       data.name,
-      data.model ?? "opencode/big-pickle",
+      data.model ?? "anthropic/claude-haiku-4-5",
     ],
   );
   return rowToAgent(rows[0]);
