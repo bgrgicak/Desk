@@ -19,9 +19,14 @@ async function deleteAgentByName(serverUrl: string, token: string, name: string)
 }
 
 async function openModelsTab(page: import("@playwright/test").Page) {
-  await page.getByTestId("account-avatar").click();
-  await page.getByTestId("open-my-account").click();
+  // The My Account modal state lives in the URL (`?account=…`) so a
+  // page reload restores it open — without this guard the sidebar
+  // avatar click below is intercepted by the still-mounted overlay.
   const dialog = page.getByRole("dialog");
+  if (!(await dialog.isVisible())) {
+    await page.getByTestId("account-avatar").click();
+    await page.getByTestId("open-my-account").click();
+  }
   // The nav item now reads "AI providers" — same section, label clarified.
   await dialog.getByRole("button", { name: /^AI providers$/i }).click();
   return dialog;
@@ -65,6 +70,14 @@ test("storing a ChatGPT key persists and echoes back masked", async ({
     const body = (await res.json()) as { providers: Record<string, string | null> };
     return body.providers.OPENAI_API_KEY ?? null;
   }, { timeout: 5_000 }).not.toBeNull();
+
+  // Close the modal first. The MyAccount modal stores its open + section
+  // state in the URL (?account=models), so reloading without closing it
+  // would land us back in the form view rather than the list, and the
+  // saved-key flow we're verifying here lives behind the row → Edit
+  // path. Closing clears the query so reload restores a clean app shell.
+  await dialog.getByRole("button", { name: "Close" }).first().click();
+  await expect(dialog).toBeHidden({ timeout: 5_000 });
 
   // Reload — the masked echo is rendered in the credential scope panel
   // when re-opening the agent for edit.

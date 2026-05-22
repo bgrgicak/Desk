@@ -110,6 +110,10 @@ interface ChatViewProps {
   initialStagedItems?: ContextItem[]
   /** When set, the new-chat stub renders this message as the thread anchor. */
   startThread?: string | null
+  /** Hide the right panel entirely (Threads / Files / Tasks) and its
+   *  top-bar toggle. Used by the Home → Ask AI surface where the chat
+   *  is presented as a standalone conversation without sidebar context. */
+  hideRightPanel?: boolean
 }
 
 /**
@@ -138,6 +142,7 @@ export function ChatView({
   onAttachmentClick,
   initialStagedItems,
   startThread,
+  hideRightPanel = false,
 }: ChatViewProps) {
   const focusInputRef = useRef<(() => void) | null>(null)
   const location = useLocation()
@@ -146,7 +151,11 @@ export function ChatView({
     ? (location.state as { anchorMessage?: ServerMessage } | null)?.anchorMessage ?? null
     : null
   const rightPanelOpenKey = chat.id && chat.id !== NEW_CHAT_ID ? `roomy.chat.${chat.id}.rightPanelOpen` : null
-  const [panelOpen, setPanelOpen] = usePersistedState<boolean>(rightPanelOpenKey, shouldOpenChatSidebarsByDefault())
+  const [panelOpenRaw, setPanelOpen] = usePersistedState<boolean>(rightPanelOpenKey, shouldOpenChatSidebarsByDefault())
+  // When the surface opts out of the right panel (e.g. Ask AI), force
+  // the layout to treat the panel as closed so insets, gutters, and the
+  // top-bar toggle all collapse to the no-panel state.
+  const panelOpen = hideRightPanel ? false : panelOpenRaw
   const isSmallViewport = useIsSmallScreen()
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined)
   // Tools goal selected by a suggestion-pill click in the empty
@@ -433,7 +442,7 @@ export function ChatView({
           onDeleteChat={(id) => onDeleteChat?.(id)}
           panelOpen={panelOpen}
           onTogglePanel={() => setPanelOpenFromUser(!panelOpen)}
-          showPanelToggle={!isPreviewOpen}
+          showPanelToggle={!isPreviewOpen && !hideRightPanel}
           task={backingTask}
           taskActions={taskActions}
           onTaskDeleted={handleTaskDeleted}
@@ -624,7 +633,7 @@ export function ChatView({
           overlay with a solid background + shadow so the chat input
           underneath stays covered. Mirrors the file-chat overlay in
           `ContextDetail`. */}
-      {!isPreviewOpen && (() => {
+      {!isPreviewOpen && !hideRightPanel && (() => {
         const panel = (
           <ChatRightPanel
             chatId={chat.id}
