@@ -127,7 +127,7 @@ describe("mounts", () => {
 
   it("buildWorkspaceMountPlan adds active local filesystem mounts and agent context", async () => {
     const source = await fs.mkdtemp(path.join(os.tmpdir(), "desk-local-fs-source-"));
-    await queries.connectors.createConnection(pool, {
+    const connection = await queries.connectors.createConnection(pool, {
       ownerUserId: userId,
       providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
       displayName: "Local folders",
@@ -144,6 +144,9 @@ describe("mounts", () => {
         },
       },
     });
+    await queries.connectors.replaceWorkspaceGrants(pool, workspaceId, userId, [
+      { connectionId: connection.id, providerId: LOCAL_FILESYSTEM_PROVIDER_ID, grantedCapabilities: [] },
+    ]);
 
     const result = await buildWorkspaceMountPlan(pool, { home, workspaceId, workspaceSlug: TEST_SLUG, userId });
 
@@ -181,6 +184,9 @@ describe("mounts", () => {
         },
       },
     });
+    await queries.connectors.replaceWorkspaceGrants(pool, workspaceId, staleUserId, [
+      { connectionId: connection.id, providerId: LOCAL_FILESYSTEM_PROVIDER_ID, grantedCapabilities: [] },
+    ]);
 
     const result = await buildWorkspaceMountPlan(pool, { home, workspaceId, workspaceSlug: TEST_SLUG, userId: staleUserId });
 
@@ -201,7 +207,7 @@ describe("mounts", () => {
       passwordHash: "hash",
       email: "mount-collision@example.com",
     });
-    await queries.connectors.createConnection(pool, {
+    const connection = await queries.connectors.createConnection(pool, {
       ownerUserId: collisionUserId,
       providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
       displayName: "Local folders",
@@ -212,6 +218,9 @@ describe("mounts", () => {
         },
       },
     });
+    await queries.connectors.replaceWorkspaceGrants(pool, workspaceId, collisionUserId, [
+      { connectionId: connection.id, providerId: LOCAL_FILESYSTEM_PROVIDER_ID, grantedCapabilities: [] },
+    ]);
 
     await expect(buildWorkspaceMountPlan(pool, { home, workspaceId, workspaceSlug: TEST_SLUG, userId: collisionUserId }))
       .rejects.toThrow("~/Taken already exists");

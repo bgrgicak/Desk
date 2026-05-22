@@ -20,17 +20,18 @@ lives under `~/Desk/`.
   override the auto-pick with `DESK_CONTAINER_ENGINE=docker|nerdctl`.
 - A `.env` file at the repo root (gitignored). The dev script
   generates `DESK_VAULT_PASSWORD` on first run and writes it here.
-  AI-provider API keys are configured per-user via
-  Settings → Connections, not via this file.
+  AI-provider API keys are configured per-user via global account
+  settings → Models, not via this file.
 
 ### GitHub connection setup
 
-Settings → Connections → GitHub currently uses a classic personal access token.
+Workspace Settings → Connections → GitHub currently uses a classic personal access token.
 Users create one in GitHub → **Settings** → **Developer settings** →
 **Personal access tokens** → **Tokens (classic)** with the `repo` scope, plus
 `workflow` if agents should edit GitHub Actions workflow files. Desk stores that
-token encrypted as `GITHUB_TOKEN` and forwards it to sandboxes as both
-`GITHUB_TOKEN` and `GH_TOKEN`.
+token encrypted as `GITHUB_TOKEN`. The token is forwarded to a sandbox as both
+`GITHUB_TOKEN` and `GH_TOKEN` only after the active workspace grants that
+connection.
 
 ## First-time setup
 

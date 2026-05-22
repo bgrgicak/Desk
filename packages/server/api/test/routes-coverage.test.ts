@@ -409,10 +409,57 @@ describe("Routes coverage (real Postgres)", () => {
     expect(delRes.status).toBe(200);
   });
 
+  it("PUT /agents/order and PATCH /agents/:id enabled control the global model list", async () => {
+    const firstRes = await request("POST", "/agents", token, {
+      name: "Ordered Claude",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    const secondRes = await request("POST", "/agents", token, {
+      name: "Ordered ChatGPT",
+      model: "openai/gpt-5.4",
+    });
+    expect(firstRes.status).toBe(201);
+    expect(secondRes.status).toBe(201);
+    const first = firstRes.body as { id: string; enabled: boolean; sortOrder: number };
+    const second = secondRes.body as { id: string; enabled: boolean; sortOrder: number };
+    expect(first.enabled).toBe(true);
+    expect(second.enabled).toBe(true);
+    expect(second.sortOrder).toBeGreaterThan(first.sortOrder);
+
+    const beforeRes = await request("GET", "/agents", token);
+    const before = beforeRes.body as Array<{ id: string }>;
+    const originalIds = before.map((a) => a.id);
+    const reorderedIds = [second.id, first.id, ...before.map((a) => a.id).filter((id) => id !== first.id && id !== second.id)];
+    const orderRes = await request("PUT", "/agents/order", token, { ids: reorderedIds });
+    expect(orderRes.status).toBe(200);
+
+    const orderedRes = await request("GET", "/agents", token);
+    const ordered = orderedRes.body as Array<{ id: string; enabled: boolean; sortOrder: number }>;
+    expect(ordered.slice(0, 2).map((a) => a.id)).toEqual([second.id, first.id]);
+    expect(ordered.slice(0, 2).map((a) => a.sortOrder)).toEqual([0, 1]);
+
+    const disableRes = await request("PATCH", `/agents/${first.id}`, token, { enabled: false });
+    expect(disableRes.status).toBe(200);
+    expect((disableRes.body as { enabled: boolean }).enabled).toBe(false);
+
+    const workspaceAgentsRes = await request("GET", `/workspaces/${workspaceId}/agents`, token);
+    expect(workspaceAgentsRes.status).toBe(200);
+    const workspaceAgents = workspaceAgentsRes.body as Array<{ id: string }>;
+    expect(workspaceAgents.some((a) => a.id === first.id)).toBe(false);
+    expect(workspaceAgents.some((a) => a.id === second.id)).toBe(true);
+
+    const reenableRes = await request("PATCH", `/agents/${first.id}`, token, { enabled: true });
+    expect(reenableRes.status).toBe(200);
+    const restoreOrderRes = await request("PUT", "/agents/order", token, { ids: originalIds });
+    expect(restoreOrderRes.status).toBe(200);
+  });
+
   it("POST /chats rejects an agent not in the workspace", async () => {
-    // Create an agent but don't enroll it
+    // Create an agent, then remove its workspace membership to exercise
+    // the invariant independently from the global active-model list.
     const createRes = await request("POST", "/agents", token, { name: "Outsider" });
     const outsider = (createRes.body as { id: string }).id;
+    await request("DELETE", `/workspaces/${workspaceId}/agents/${outsider}`, token);
 
     const chatRes = await request("POST", "/chats", token, {
       workspaceId,
@@ -755,12 +802,14 @@ describe("Routes coverage (real Postgres)", () => {
   });
 
   it("PATCH /chats/:id — rejects an agent not enrolled in the chat's workspace", async () => {
-    // Create an agent but skip the workspace enrollment step.
+    // Create an agent, then remove its workspace membership to exercise
+    // the invariant independently from the global active-model list.
     const createAgent = await request("POST", "/agents", token, {
       name: "Stranger",
       model: "opencode/big-pickle",
     });
     const strangerId = (createAgent.body as { id: string }).id;
+    await request("DELETE", `/workspaces/${workspaceId}/agents/${strangerId}`, token);
 
     const createRes = await request("POST", "/chats", token, {
       workspaceId,

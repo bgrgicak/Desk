@@ -66,6 +66,41 @@ export interface TranslateContext {
   model?: { providerID: string; modelID: string; agent?: string };
 }
 
+export interface TerminalAssistantMessage {
+  stopReason: "stop" | "length" | "error" | "aborted";
+  exitCode: 0 | 1;
+  text: string;
+  errorMessage?: string;
+  model?: { providerID: string; modelID: string };
+}
+
+export function modelSelectionFromEvent(evt: PiJsonEvent): { providerID: string; modelID: string } | null {
+  if (!evt || typeof evt !== "object") return null;
+  if (evt.type === "model_select") {
+    const model = (evt as { model?: unknown }).model;
+    if (!model || typeof model !== "object") return null;
+    const m = model as { provider?: unknown; id?: unknown; modelId?: unknown };
+    const providerID = typeof m.provider === "string" ? m.provider : undefined;
+    const modelID = typeof m.id === "string"
+      ? m.id
+      : typeof m.modelId === "string"
+        ? m.modelId
+        : undefined;
+    return providerID && modelID ? { providerID, modelID } : null;
+  }
+  if (evt.type === "model_change") {
+    const e = evt as { provider?: unknown; modelId?: unknown; model?: unknown };
+    const providerID = typeof e.provider === "string" ? e.provider : undefined;
+    const modelID = typeof e.modelId === "string"
+      ? e.modelId
+      : typeof e.model === "string"
+        ? e.model
+        : undefined;
+    return providerID && modelID ? { providerID, modelID } : null;
+  }
+  return null;
+}
+
 /**
  * Maps one pi JSON event to one (or zero) run-format JSON line(s). Returns
  * the JSON string(s) ready to be emitted via `onLog({kind: "event"})`.
@@ -104,6 +139,77 @@ export function translatePiEvent(
     default:
       return [];
   }
+}
+
+export function terminalAssistantMessage(evt: PiJsonEvent): TerminalAssistantMessage | null {
+  const message = assistantMessageFromEvent(evt);
+  if (!message) return null;
+  const stopReason = message.stopReason;
+  if (
+    stopReason !== "stop" &&
+    stopReason !== "length" &&
+    stopReason !== "error" &&
+    stopReason !== "aborted"
+  ) {
+    return null;
+  }
+  const text = assistantText(message);
+  const errorMessage = typeof message.errorMessage === "string" ? message.errorMessage : undefined;
+  const providerID = typeof message.provider === "string" ? message.provider : undefined;
+  const modelID = typeof message.model === "string" ? message.model : undefined;
+  return {
+    stopReason,
+    exitCode: stopReason === "error" || stopReason === "aborted" ? 1 : 0,
+    text,
+    ...(errorMessage ? { errorMessage } : {}),
+    ...(providerID && modelID ? { model: { providerID, modelID } } : {}),
+  };
+}
+
+export function translateTerminalAssistantText(evt: PiJsonEvent, ctx: TranslateContext): string[] {
+  const terminal = terminalAssistantMessage(evt);
+  if (!terminal?.text) return [];
+  return [
+    runFormatLine(
+      "text",
+      { type: "text", text: terminal.text, id: ctx.assistantMessageId, messageID: ctx.assistantMessageId },
+      ctx,
+    ),
+  ];
+}
+
+function assistantMessageFromEvent(evt: PiJsonEvent): {
+  role?: unknown;
+  content?: unknown;
+  stopReason?: unknown;
+  errorMessage?: unknown;
+  provider?: unknown;
+  model?: unknown;
+} | null {
+  if (evt.type !== "message_end" && evt.type !== "message") return null;
+  const message = (evt as { message?: unknown }).message;
+  if (!message || typeof message !== "object") return null;
+  const maybe = message as {
+    role?: unknown;
+    content?: unknown;
+    stopReason?: unknown;
+    errorMessage?: unknown;
+    provider?: unknown;
+    model?: unknown;
+  };
+  return maybe.role === "assistant" ? maybe : null;
+}
+
+function assistantText(message: { content?: unknown }): string {
+  if (!Array.isArray(message.content)) return "";
+  return message.content
+    .map((part) => {
+      if (!part || typeof part !== "object") return "";
+      const p = part as { type?: unknown; text?: unknown };
+      return p.type === "text" && typeof p.text === "string" ? p.text : "";
+    })
+    .filter(Boolean)
+    .join("\n");
 }
 
 function translateMessageUpdate(evt: PiJsonEvent, ctx: TranslateContext): string[] {

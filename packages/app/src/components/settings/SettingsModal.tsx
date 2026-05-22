@@ -3,19 +3,13 @@ import { motion } from 'framer-motion'
 import { toast } from 'sonner'
 import {
   Settings2, Bot, Plug, Sliders,
-  Trash2, Plus, ChevronDown, X, Search,
-  Pencil, MessageSquare, Copy, MoreHorizontal,
+  Trash2, Plus, X, Search,
+  Pencil, MoreHorizontal,
 } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
   DialogTitle,
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
   Button,
   Input,
   Switch,
@@ -36,38 +30,32 @@ import {
   cn,
 } from '@agent-desk/ui'
 import {
-  useGetAgentsQuery,
-  useCreateAgentMutation,
-  usePatchAgentMutation,
-  useDeleteAgentMutation,
-  useGetWorkspaceAgentsQuery,
-  useAddWorkspaceAgentMutation,
-  useRemoveWorkspaceAgentMutation,
-  useGetModelsQuery,
   useGetProviderKeysQuery,
   usePutProviderKeysMutation,
   useGetConnectorConnectionsQuery,
   useCreateConnectorConnectionMutation,
   usePatchConnectorConnectionMutation,
-  useDeleteConnectorConnectionMutation,
+  useGetWorkspaceConnectorGrantsQuery,
+  usePutWorkspaceConnectorGrantsMutation,
   useGetProvidersMetaQuery,
   usePutProvidersMetaMutation,
   useGetLocalSourcesQuery,
   usePutLocalSourceMutation,
   useGetMeQuery,
-  type ModelRef,
 } from '@/store/api'
-import type { ConnectorConnection as ServerConnectorConnection, ServerAgent } from '@/store/types'
+import type { ConnectorConnection as ServerConnectorConnection } from '@/store/types'
 import {
   CONNECTION_CATALOG,
   CONNECTOR_PROVIDER_BY_KIND,
   DEFAULT_CAPABILITIES_BY_CONNECTOR_KIND,
   DEFAULT_SCOPES_BY_CONNECTOR_KIND,
   allowsMultipleConnections,
+  isModelConnectionKind,
   isLocalSourceKind,
   managedConnectionDefinitionForKind,
   providerKeyEntries,
   providerKeyForKind,
+  workspaceConnectionProviderForKind,
   type Connection,
   type ConnectionKind,
 } from '@/data/connections'
@@ -136,6 +124,7 @@ import { useScrolledUnder } from '@/hooks/use-scrolled-under'
 import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'
 import { initialsOf } from '@/lib/initials'
 import { PreferenceRow } from '@/components/settings/shared'
+import { ModelsSection } from '@/components/settings/ModelsSection'
 import { describeApiError } from '@/components/settings/errors'
 import { roomColor } from '@/components/rooms/roomColor'
 import { isVaultLockedError } from '@/lib/api-error'
@@ -169,24 +158,14 @@ function OpenAILogo({ className }: { className?: string }) {
 
 // ── Nav sections ─────────────────────────────────────────────────────────────
 
-type NavSection = 'workspace' | 'agents' | 'connections' | 'preferences'
+export type WorkspaceSettingsSection = 'workspace' | 'connections' | 'models' | 'preferences'
 
-const NAV: { id: NavSection; label: string; icon: typeof Settings2 }[] = [
+const NAV: { id: WorkspaceSettingsSection; label: string; icon: typeof Settings2 }[] = [
   { id: 'workspace',   label: 'Workspace',   icon: Settings2 },
-  { id: 'agents',      label: 'Models',      icon: Bot       },
   { id: 'connections', label: 'Connections', icon: Plug      },
+  { id: 'models',      label: 'Models',      icon: Bot       },
   { id: 'preferences', label: 'Preferences', icon: Sliders   },
 ]
-
-// Provider id → brand glyph kind. Anything not in the map renders the
-// generic muted square. `codex` is the Codex-via-ChatGPT-subscription path
-// for OpenAI models — distinct from the API-key-backed `openai` provider.
-function brandKindForProvider(provider: string): ConnectionKind | null {
-  if (provider === 'anthropic') return 'claude'
-  if (provider === 'openai')    return 'chatgpt'
-  if (provider === 'codex')     return 'codex'
-  return null
-}
 
 // Connection kinds that the picker can actually configure (i.e. we have a
 // backend to persist them). Other catalog entries appear in the picker
@@ -218,14 +197,18 @@ function deriveConnections(
     if (providerKeys[envKey]) {
       const catalogMeta = CONNECTION_CATALOG[kind]
       const entry = providerMeta[envKey]
+      const backingConnection = connectorConnections.find(c => c.providerId === envKey && c.isDefault)
+        ?? connectorConnections.find(c => c.providerId === envKey)
       out.push({
-        id: `conn-${kind}`,
+        id: backingConnection?.id ?? `conn-${kind}`,
         kind,
-        name: entry?.name || catalogMeta.name,
+        name: entry?.name || (!isModelConnectionKind(kind) ? backingConnection?.displayName : undefined) || catalogMeta.name,
         // The flag is opt-out: omitted/`true` = on. Disable persists via
         // providersMeta and is honored server-side when forwarding keys
         // to the sandbox.
         enabled: entry?.enabled !== false,
+        connectionId: backingConnection?.id,
+        providerId: envKey,
       })
     }
   }
@@ -237,6 +220,8 @@ function deriveConnections(
         kind,
         name: connection.displayName || catalogMeta.name,
         enabled: connection.status === 'active' && connection.hasCredentials,
+        connectionId: connection.id,
+        providerId,
         externalAccountId: connection.externalAccountId,
       })
     }
@@ -425,9 +410,9 @@ function EmptyState({
 
 // Sticky-footer scroll-shadow hook — top border on the footer fades in
 // once content is hidden behind it.
-// ── Brand glyph (used by both Agents and Connections) ───────────────────────
+// ── Brand glyph ──────────────────────────────────────────────────────────────
 
-function ConnectionGlyph({ kind, size = 'md' }: { kind: ConnectionKind; size?: 'sm' | 'md' | 'lg' }) {
+export function ConnectionGlyph({ kind, size = 'md' }: { kind: ConnectionKind; size?: 'sm' | 'md' | 'lg' }) {
   const box = size === 'sm' ? 'h-5 w-5' : size === 'lg' ? 'h-10 w-10' : 'h-8 w-8'
   if (kind === 'claude') {
     const mark = size === 'sm' ? 'h-3 w-3' : size === 'lg' ? 'h-[22px] w-[22px]' : 'h-[18px] w-[18px]'
@@ -452,15 +437,6 @@ function ConnectionGlyph({ kind, size = 'md' }: { kind: ConnectionKind; size?: '
       {meta.icon}
     </span>
   )
-}
-
-// Picks the right glyph for an agent based on its model.provider; falls back
-// to a neutral box for providers without a brand mark.
-function AgentGlyph({ provider, size = 'lg' }: { provider: string | undefined; size?: 'sm' | 'md' | 'lg' }) {
-  const kind = provider ? brandKindForProvider(provider) : null
-  if (kind) return <ConnectionGlyph kind={kind} size={size} />
-  const box = size === 'sm' ? 'h-5 w-5' : size === 'lg' ? 'h-10 w-10' : 'h-8 w-8'
-  return <span className={cn('shrink-0 rounded-lg bg-muted', box)} />
 }
 
 // ── Workspace section ────────────────────────────────────────────────────────
@@ -529,313 +505,6 @@ function WorkspaceSection({
   )
 }
 
-// ── Agents section ───────────────────────────────────────────────────────────
-
-type AgentsFocus =
-  | { mode: 'edit'; id: string }
-  | { mode: 'new' }
-  | null
-
-function providerLabel(provider: string): string {
-  if (provider === 'anthropic') return 'Claude'
-  if (provider === 'openai')    return 'ChatGPT'
-  if (provider === 'codex')     return 'Codex'
-  if (provider === 'opencode')  return 'OpenCode'
-  return provider
-}
-
-// Builds a provider → model map from the live /tools/models response.
-// opencode is the single source of truth; no fallbacks are injected.
-// The agent's current model is always included so an existing selection
-// is never silently dropped (e.g. if the sandbox is temporarily down).
-function buildModelIndex(
-  apiModels: ModelRef[],
-  currentModel: string,
-): Map<string, ModelRef[]> {
-  const byProvider = new Map<string, ModelRef[]>()
-  const seenIds = new Set<string>()
-
-  const add = (m: ModelRef) => {
-    if (seenIds.has(m.id)) return
-    seenIds.add(m.id)
-    const list = byProvider.get(m.provider) ?? []
-    list.push(m)
-    byProvider.set(m.provider, list)
-  }
-
-  for (const m of apiModels) add(m)
-
-  // Always surface the agent's current model so editing an existing
-  // agent doesn't drop the selection if the model isn't in the live list.
-  if (currentModel && !seenIds.has(currentModel)) {
-    const slash = currentModel.indexOf('/')
-    const provider = slash > 0 ? currentModel.slice(0, slash) : 'unknown'
-    add({ provider, id: currentModel, label: currentModel })
-  }
-
-  return byProvider
-}
-
-function AgentsList({
-  agents, modelIndex, enrolledIds, statusFilter, search,
-  onOpen, onAdd, onDelete, onDuplicate, onToggleEnabled, onChatNow,
-}: {
-  agents: ServerAgent[]
-  modelIndex: Map<string, ModelRef[]>
-  enrolledIds: Set<string>
-  statusFilter: StatusFilter
-  search: string
-  onOpen: (id: string) => void
-  onAdd: () => void
-  onDelete: (id: string) => void
-  onDuplicate: (id: string) => void
-  onToggleEnabled: (id: string, next: boolean) => void
-  onChatNow?: (id: string) => void
-}) {
-  const q = search.trim().toLowerCase()
-  const filtered = agents
-    .filter(a => {
-      const enrolled = enrolledIds.has(a.id)
-      return statusFilter === 'all'
-        || (statusFilter === 'active' && enrolled)
-        || (statusFilter === 'inactive' && !enrolled)
-    })
-    .filter(a => !q || a.name.toLowerCase().includes(q) || a.model.toLowerCase().includes(q))
-
-  if (agents.length === 0) {
-    return (
-      <EmptyState
-        title="No models yet"
-        body="Every workspace should start with a default opencode model. If one is missing, refresh this panel; you can change its model here once it appears."
-        action={
-          <Button size="sm" className="gap-1.5" onClick={onAdd}>
-            <Plus className="h-3.5 w-3.5" />Add model
-          </Button>
-        }
-      />
-    )
-  }
-  if (filtered.length === 0) {
-    return <EmptyState title="No matches" body={q ? `No models match “${q}”.` : 'No models in this filter.'} />
-  }
-
-  return (
-    <div className="flex min-w-0 flex-col overflow-hidden">
-      {filtered.map((a, i) => {
-        const allModels: ModelRef[] = []
-        for (const ms of modelIndex.values()) allModels.push(...ms)
-        const model = allModels.find(m => m.id === a.model)
-        const provider = model?.provider
-        const enrolled = enrolledIds.has(a.id)
-        return (
-          <motion.div
-            key={a.id}
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.02, duration: 0.15, ease: 'easeOut' }}
-            className="group flex min-w-0 max-w-full items-center gap-2 py-4 border-b last:border-b-0 sm:gap-3"
-          >
-            <Switch
-              checked={enrolled}
-              onCheckedChange={(next) => onToggleEnabled(a.id, next)}
-              aria-label={`${enrolled ? 'Disable' : 'Enable'} ${a.name} in this workspace`}
-            />
-            <AgentGlyph provider={provider} size="lg" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate">{a.name}</p>
-              <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground min-w-0">
-                {provider && <span className="shrink-0">{providerLabel(provider)}</span>}
-                <span className="truncate">{model?.label ?? a.model}</span>
-              </div>
-            </div>
-            <div className="flex shrink-0 items-center gap-1.5">
-              <Button
-                variant="outline"
-                size="sm"
-                className="hidden opacity-0 transition-opacity group-hover:opacity-100 sm:inline-flex"
-                onClick={() => onOpen(a.id)}
-              >
-                Edit
-              </Button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon-sm" aria-label="More actions">
-                    <MoreHorizontal className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-40">
-                  <DropdownMenuItem onSelect={() => onOpen(a.id)}>
-                    <Pencil className="h-4 w-4" />Edit
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => onChatNow?.(a.id)}>
-                    <MessageSquare className="h-4 w-4" />Chat now
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => onDuplicate(a.id)}>
-                    <Copy className="h-4 w-4" />Duplicate
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onSelect={() => onDelete(a.id)}
-                    className="text-destructive focus:text-destructive"
-                  >
-                    <Trash2 className="h-4 w-4" />Delete
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          </motion.div>
-        )
-      })}
-    </div>
-  )
-}
-
-function AgentDetail({
-  agents, modelIndex, focus, busy, onSave, onCancel, onDelete,
-}: {
-  agents: ServerAgent[]
-  modelIndex: Map<string, ModelRef[]>
-  focus: Exclude<AgentsFocus, null>
-  busy: boolean
-  onSave: (v: { id?: string; name: string; model: string }) => void
-  onCancel: () => void
-  onDelete: (id: string) => void
-}) {
-  const existing = focus.mode === 'edit' ? agents.find(a => a.id === focus.id) : undefined
-  const flatModels = useMemo(() => {
-    const out: ModelRef[] = []
-    for (const ms of modelIndex.values()) out.push(...ms)
-    return out
-  }, [modelIndex])
-
-  const initialModel = existing?.model ?? flatModels[0]?.id ?? ''
-
-  const [name, setName] = useState(existing?.name ?? '')
-  const [model, setModel] = useState(initialModel)
-  const [modelPickerOpen, setModelPickerOpen] = useState(false)
-  const [modelPickerPortalContainer, setModelPickerPortalContainer] = useState<HTMLElement | null>(null)
-
-  const canSave = name.trim().length > 0 && model.trim().length > 0
-  const handleSave = () => {
-    if (!canSave) return
-    onSave({
-      id: existing?.id,
-      name: name.trim(),
-      model: model.trim(),
-    })
-  }
-
-  const [deleteOpen, setDeleteOpen] = useState(false)
-  const { ref: scrollRef, scrolledUnder } = useScrolledUnder()
-
-  return (
-    <div ref={setModelPickerPortalContainer} className="flex-1 flex min-w-0 flex-col min-h-0 overflow-hidden">
-      <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pt-3 pb-4 space-y-4">
-        <Field label="Name">
-          <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Copywriter" />
-        </Field>
-
-        <Field label="Model">
-          <Popover open={modelPickerOpen} onOpenChange={setModelPickerOpen}>
-            <PopoverTrigger asChild disabled={flatModels.length === 0}>
-              <button
-                type="button"
-                disabled={flatModels.length === 0}
-                className={cn(
-                  'h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs text-left flex items-center justify-between gap-2 transition-colors',
-                  'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 outline-none',
-                  flatModels.length === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-muted/30',
-                )}
-              >
-                <span className={cn('truncate', !model && 'text-muted-foreground')}>
-                  {(flatModels.find(m => m.id === model)?.label ?? model) || 'Select model'}
-                </span>
-                <ChevronDown className="h-4 w-4 opacity-60 shrink-0" />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent
-              container={modelPickerPortalContainer ?? undefined}
-              className="p-0 w-[var(--radix-popover-trigger-width)] overflow-hidden"
-              align="start"
-              onEscapeKeyDown={() => {
-                // cmdk swallows Escape via preventDefault, which would
-                // stop Radix's auto-dismiss of this Popover. We force-
-                // close here instead so the outer Dialog stays open.
-                setModelPickerOpen(false)
-              }}
-            >
-              <Command>
-                <CommandInput placeholder="Search models…" />
-                <CommandList className="overscroll-contain">
-                  <CommandEmpty>No models found.</CommandEmpty>
-                  {[...modelIndex.entries()].map(([prov, models]) => (
-                    <CommandGroup key={prov} heading={providerLabel(prov)}>
-                      {models.map(m => (
-                        <CommandItem
-                          key={m.id}
-                          value={m.id}
-                          keywords={[m.label ?? m.id, prov]}
-                          onSelect={() => { setModel(m.id); setModelPickerOpen(false) }}
-                        >
-                          {m.label ?? m.id}
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
-                  ))}
-                </CommandList>
-              </Command>
-            </PopoverContent>
-          </Popover>
-        </Field>
-      </div>
-
-      <div
-        className={cn(
-          'shrink-0 p-4 flex min-w-0 flex-col items-stretch gap-2 border-t border-transparent sm:flex-row sm:items-center sm:justify-between',
-          scrolledUnder && 'border-border',
-        )}
-      >
-        <div>
-          {focus.mode === 'edit' && existing && (
-            <Popover open={deleteOpen} onOpenChange={setDeleteOpen}>
-              <PopoverTrigger asChild>
-                <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive gap-1.5">
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Delete model
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-64 p-4" align="start">
-                <p className="text-sm font-medium mb-1">Delete {existing.name}?</p>
-                <p className="text-xs text-muted-foreground mb-3">
-                  Any chats assigned to this model will lose it. This can't be undone.
-                </p>
-                <div className="flex gap-2">
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    className="flex-1"
-                    onClick={() => { setDeleteOpen(false); onDelete(existing.id) }}
-                  >
-                    Delete
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => setDeleteOpen(false)}>
-                    Cancel
-                  </Button>
-                </div>
-              </PopoverContent>
-            </Popover>
-          )}
-        </div>
-        <div className="flex min-w-0 items-center gap-2 sm:justify-end">
-          <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={onCancel} disabled={busy}>Cancel</Button>
-          <Button size="sm" className="flex-1 sm:flex-none" onClick={handleSave} disabled={!canSave || busy}>
-            {focus.mode === 'new' ? (busy ? 'Adding…' : 'Add model') : (busy ? 'Saving…' : 'Save')}
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // ── Connections section ──────────────────────────────────────────────────────
 
 type ConnectionsFocus =
@@ -876,7 +545,7 @@ function ConnectionsList({
     return (
       <EmptyState
         title="No connections yet"
-        body="Add Claude, ChatGPT, or another tool to make it available in this workspace."
+        body="Add GitHub, local folders, or another workspace tool to make it available here."
         action={
           <Button size="sm" className="gap-1.5" onClick={onPickNew}>
             <Plus className="h-3.5 w-3.5" />Add connection
@@ -992,6 +661,7 @@ function ConnectionsPicker({
   const [search, setSearch] = useState('')
   const q = search.trim().toLowerCase()
   const entries = (Object.entries(CONNECTION_CATALOG) as [ConnectionKind, typeof CONNECTION_CATALOG[ConnectionKind]][])
+    .filter(([kind]) => !isModelConnectionKind(kind))
     .filter(([, meta]) => !q
       || meta.name.toLowerCase().includes(q)
       || meta.description.toLowerCase().includes(q))
@@ -1008,7 +678,7 @@ function ConnectionsPicker({
           {entries.map(([kind, meta], i) => {
             const functional = isFunctionalKind(kind, localSources)
             const alreadyAdded = configuredKinds.has(kind)
-            const allowsMultiple = CONNECTOR_PROVIDER_BY_KIND[kind] !== undefined
+            const allowsMultiple = allowsMultipleConnections(kind)
             const disabled = !functional || (alreadyAdded && !allowsMultiple)
             const localKind = isLocalSourceKind(kind)
             const badge = !functional
@@ -1079,9 +749,9 @@ function ConnectionDetail({
 
   const providerEnvKey = providerKeyForKind(kind)
   const connectionDefinition = managedConnectionDefinitionForKind(kind)
-  const connectorProviderId = CONNECTOR_PROVIDER_BY_KIND[kind]
+  const connectorProviderId = workspaceConnectionProviderForKind(kind)
   const connectorConnection = connectorProviderId && focus.mode === 'edit'
-    ? connectorConnections.find(c => c.id === focus.id)
+    ? connectorConnections.find(c => c.id === (existing?.connectionId ?? focus.id))
     : undefined
   const persistedKey = providerEnvKey ? providerKeys[providerEnvKey] ?? '' : ''
   const persistedName = providerEnvKey ? providerMeta[providerEnvKey]?.name ?? '' : ''
@@ -1145,7 +815,7 @@ function ConnectionDetail({
         const trimmedCredentials = apiKey.trim()
         if (focus.mode === 'new' && !trimmedCredentials) {
           toast.error('Credentials are required', {
-            description: `Paste the ${catalogMeta.name} OAuth token JSON before adding this connection.`,
+            description: `Paste the ${catalogMeta.name} credentials before adding this connection.`,
           })
           return
         }
@@ -1351,18 +1021,22 @@ function ConnectionDetail({
         )}
 
         {connectorProviderId && !isLocalFilesystem ? (
-          <Field
-            label="Credentials"
-            help="Paste OAuth token JSON; Desk stores it encrypted server-side and never echoes it back."
-          >
-            <Textarea
-              value={apiKey}
-              onChange={e => { setApiKey(e.target.value); setApiKeyDirty(true) }}
-              data-testid={`connector-credentials-${connectorProviderId}`}
-              placeholder={'{\n  "token": "..."\n}'}
-              className="min-h-24 min-w-0 flex-1 font-mono text-xs"
-            />
-          </Field>
+          <>
+            {connectionManualGuide(connectionDefinition)}
+            <Field
+              label={connectionDefinition?.secretLabel ?? 'Credentials'}
+              help="Stored encrypted on the server and granted only to this workspace."
+            >
+              <Input
+                type="password"
+                value={apiKey}
+                onChange={e => { setApiKey(e.target.value); setApiKeyDirty(true) }}
+                data-testid={`connector-credentials-${connectorProviderId}`}
+                placeholder={connectionDefinition?.secretPlaceholder ?? 'Paste token or OAuth JSON'}
+                className="min-w-0 flex-1"
+              />
+            </Field>
+          </>
         ) : !isLocalFilesystem ? (
           <TokenConnectionForm
             definition={connectionDefinition}
@@ -1566,11 +1240,9 @@ interface SettingsModalProps {
   canDeleteWorkspace: boolean
   onUpdateWorkspace: (ws: WorkspaceInfo) => void
   onDeleteWorkspace: () => void
-  /** Called when the user clicks "Chat now" on an agent. Receives the agent id. */
-  onChatWithAgent?: (agentId: string) => void
   /** Optional section to focus when the modal opens. Re-applied on every
    * open so deep-links from the global palette land on the right page. */
-  initialSection?: NavSection
+  initialSection?: WorkspaceSettingsSection
 }
 
 export function SettingsModal({
@@ -1580,10 +1252,9 @@ export function SettingsModal({
   canDeleteWorkspace,
   onUpdateWorkspace,
   onDeleteWorkspace,
-  onChatWithAgent,
   initialSection,
 }: SettingsModalProps) {
-  const [activeSection, setActiveSection] = useState<NavSection>(initialSection ?? 'workspace')
+  const [activeSection, setActiveSection] = useState<WorkspaceSettingsSection>(initialSection ?? 'workspace')
   const isCompactViewport = useCompactViewport()
   const dispatch = useAppDispatch()
   const workspaceIconUrl = useWorkspaceIconUrl(workspace.id)
@@ -1591,88 +1262,6 @@ export function SettingsModal({
   useEffect(() => {
     if (open && initialSection) setActiveSection(initialSection)
   }, [open, initialSection])
-
-  // ── Agents state ──────────────────────────────────────────────────────────
-  const { data: serverAgents } = useGetAgentsQuery()
-  const { data: workspaceAgents } = useGetWorkspaceAgentsQuery(workspace.id, {
-    skip: !open || workspace.id === '__loading__',
-  })
-  const { data: models } = useGetModelsQuery()
-  const [createAgent, { isLoading: creatingAgent }] = useCreateAgentMutation()
-  const [patchAgent, { isLoading: patchingAgent }]  = usePatchAgentMutation()
-  const [deleteAgent] = useDeleteAgentMutation()
-  const [addWorkspaceAgent]    = useAddWorkspaceAgentMutation()
-  const [removeWorkspaceAgent] = useRemoveWorkspaceAgentMutation()
-
-  const agents = serverAgents ?? []
-  const enrolledIds = useMemo(
-    () => new Set((workspaceAgents ?? []).map(a => a.id)),
-    [workspaceAgents],
-  )
-
-  const [agentsFocus, setAgentsFocus]                 = useState<AgentsFocus>(null)
-  const [agentsSearch, setAgentsSearch]               = useState('')
-  const [agentsStatusFilter, setAgentsStatusFilter]   = useState<StatusFilter>('all')
-
-  const setAgentsFocusAndReset = (next: AgentsFocus) => {
-    setAgentsFocus(next)
-    setAgentsSearch('')
-  }
-
-  const handleSaveAgent = async (v: { id?: string; name: string; model: string }) => {
-    try {
-      if (v.id) {
-        await patchAgent({ id: v.id, patch: { name: v.name, model: v.model } }).unwrap()
-      } else {
-        const created = await createAgent({ name: v.name, model: v.model }).unwrap()
-        // Auto-enroll in the current workspace so the agent is active immediately.
-        await addWorkspaceAgent({ workspaceId: workspace.id, agentId: created.id }).unwrap()
-      }
-      setAgentsFocus(null)
-    } catch (err) {
-      toast.error('Could not save agent', { description: describeApiError(err) })
-    }
-  }
-
-  const handleDeleteAgent = async (id: string) => {
-    try {
-      await deleteAgent(id).unwrap()
-      setAgentsFocus(null)
-    } catch (err) {
-      toast.error('Could not delete agent', { description: describeApiError(err) })
-    }
-  }
-
-  const handleDuplicateAgent = async (id: string) => {
-    const source = agents.find(a => a.id === id)
-    if (!source) return
-    try {
-      await createAgent({
-        name: `${source.name} (copy)`,
-        model: source.model,
-      }).unwrap()
-    } catch (err) {
-      toast.error('Could not duplicate agent', { description: describeApiError(err) })
-    }
-  }
-
-  // Models are merged from /tools/models with hardcoded fallbacks for any
-  // provider whose key is configured — keeps provider/model dropdowns
-  // functional even when the sandbox model listing is empty or failing.
-  // Built later (we need providerKeys), but referenced here.
-  const editingAgentModel = (() => {
-    if (agentsFocus?.mode !== 'edit') return ''
-    return agents.find(a => a.id === agentsFocus.id)?.model ?? ''
-  })()
-
-  const handleToggleAgentEnabled = async (agentId: string, next: boolean) => {
-    try {
-      if (next) await addWorkspaceAgent({ workspaceId: workspace.id, agentId }).unwrap()
-      else      await removeWorkspaceAgent({ workspaceId: workspace.id, agentId }).unwrap()
-    } catch (err) {
-      toast.error(next ? 'Could not enable agent' : 'Could not disable agent', { description: describeApiError(err) })
-    }
-  }
 
   // ── Connections state ─────────────────────────────────────────────────────
   // The connection list merges legacy API-key providers, generic
@@ -1682,7 +1271,10 @@ export function SettingsModal({
   const { data: connectorConnectionsData } = useGetConnectorConnectionsQuery()
   const [createConnectorConnection, { isLoading: creatingConnectorConnection }] = useCreateConnectorConnectionMutation()
   const [patchConnectorConnection, { isLoading: patchingConnectorConnection }] = usePatchConnectorConnectionMutation()
-  const [deleteConnectorConnection] = useDeleteConnectorConnectionMutation()
+  const { data: workspaceConnectorGrantsData } = useGetWorkspaceConnectorGrantsQuery(workspace.id, {
+    skip: !open || workspace.id === '__loading__',
+  })
+  const [putWorkspaceConnectorGrants] = usePutWorkspaceConnectorGrantsMutation()
   const { data: providersMeta } = useGetProvidersMetaQuery()
   const [putProvidersMeta, { isLoading: savingMeta }] = usePutProvidersMetaMutation()
   const { data: localSourcesData } = useGetLocalSourcesQuery()
@@ -1691,6 +1283,7 @@ export function SettingsModal({
   const providerKeysMap = providerKeys ?? {}
   const providersMetaMap = providersMeta ?? {}
   const connectorConnections = connectorConnectionsData ?? []
+  const workspaceConnectorGrants = workspaceConnectorGrantsData ?? []
   const savingGenericConnector = creatingConnectorConnection || patchingConnectorConnection
   const localSourcesByKind = useMemo<Record<string, LocalSourceState>>(() => {
     const map: Record<string, LocalSourceState> = {}
@@ -1701,24 +1294,36 @@ export function SettingsModal({
     () => deriveConnections(providerKeysMap, providersMetaMap, connectorConnections, localSourcesByKind),
     [providerKeysMap, providersMetaMap, connectorConnections, localSourcesByKind],
   )
+  const workspaceConnections = useMemo<Connection[]>(() => connections
+    .filter(c => !isModelConnectionKind(c.kind))
+    .map(c => {
+      const providerId = workspaceConnectionProviderForKind(c.kind) ?? c.providerId
+      const grant = c.connectionId && providerId
+        ? workspaceConnectorGrants.find(g => g.connectionId === c.connectionId && g.providerId === providerId)
+        : undefined
+      return {
+        ...c,
+        providerId,
+        enabled: Boolean(grant),
+      }
+    }), [connections, workspaceConnectorGrants])
   const configuredKinds = useMemo(
-    () => new Set(connections.map(c => c.kind)),
-    [connections],
+    () => new Set(workspaceConnections.map(c => c.kind)),
+    [workspaceConnections],
   )
   const availableConnectionKinds = useMemo(
     () => (Object.keys(CONNECTION_CATALOG) as ConnectionKind[]).filter(kind => (
-      isFunctionalKind(kind, localSourcesByKind) && (!configuredKinds.has(kind) || allowsMultipleConnections(kind))
+      !isModelConnectionKind(kind)
+      && isFunctionalKind(kind, localSourcesByKind)
+      && (!configuredKinds.has(kind) || allowsMultipleConnections(kind))
     )),
     [configuredKinds, localSourcesByKind],
   )
 
-  // The "enabled" flag is server state for every kind: API-key kinds
-  // store it in provider_meta[envKey].enabled; local-source kinds (Codex,
-  // future LM Studio / Ollama) store it via /me/providers/local. The
-  // runtime filters disabled providers before forwarding keys to the
-  // sandbox, so toggling actually hides the provider from the model
-  // picker (not just from this list).
-  const connectionsView = connections
+  // Workspace settings only shows non-model connections. The enabled
+  // flag mirrors the workspace grant table, so toggles affect this
+  // workspace without disabling the user's global model providers.
+  const connectionsView = workspaceConnections
 
   const [connectionsFocus, setConnectionsFocus]               = useState<ConnectionsFocus>(null)
   const [connectionsSearch, setConnectionsSearch]             = useState('')
@@ -1727,6 +1332,29 @@ export function SettingsModal({
   const setConnectionsFocusAndReset = (next: ConnectionsFocus) => {
     setConnectionsFocus(next)
     setConnectionsSearch('')
+  }
+
+  const replaceWorkspaceConnectionGrant = async (
+    kind: ConnectionKind,
+    connectionId: string,
+    enabled: boolean,
+    grantedCapabilities: string[] = [],
+  ) => {
+    const providerId = workspaceConnectionProviderForKind(kind)
+    if (!providerId) return false
+    const retained = workspaceConnectorGrants
+      .filter(g => !(g.connectionId === connectionId && g.providerId === providerId))
+      .map(g => ({
+        connectionId: g.connectionId,
+        providerId: g.providerId,
+        grantedCapabilities: g.grantedCapabilities,
+        isDefault: g.isDefault,
+      }))
+    const grants = enabled
+      ? [...retained, { connectionId, providerId, grantedCapabilities, isDefault: true }]
+      : retained
+    await putWorkspaceConnectorGrants({ workspaceId: workspace.id, grants }).unwrap()
+    return true
   }
 
   const handleSaveConnection = async (conn: Connection) => {
@@ -1763,13 +1391,18 @@ export function SettingsModal({
   }
 
   const handleDeleteConnection = async (id: string) => {
-    const conn = connections.find(c => c.id === id)
+    const conn = connectionsView.find(c => c.id === id) ?? connections.find(c => c.id === id)
     if (!conn) { setConnectionsFocus(null); return }
-    if (CONNECTOR_PROVIDER_BY_KIND[conn.kind]) {
+    const workspaceProviderId = workspaceConnectionProviderForKind(conn.kind)
+    if (workspaceProviderId) {
+      if (!conn.connectionId) {
+        setConnectionsFocus(null)
+        return
+      }
       try {
-        await deleteConnectorConnection(id).unwrap()
+        await replaceWorkspaceConnectionGrant(conn.kind, conn.connectionId, false)
       } catch (err) {
-        toast.error('Could not remove connection', { description: describeApiError(err) })
+        toast.error('Could not remove connection from workspace', { description: describeApiError(err) })
         return
       }
       setConnectionsFocus(null)
@@ -1808,14 +1441,23 @@ export function SettingsModal({
   }
 
   const handleToggleConnectionEnabled = (id: string) => {
-    const conn = connections.find(c => c.id === id)
+    const conn = connectionsView.find(c => c.id === id)
     if (!conn) return
-    if (CONNECTOR_PROVIDER_BY_KIND[conn.kind]) {
+    const workspaceProviderId = workspaceConnectionProviderForKind(conn.kind)
+    if (workspaceProviderId) {
       const next = !conn.enabled
-      void patchConnectorConnection({ id, patch: { status: next ? 'active' : 'disabled' } })
-        .unwrap()
+      if (!conn.connectionId) {
+        toast.error('Could not update connection', { description: 'Open the connection and save credentials before enabling it for this workspace.' })
+        return
+      }
+      void replaceWorkspaceConnectionGrant(
+        conn.kind,
+        conn.connectionId,
+        next,
+        next ? (DEFAULT_CAPABILITIES_BY_CONNECTOR_KIND[conn.kind] ?? []) : [],
+      )
         .catch((err) => toast.error(
-          next ? 'Could not enable connection' : 'Could not disable connection',
+          next ? 'Could not enable connection in this workspace' : 'Could not disable connection in this workspace',
           { description: describeApiError(err) },
         ))
       return
@@ -1867,11 +1509,12 @@ export function SettingsModal({
     credentials?: Record<string, unknown>
     metadata?: Record<string, unknown>
   }) => {
-    const providerId = CONNECTOR_PROVIDER_BY_KIND[input.kind]
+    const providerId = workspaceConnectionProviderForKind(input.kind)
     if (!providerId) return
     try {
+      let saved: ServerConnectorConnection
       if (input.id) {
-        await patchConnectorConnection({
+        saved = await patchConnectorConnection({
           id: input.id,
           patch: {
             displayName: input.displayName,
@@ -1882,7 +1525,7 @@ export function SettingsModal({
           },
         }).unwrap()
       } else {
-        await createConnectorConnection({
+        saved = await createConnectorConnection({
           providerId,
           displayName: input.displayName,
           externalAccountId: input.externalAccountId,
@@ -1894,6 +1537,12 @@ export function SettingsModal({
           isDefault: true,
         }).unwrap()
       }
+      await replaceWorkspaceConnectionGrant(
+        input.kind,
+        saved.id,
+        true,
+        DEFAULT_CAPABILITIES_BY_CONNECTOR_KIND[input.kind] ?? saved.capabilities ?? [],
+      )
       setConnectionsFocus(null)
     } catch (err) {
       if (isVaultLockedError(err)) {
@@ -1904,18 +1553,8 @@ export function SettingsModal({
     }
   }
 
-  const modelIndex = useMemo(
-    () => buildModelIndex(models ?? [], editingAgentModel),
-    [models, editingAgentModel],
-  )
-
   // ── Route key for page transitions ────────────────────────────────────────
   const routeKey = (() => {
-    if (activeSection === 'agents') {
-      if (agentsFocus === null) return 'agents:list'
-      if (agentsFocus.mode === 'new') return 'agents:new'
-      return `agents:edit:${agentsFocus.id}`
-    }
     if (activeSection === 'connections') {
       if (connectionsFocus === null) return 'connections:list'
       if (connectionsFocus.mode === 'picker') return 'connections:picker'
@@ -1927,40 +1566,6 @@ export function SettingsModal({
 
   const renderHeaderBreadcrumb = () => {
     const pageClass = 'text-sm font-semibold text-foreground'
-
-    if (activeSection === 'agents') {
-      const leafLabel = agentsFocus === null
-        ? null
-        : agentsFocus.mode === 'new'
-          ? 'New model'
-          : agents.find(a => a.id === agentsFocus.id)?.name ?? 'Model'
-
-      return (
-        <Breadcrumb className="min-w-0">
-          <BreadcrumbList>
-            <BreadcrumbItem>
-              {leafLabel === null ? (
-                <BreadcrumbPage className={pageClass}>Models</BreadcrumbPage>
-              ) : (
-                <BreadcrumbLink asChild className={pageClass}>
-                  <button type="button" onClick={() => { setAgentsFocus(null); setAgentsSearch('') }}>
-                    Models
-                  </button>
-                </BreadcrumbLink>
-              )}
-            </BreadcrumbItem>
-            {leafLabel && (
-              <>
-                <BreadcrumbSeparator />
-                <BreadcrumbItem>
-                  <BreadcrumbPage className={cn(pageClass, 'truncate')}>{leafLabel}</BreadcrumbPage>
-                </BreadcrumbItem>
-              </>
-            )}
-          </BreadcrumbList>
-        </Breadcrumb>
-      )
-    }
 
     if (activeSection === 'connections') {
       const atNew = connectionsFocus?.mode === 'picker' || connectionsFocus?.mode === 'new'
@@ -2119,16 +1724,6 @@ export function SettingsModal({
                   onUpdate={ws => { onUpdateWorkspace(ws); onOpenChange(false) }}
                   onDelete={() => { onDeleteWorkspace(); onOpenChange(false) }}
                 />
-              ) : activeSection === 'agents' && agentsFocus !== null ? (
-                <AgentDetail
-                  agents={agents}
-                  modelIndex={modelIndex}
-                  focus={agentsFocus}
-                  busy={creatingAgent || patchingAgent}
-                  onSave={handleSaveAgent}
-                  onCancel={() => setAgentsFocus(null)}
-                  onDelete={handleDeleteAgent}
-                />
               ) : activeSection === 'connections' && connectionsFocus?.mode === 'picker' ? (
                 <ConnectionsPicker
                   configuredKinds={configuredKinds}
@@ -2159,37 +1754,10 @@ export function SettingsModal({
                   onSaveGenericConnector={handleSaveGenericConnector}
                   onToggleLocalSource={handleToggleLocalSource}
                 />
+              ) : activeSection === 'models' ? (
+                <ModelsSection />
               ) : (
                 <div className="flex-1 w-full min-w-0 max-w-full overflow-y-auto overflow-x-hidden px-4 pt-3 pb-6">
-                  {activeSection === 'agents' && (
-                    <div className="min-w-0 max-w-full space-y-4">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                        <StatusFilterPills value={agentsStatusFilter} onChange={setAgentsStatusFilter} />
-                        <div className="flex w-full min-w-0 max-w-full items-center gap-2 sm:w-auto">
-                          <SearchInput value={agentsSearch} onChange={setAgentsSearch} placeholder="Search models…" />
-                          <Button size="sm" className="gap-1.5" onClick={() => setAgentsFocusAndReset({ mode: 'new' })}>
-                            <Plus className="h-3.5 w-3.5" />Add
-                          </Button>
-                        </div>
-                      </div>
-                      <AgentsList
-                        agents={agents}
-                        modelIndex={modelIndex}
-                        enrolledIds={enrolledIds}
-                        statusFilter={agentsStatusFilter}
-                        search={agentsSearch}
-                        onOpen={(id) => setAgentsFocusAndReset({ mode: 'edit', id })}
-                        onAdd={() => setAgentsFocusAndReset({ mode: 'new' })}
-                        onDelete={handleDeleteAgent}
-                        onDuplicate={handleDuplicateAgent}
-                        onToggleEnabled={handleToggleAgentEnabled}
-                        onChatNow={(id) => {
-                          onOpenChange(false)
-                          onChatWithAgent?.(id)
-                        }}
-                      />
-                    </div>
-                  )}
                   {activeSection === 'connections' && (
                     <div className="min-w-0 max-w-full space-y-4">
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

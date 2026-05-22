@@ -57,6 +57,18 @@ describe("migrations", () => {
     expect(connectionNames).not.toContain("metadata_encrypted");
   });
 
+  it("adds global model activation and ordering columns", async () => {
+    const agentCols = await pool.query<{ name: string; not_null: number; dflt_value: string | null }>(
+      "SELECT name, \"notnull\" AS not_null, dflt_value FROM pragma_table_info('agents')",
+    );
+    const byName = new Map(agentCols.rows.map((r) => [r.name, r]));
+
+    expect(byName.get("enabled")?.not_null).toBe(1);
+    expect(byName.get("enabled")?.dflt_value).toBe("1");
+    expect(byName.get("sort_order")?.not_null).toBe(1);
+    expect(byName.get("sort_order")?.dflt_value).toBe("0");
+  });
+
   it("creates composite indexes", async () => {
     const { rows } = await pool.query<{ name: string }>(
       `SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name`,

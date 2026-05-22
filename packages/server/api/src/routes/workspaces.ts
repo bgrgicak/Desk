@@ -38,17 +38,18 @@ export async function listWorkspaces(pool: Pool, userId?: string) {
 }
 
 async function ensureWorkspaceAgent(pool: Pool, workspaceId: string, userId: string) {
-  const memberships = await queries.workspaceAgents.listForWorkspace(pool, workspaceId);
-  if (memberships.length > 0) return memberships;
-
-  const userAgents = await queries.agents.listByUser(pool, userId);
-  const agent = userAgents[0] ?? await queries.agents.insert(pool, {
-    id: generateId("agent"),
-    userId,
-    name: DEFAULT_AGENT_NAME,
-    model: DEFAULT_AGENT_MODEL,
-  });
-  await queries.workspaceAgents.addToWorkspace(pool, workspaceId, agent.id);
+  let activeAgents = await queries.agents.listActiveByUser(pool, userId);
+  if (activeAgents.length === 0) {
+    activeAgents = [await queries.agents.insert(pool, {
+      id: generateId("agent"),
+      userId,
+      name: DEFAULT_AGENT_NAME,
+      model: DEFAULT_AGENT_MODEL,
+    })];
+  }
+  for (const agent of activeAgents) {
+    await queries.workspaceAgents.addToWorkspace(pool, workspaceId, agent.id);
+  }
   return queries.workspaceAgents.listForWorkspace(pool, workspaceId);
 }
 
@@ -286,7 +287,7 @@ export async function deleteWorkspace(
   return { ok: true };
 }
 
-/** Lists agents enabled in a workspace, ordered by enrollment time. */
+/** Lists globally active agents available in a workspace, ordered by model order. */
 export async function listWorkspaceAgents(pool: Pool, workspaceId: string) {
   const ws = await queries.workspaces.findById(pool, workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${workspaceId}`);
@@ -310,6 +311,7 @@ export async function addAgentToWorkspace(
   if (!ws) throw new NotFoundError(`Workspace not found: ${workspaceId}`);
   const agent = await queries.agents.findById(pool, agentId);
   if (!agent) throw new NotFoundError(`Agent not found: ${agentId}`);
+  if (!agent.enabled) throw new ValidationError("Cannot add an inactive model to a workspace");
   if (agent.userId !== ws.userId) {
     throw new ValidationError(
       "Agent owner does not match workspace owner; cannot add to workspace",

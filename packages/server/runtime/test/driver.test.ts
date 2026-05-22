@@ -4,7 +4,10 @@ import {
   buildPiEnv,
   isContainerGoneError,
   parseModelSpec,
+  piModelReference,
   buildPiPrompt,
+  modelAttemptSpecs,
+  sandboxTokenPath,
   toSandboxPath,
 } from "../src/driver.js";
 import { SANDBOX_HOME } from "../src/mounts.js";
@@ -41,9 +44,18 @@ describe("buildPiEnv / buildDaemonEnv (alias)", () => {
     expect(withUrl.DESK_API_URL).toBe("http://host.docker.internal:35138");
   });
 
-  it("always emits DESK_SANDBOX_TOKEN_PATH so the in-sandbox CLI knows where to read", () => {
+  it("emits a per-run DESK_SANDBOX_TOKEN_PATH so concurrent runs in the same workspace can't stomp each other's tokens", () => {
+    const env = buildPiEnv({ runId: "run_abc" });
+    expect(env.DESK_SANDBOX_TOKEN_PATH).toBe("/tmp/desk-sandbox-token-run_abc");
+    // Distinct run ids must yield distinct paths — that's the whole
+    // point. If they collided, two runs would still race on /tmp.
+    const other = buildPiEnv({ runId: "run_xyz" });
+    expect(other.DESK_SANDBOX_TOKEN_PATH).toBe("/tmp/desk-sandbox-token-run_xyz");
+  });
+
+  it("omits DESK_SANDBOX_TOKEN_PATH when runId is absent (non-run callers like connection-refresh env-digest)", () => {
     const env = buildPiEnv({});
-    expect(env.DESK_SANDBOX_TOKEN_PATH).toBe("/tmp/desk-sandbox-token");
+    expect(env).not.toHaveProperty("DESK_SANDBOX_TOKEN_PATH");
   });
 
   it("exposes the buildDaemonEnv alias for legacy callers", () => {
@@ -73,6 +85,34 @@ describe("parseModelSpec", () => {
   });
 });
 
+describe("modelAttemptSpecs", () => {
+  it("keeps the primary model first and de-duplicates fallback models", () => {
+    expect(modelAttemptSpecs("anthropic/fail", [
+      "anthropic/fail",
+      "openai-codex/gpt-5.5",
+      "openai/gpt-5.4",
+      "openai-codex/gpt-5.5",
+      "",
+    ])).toEqual([
+      "anthropic/fail",
+      "openai-codex/gpt-5.5",
+      "openai/gpt-5.4",
+    ]);
+  });
+
+  it("returns fallbacks when the primary model is omitted", () => {
+    expect(modelAttemptSpecs(undefined, ["openai/gpt-5.4"])).toEqual(["openai/gpt-5.4"]);
+  });
+});
+
+describe("piModelReference", () => {
+  it("normalizes Desk's codex provider prefix for pi model scopes", () => {
+    expect(piModelReference("codex/gpt-5.5")).toBe("openai-codex/gpt-5.5");
+    expect(piModelReference("openai/gpt-5.4")).toBe("openai/gpt-5.4");
+    expect(piModelReference("gpt-5.4")).toBe("gpt-5.4");
+  });
+});
+
 describe("buildPiPrompt", () => {
   it("returns the prompt verbatim when there are no attachments", () => {
     expect(buildPiPrompt({ prompt: "Hello" })).toBe("Hello");
@@ -97,6 +137,12 @@ describe("toSandboxPath", () => {
   });
 });
 
+
+describe("sandboxTokenPath", () => {
+  it("returns a runId-scoped /tmp path", () => {
+    expect(sandboxTokenPath("run_abc")).toBe("/tmp/desk-sandbox-token-run_abc");
+  });
+});
 
 describe("isContainerGoneError", () => {
   it("matches the engine-emitted shapes for a missing container", () => {

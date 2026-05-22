@@ -253,7 +253,12 @@ export async function insert(
   // invariant — chats can only use agents the user has explicitly added to
   // the workspace (or the workspace default).
   const { rows: checkRows } = await db.query(
-    "SELECT 1 FROM workspace_agents WHERE workspace_id = ? AND agent_id = ?",
+    `SELECT 1
+       FROM workspace_agents wa
+       JOIN agents a ON a.id = wa.agent_id
+      WHERE wa.workspace_id = ?
+        AND wa.agent_id = ?
+        AND a.enabled = 1`,
     [data.workspaceId, data.agentId],
   );
   if (checkRows.length === 0) {
@@ -295,7 +300,12 @@ export async function updateMeta(
     if (chatRows.length === 0) return null;
     const workspaceId = chatRows[0].workspace_id as string;
     const { rows: enabledRows } = await db.query(
-      "SELECT 1 FROM workspace_agents WHERE workspace_id = ? AND agent_id = ?",
+      `SELECT 1
+         FROM workspace_agents wa
+         JOIN agents a ON a.id = wa.agent_id
+        WHERE wa.workspace_id = ?
+          AND wa.agent_id = ?
+          AND a.enabled = 1`,
       [workspaceId, data.agentId],
     );
     if (enabledRows.length === 0) {

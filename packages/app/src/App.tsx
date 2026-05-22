@@ -464,11 +464,6 @@ function AppInner() {
     goTo({ chat: NEW_CHAT_ID })
   }, [goTo])
 
-  const handleChatWithAgent = useCallback((agentId: string) => {
-    dispatch(setPendingNewChatAgentId(agentId))
-    goTo({ chat: NEW_CHAT_ID })
-  }, [dispatch, goTo])
-
   // Click on the *current* workspace tab is "go home in this workspace" —
   // always lands on the default view. Click on a *different* workspace tab
   // is "switch and resume" — lands on whatever URL that workspace was last
@@ -839,7 +834,6 @@ function AppInner() {
         onSelectWorkspace={handleSelectWorkspace}
         getWorkspaceHref={(id) => getLastWorkspaceUrl(id) ?? buildDefaultViewPath(id, defaultView)}
         onSignOut={() => void logout()}
-        onChatWithAgent={handleChatWithAgent}
         pinnedEntries={pinnedEntries}
         isPinnedLoading={!!activeWorkspaceId && !pinnedResp && (pinnedLoading || pinnedFetching || pinnedUninitialized)}
         selectedItemId={effectiveItemPath}

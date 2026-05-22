@@ -490,13 +490,16 @@ export const api = createApi({
       }
     >({
       query: (body) => ({ url: "/agents", method: "POST", body }),
-      invalidatesTags: [{ type: "Agent", id: "LIST" }],
+      invalidatesTags: [
+        { type: "Agent", id: "LIST" },
+        { type: "WorkspaceAgents", id: "LIST" },
+      ],
     }),
     patchAgent: build.mutation<
       ServerAgent,
       {
         id: string;
-        patch: Partial<Pick<ServerAgent, "name" | "model">>;
+        patch: Partial<Pick<ServerAgent, "name" | "model" | "enabled">>;
       }
     >({
       query: ({ id, patch }) => ({
@@ -509,6 +512,17 @@ export const api = createApi({
         { type: "Agent", id: "LIST" },
         // WorkspaceAgents extends Agent — invalidate so the compose picker
         // picks up the renamed agent without a full reload.
+        { type: "WorkspaceAgents", id: "LIST" },
+      ],
+    }),
+    reorderAgents: build.mutation<ServerAgent[], string[]>({
+      query: (ids) => ({
+        url: "/agents/order",
+        method: "PUT",
+        body: { ids },
+      }),
+      invalidatesTags: [
+        { type: "Agent", id: "LIST" },
         { type: "WorkspaceAgents", id: "LIST" },
       ],
     }),
@@ -1267,6 +1281,7 @@ export const {
   useGetAgentsQuery,
   useCreateAgentMutation,
   usePatchAgentMutation,
+  useReorderAgentsMutation,
   useDeleteAgentMutation,
   useGetWorkspaceAgentsQuery,
   useAddWorkspaceAgentMutation,

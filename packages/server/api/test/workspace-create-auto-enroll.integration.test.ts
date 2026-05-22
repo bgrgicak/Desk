@@ -4,8 +4,8 @@
  * A freshly-created workspace has no agents until one is enrolled, which
  * means chat creation rejects every agentId. To keep new workspaces
  * chat-ready by default, `createWorkspace` auto-enrolls the caller's
- * first agent or creates a default opencode-backed agent when none exists.
- * Users can change the agent model via the settings modal afterwards.
+ * active global models in order or creates a default agent when none exists.
+ * Users can change the model list via global account settings afterwards.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as http from "node:http";
@@ -114,10 +114,15 @@ async function insertAgent(name: string): Promise<string> {
 }
 
 describe("POST /workspaces — ensure a default workspace agent", () => {
-  it("enrolls the first agent from listByUser and marks it default", async () => {
-    // Insert two agents; `listByUser` orders by name, so "alpha" is first.
+  it("enrolls active agents in the global model order", async () => {
     const alphaId = await insertAgent("alpha");
-    await insertAgent("zeta");
+    const zetaId = await insertAgent("zeta");
+    const allAgentIds = (await queries.agents.listByUser(pool, userId)).map((a) => a.id);
+    await queries.agents.setOrder(pool, userId, [
+      alphaId,
+      zetaId,
+      ...allAgentIds.filter((id) => id !== alphaId && id !== zetaId),
+    ]);
 
     const res = await request("POST", "/workspaces", token, {
       name: "fresh",
@@ -126,15 +131,13 @@ describe("POST /workspaces — ensure a default workspace agent", () => {
     const ws = res.body as { id: string };
 
     const memberships = await queries.workspaceAgents.listForWorkspace(pool, ws.id);
-    expect(memberships).toHaveLength(1);
-    expect(memberships[0].agentId).toBe(alphaId);
+    expect(memberships.slice(0, 2).map((m) => m.agentId)).toEqual([alphaId, zetaId]);
 
     const deleteRes = await request("DELETE", `/agents/${alphaId}`, token);
-    expect(deleteRes.status).toBe(400);
+    expect(deleteRes.status).toBe(200);
 
     const stillEnrolled = await queries.workspaceAgents.listForWorkspace(pool, ws.id);
-    expect(stillEnrolled).toHaveLength(1);
-    expect(stillEnrolled[0].agentId).toBe(alphaId);
+    expect(stillEnrolled[0].agentId).toBe(zetaId);
   });
 
   it("creates and enrolls a default Anthropic agent for a user with no agents", async () => {

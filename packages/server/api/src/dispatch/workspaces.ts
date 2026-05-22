@@ -225,9 +225,21 @@ export async function dispatchWorkspaces(
     return true;
   }
   if (path === "/agents" && method === "POST") {
-    const body = await parseBody(req) as { name: string; model?: string };
-    const result = await agentRoutes.createAgent(pool, userId, body);
+    const body = await parseBody(req) as { name?: unknown; model?: unknown };
+    const result = await agentRoutes.createAgent(pool, userId, {
+      name: typeof body.name === "string" ? body.name : "",
+      model: typeof body.model === "string" ? body.model : undefined,
+    });
     sendJson(res, 201, result);
+    return true;
+  }
+  if (path === "/agents/order" && method === "PUT") {
+    const body = await parseBody(req) as { ids?: unknown };
+    if (!Array.isArray(body.ids) || body.ids.some((id) => typeof id !== "string")) {
+      throw new ValidationError("`ids` must be an array of agent ids");
+    }
+    const result = await agentRoutes.reorderAgents(pool, userId, body.ids as string[]);
+    sendJson(res, 200, result);
     return true;
   }
   if (segments[0] === "agents" && segments.length === 2 && method === "GET") {
@@ -238,8 +250,13 @@ export async function dispatchWorkspaces(
   }
   if (segments[0] === "agents" && segments.length === 2 && method === "PATCH") {
     await requireOwnedAgent(pool, segments[1], userId);
-    const body = await parseBody(req) as { name?: string; model?: string };
-    const { agent, modelChanged } = await agentRoutes.patchAgent(pool, segments[1], body);
+    const body = await parseBody(req) as { name?: unknown; model?: unknown; enabled?: unknown };
+    const data = {
+      name: typeof body.name === "string" ? body.name : undefined,
+      model: typeof body.model === "string" ? body.model : undefined,
+      enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
+    };
+    const { agent, modelChanged } = await agentRoutes.patchAgent(pool, userId, segments[1], data);
     if (modelChanged && opts.refreshSandboxConnections) {
       // opencode-serve caches each agent file's `model:` field at
       // startup and ignores rewrites. Clearing chat sessions (done

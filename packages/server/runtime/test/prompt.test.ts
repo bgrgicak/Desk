@@ -344,6 +344,7 @@ describe("renderPromptBody", () => {
       run: "User's goal: run a check or automation",
       task: "User's goal: track a task",
       scheduled: "User's goal: schedule recurring or future work",
+      search: "User's goal: search",
     };
     for (const goal of GOAL_KEYS) {
       const body = renderPromptBody({ ...baseInput, goal });

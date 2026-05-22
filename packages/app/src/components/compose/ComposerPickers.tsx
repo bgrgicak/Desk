@@ -48,6 +48,7 @@ const GOALS: Goal[] = [
   { key: 'image',    label: 'Image',    Icon: ImageIcon, placeholder: 'Describe the image you want to create...' },
   { key: 'data',     label: 'Data',     Icon: Table,    placeholder: 'What data do you want to track or analyse?' },
   { key: 'site',     label: 'Site',     Icon: Globe,    placeholder: 'Describe the site you want to build...' },
+  { key: 'search',   label: 'Search',   Icon: Search,   placeholder: 'What do you want to find?' },
   { key: 'task',     label: 'Task',     Icon: ListTodo, placeholder: 'What needs to be done?' },
 ]
 

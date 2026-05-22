@@ -40,6 +40,8 @@ describe("AgentSchema", () => {
     userId: "usr_abc",
     name: "Helper",
     model: "gpt-4",
+    enabled: true,
+    sortOrder: 0,
   };
 
   it("parses a valid agent", () => {
@@ -56,6 +58,17 @@ describe("AgentSchema", () => {
 
   it("round-trips through JSON", () => {
     expect(roundTrip(AgentSchema, valid)).toEqual(valid);
+  });
+
+  it("defaults active/sort metadata for older payloads", () => {
+    const parsed = AgentSchema.parse({
+      id: "agt_legacy",
+      userId: "usr_abc",
+      name: "Legacy",
+      model: "opencode/big-pickle",
+    });
+    expect(parsed.enabled).toBe(true);
+    expect(parsed.sortOrder).toBe(0);
   });
 });
 

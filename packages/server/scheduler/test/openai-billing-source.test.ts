@@ -14,6 +14,7 @@
 import { describe, it, expect } from "vitest";
 import {
   resolveOpenAiBillingSource,
+  resolveModelChainForRun,
   resolveModelForRun,
 } from "../src/runs.js";
 
@@ -122,5 +123,34 @@ describe("resolveModelForRun — auth-missing surfaces to pi (no Desk-side subst
     const out = resolveModelForRun("openai-codex/gpt-5.5", {}, oauth);
     expect(out.runtimeModel).toBe("openai-codex/gpt-5.5");
     expect(out.reason).toBeNull();
+  });
+});
+
+describe("resolveModelChainForRun", () => {
+  it("resolves the primary model and all active fallbacks in order", () => {
+    const out = resolveModelChainForRun(
+      ["anthropic/claude-sonnet-4-6", "codex/gpt-5.5", "openai/gpt-5.4"],
+      { OPENAI_API_KEY: "sk-openai" },
+      oauth,
+    );
+    expect(out.runtimeModels).toEqual([
+      "anthropic/claude-sonnet-4-6",
+      "openai-codex/gpt-5.5",
+      "openai/gpt-5.4",
+    ]);
+    expect(out.primary.runtimeModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(out.fallbackRuntimeModels).toEqual([
+      "openai-codex/gpt-5.5",
+      "openai/gpt-5.4",
+    ]);
+  });
+
+  it("de-duplicates repeated model ids before resolving fallbacks", () => {
+    const out = resolveModelChainForRun(
+      ["codex/gpt-5.5", "codex/gpt-5.5", "openai/gpt-5.4"],
+      { OPENAI_API_KEY: "sk-openai" },
+      {},
+    );
+    expect(out.runtimeModels).toEqual(["openai/gpt-5.5", "openai/gpt-5.4"]);
   });
 });

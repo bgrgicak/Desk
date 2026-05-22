@@ -36,6 +36,9 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await pool.query("DELETE FROM workspace_agents WHERE workspace_id = ?", [workspaceId]);
+  await agents.updateMeta(pool, agent1, { enabled: true });
+  await agents.updateMeta(pool, agent2, { enabled: true });
+  await agents.setOrder(pool, userId, [agent1, agent2]);
 });
 
 describe("workspace_agents queries", () => {
@@ -45,6 +48,16 @@ describe("workspace_agents queries", () => {
 
     const list = await workspaceAgents.listForWorkspace(pool, workspaceId);
     expect(list.map((r) => r.agentId)).toEqual([agent1, agent2]);
+  });
+
+  it("listForWorkspace follows global model order and hides inactive agents", async () => {
+    await workspaceAgents.addToWorkspace(pool, workspaceId, agent1);
+    await workspaceAgents.addToWorkspace(pool, workspaceId, agent2);
+    await agents.setOrder(pool, userId, [agent2, agent1]);
+    await agents.updateMeta(pool, agent1, { enabled: false });
+
+    const list = await workspaceAgents.listForWorkspace(pool, workspaceId);
+    expect(list.map((r) => r.agentId)).toEqual([agent2]);
   });
 
   it("addToWorkspace is idempotent", async () => {
@@ -110,5 +123,19 @@ describe("chats.insert validation against workspace_agents", () => {
       title: "Valid chat",
     });
     expect(chat.agentId).toBe(agent1);
+  });
+
+  it("rejects creation when the agent is globally inactive", async () => {
+    await workspaceAgents.addToWorkspace(pool, workspaceId, agent1);
+    await agents.updateMeta(pool, agent1, { enabled: false });
+    const { insert } = await import("../../src/queries/chats.js");
+    await expect(
+      insert(pool, {
+        id: generateId("chat"),
+        workspaceId,
+        agentId: agent1,
+        title: "Inactive chat",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
   });
 });

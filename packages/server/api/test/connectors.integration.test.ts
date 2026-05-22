@@ -233,6 +233,34 @@ describe("connector connection routes", () => {
     expect((await request("GET", "/me/connections?providerId=GEMINI_API_KEY", token)).body.connections).toHaveLength(0);
   });
 
+  it("stores one shared credential per model provider key", async () => {
+    await request("PUT", "/me/providers", token, { providers: { ANTHROPIC_API_KEY: null } });
+
+    const first = await request("PUT", "/me/providers", token, {
+      providers: { ANTHROPIC_API_KEY: "sk-ant-provider-first" },
+    });
+    expect(first.status).toBe(200);
+
+    const firstListed = await request("GET", "/me/connections?providerId=ANTHROPIC_API_KEY", token);
+    expect(firstListed.body.connections).toHaveLength(1);
+    const connectionId = firstListed.body.connections[0].id as string;
+
+    const second = await request("PUT", "/me/providers", token, {
+      providers: { ANTHROPIC_API_KEY: "sk-ant-provider-second" },
+    });
+    expect(second.status).toBe(200);
+
+    const secondListed = await request("GET", "/me/connections?providerId=ANTHROPIC_API_KEY", token);
+    expect(secondListed.body.connections).toHaveLength(1);
+    expect(secondListed.body.connections[0].id).toBe(connectionId);
+
+    const stored = vault.get(userId, credentialTitle(userId, "ANTHROPIC_API_KEY", connectionId));
+    expect(stored?.password).toBe(JSON.stringify({ value: "sk-ant-provider-second" }));
+
+    const resolved = await resolveProviderKeys(pool, vault, userId);
+    expect(resolved.ANTHROPIC_API_KEY).toBe("sk-ant-provider-second");
+  });
+
 
   it("validates connector payloads", async () => {
     const missing = await request("POST", "/me/connections", token, {});
