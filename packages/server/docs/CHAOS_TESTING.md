@@ -18,8 +18,8 @@ API — no app UI involvement, no test seed.
 
 Auth is automatic in dev: the script tries `POST /auth/auto-login`
 first and falls back to credential-based `POST /auth/login` only when
-auto-login is disabled. Override with `--username` / `--password` (or
-`ROOMY_USERNAME` / `ROOMY_PASSWORD`).
+auto-login is disabled. Override with `--email` / `--password` (or
+`ROOMY_EMAIL` / `ROOMY_PASSWORD`).
 
 ## Usage
 

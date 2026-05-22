@@ -9,6 +9,7 @@
     { "key": "baseUrl", "value": "http://localhost:35138", "type": "string" },
     { "key": "token", "value": "", "type": "string" },
     { "key": "username", "value": "roomy", "type": "string" },
+    { "key": "email", "value": "roomy@roomy.local", "type": "string" },
     { "key": "password", "value": "change-me-before-first-boot", "type": "string" },
     { "key": "workspaceId", "value": "", "type": "string" },
     { "key": "agentId", "value": "", "type": "string" },
@@ -47,7 +48,7 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}"
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] }
           }

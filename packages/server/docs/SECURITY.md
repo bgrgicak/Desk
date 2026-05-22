@@ -214,11 +214,13 @@ weak passwords hard to set," not retroactive invalidation.
 lets the SPA decide whether to render the live link vs the "coming
 soon" placeholder. Single-user-per-host deployments leave it off.
 
-When enabled: username (3–32 chars `[a-zA-Z0-9_-]`), valid email,
-password ≥ 12 chars and ≠ the documented seed. Creates the user row,
-bootstraps a hub workspace (matching `main.ts` boot behaviour), sets
-up the per-user vault when `ROOMY_VAULT_PASSWORD` is set, returns a
-session token. Same rate-limit shape as `/auth/login`.
+When enabled: display name (1–80 chars, no control characters; not
+unique — it's the name the agent uses for the user, not a handle),
+valid email (UNIQUE — this is the login identifier), password ≥ 12
+chars and ≠ the documented seed. Creates the user row, bootstraps a
+hub workspace (matching `main.ts` boot behaviour), sets up the
+per-user vault when `ROOMY_VAULT_PASSWORD` is set, returns a session
+token. Same rate-limit shape as `/auth/login`.
 
 ### First-run seed-password flag
 

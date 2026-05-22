@@ -67,7 +67,7 @@ nerdctl build -f packages/server/runtime/Dockerfile.sandbox \
 ```bash
 TOKEN=$(curl -s -X POST http://127.0.0.1:35138/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"roomy","password":"change-me"}' | jq -r .token)
+  -d '{"email":"roomy@roomy.local","password":"change-me"}' | jq -r .token)
 
 curl -s http://127.0.0.1:35138/me -H "Authorization: Bearer $TOKEN"
 ```
