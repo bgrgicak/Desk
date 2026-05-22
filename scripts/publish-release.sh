@@ -273,12 +273,17 @@ npm ci
 say "Building all packages..."
 npm run build:packages
 
-say "Smoke test: npm pack --workspaces --dry-run..."
-# Mirrors the publish.yml smoke check: pack every workspace, fail if nothing
-# was produced. We pipe through tee so the output is visible if it errors.
+say "Smoke test: npm pack --dry-run on public workspaces..."
+# Pack each public workspace one by one. Mirrors the explicit -w list
+# we use for publish, so the dry-run reflects what real `npm publish`
+# would attempt — no surprise EPRIVATE failures from private workspaces.
 PACK_LOG="$(mktemp)"
 trap 'rm -f "$PACK_LOG"' EXIT
-npm pack --workspaces --dry-run 2>&1 | tee "$PACK_LOG"
+pack_args=()
+for ws in "${PUBLIC_WORKSPACES[@]}"; do
+  pack_args+=("-w" "$ws")
+done
+npm pack "${pack_args[@]}" --dry-run 2>&1 | tee "$PACK_LOG"
 grep -q "Tarball Contents" "$PACK_LOG" || die "npm pack produced no tarballs."
 
 ok "Build + pack smoke test passed."
@@ -314,10 +319,20 @@ ok "Committed."
 # ---------- step 6: publish to npm ----------
 
 say "Publishing to npm..."
+# Explicitly publish each public workspace via -w. Earlier versions of
+# npm silently skipped private workspaces under `--workspaces`; npm 11
+# errors with EPRIVATE if any private workspace is in the set, even if
+# the others would publish fine. Building the -w list from
+# PUBLIC_WORKSPACES avoids that entirely.
+#
 # --access public for the scoped @roomy-ai/* packages.
-# publishConfig.tag=alpha in each package.json controls the dist-tag, so
-# `npm install @roomy-ai/cli` resolves to "alpha" until we cut a stable.
-if ! npm publish --workspaces --access public; then
+# publishConfig.tag=alpha in each package.json controls the dist-tag,
+# so `npm install @roomy-ai/cli` resolves to "alpha" until we cut a stable.
+publish_args=()
+for ws in "${PUBLIC_WORKSPACES[@]}"; do
+  publish_args+=("-w" "$ws")
+done
+if ! npm publish "${publish_args[@]}" --access public; then
   warn "npm publish failed. The version bump commit is still in your local history."
   warn "Inspect the failure, then either retry or 'git reset --hard HEAD~1' to discard."
   die "Publish aborted."
