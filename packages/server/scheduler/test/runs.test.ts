@@ -224,6 +224,7 @@ emit: (evt) => events.push(evt),
     });
     const claudeId = generateId("agent");
     const codexId = generateId("agent");
+    const disabledId = generateId("agent");
     const chatgptId = generateId("agent");
     await queries.agents.insert(pool, {
       id: claudeId,
@@ -238,14 +239,22 @@ emit: (evt) => events.push(evt),
       model: "codex/gpt-5.5",
     });
     await queries.agents.insert(pool, {
+      id: disabledId,
+      userId,
+      name: "Inactive fallback",
+      model: "anthropic/claude-opus-4-6",
+      enabled: false,
+    });
+    await queries.agents.insert(pool, {
       id: chatgptId,
       userId,
       name: "ChatGPT fallback",
       model: "openai/gpt-5.4",
     });
-    await queries.agents.setOrder(pool, userId, [claudeId, codexId, chatgptId]);
+    await queries.agents.setOrder(pool, userId, [claudeId, codexId, disabledId, chatgptId]);
     await queries.workspaceAgents.addToWorkspace(pool, wsId, claudeId);
     await queries.workspaceAgents.addToWorkspace(pool, wsId, codexId);
+    await queries.workspaceAgents.addToWorkspace(pool, wsId, disabledId);
     await queries.workspaceAgents.addToWorkspace(pool, wsId, chatgptId);
     const localChatId = generateId("chat");
     await queries.chats.insert(pool, {

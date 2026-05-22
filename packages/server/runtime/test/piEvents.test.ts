@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  modelSelectionFromEvent,
   terminalAssistantMessage,
   translateTerminalAssistantText,
   type TranslateContext,
@@ -60,6 +61,21 @@ describe("terminalAssistantMessage", () => {
         stopReason: "toolUse",
       },
     })).toBeNull();
+  });
+});
+
+describe("modelSelectionFromEvent", () => {
+  it("extracts selected models from live and session model-change events", () => {
+    expect(modelSelectionFromEvent({
+      type: "model_select",
+      model: { provider: "openai-codex", id: "gpt-5.5" },
+    })).toEqual({ providerID: "openai-codex", modelID: "gpt-5.5" });
+
+    expect(modelSelectionFromEvent({
+      type: "model_change",
+      provider: "openai",
+      modelId: "gpt-5.4",
+    })).toEqual({ providerID: "openai", modelID: "gpt-5.4" });
   });
 });
 

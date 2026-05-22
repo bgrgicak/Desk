@@ -27,6 +27,7 @@ import * as path from "node:path";
 import type { Engine } from "./engine.js";
 import {
   type PiJsonEvent,
+  modelSelectionFromEvent,
   readPiJsonEvents,
   terminalAssistantMessage,
   translatePiEvent,
@@ -36,6 +37,7 @@ import {
 } from "./piEvents.js";
 import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("runtime/piClient");
+const PI_CLI_PATH = "/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js";
 
 export interface PiRunOptions {
   containerId: string;
@@ -127,7 +129,7 @@ type PiChildProcess = ReturnType<typeof spawn> & {
  *
  * pi is invoked as:
  *
- *   pi -p --mode json --session=<id> [--provider <p>] [--model <m>] -- <prompt>
+ *   node <pi-cli> -p --mode json --session=<id> [--provider <p>] [--model <m>] -- <prompt>
  *
  * `--` separates the positional prompt argv from any flags that take
  * values. The prompt itself is passed as a single argv element; Linux
@@ -347,7 +349,7 @@ function buildPiArgv(opts: PiRunOptions): string[] {
   //
   // The session dir sits inside SANDBOX_HOME (the workspace bind
   // mount) so chat history survives container reaping for free.
-  const argv: string[] = ["pi", "-p", "--mode", "json"];
+  const argv: string[] = ["node", PI_CLI_PATH, "-p", "--mode", "json"];
   if (opts.sessionId) {
     argv.push("--session-dir", `/home/agent/.pi/agent/sessions/${opts.sessionId}`);
     argv.push("--continue");
@@ -380,6 +382,13 @@ function processPiJsonEvent(
   state: PiDrainState,
   onTerminal?: (message: TerminalAssistantMessage) => void,
 ): void {
+  const selectedModel = modelSelectionFromEvent(evt);
+  if (selectedModel) {
+    opts.translate.model = {
+      ...selectedModel,
+      ...(opts.translate.model?.agent ? { agent: opts.translate.model.agent } : {}),
+    };
+  }
   const translated = translatePiEvent(evt, opts.translate);
   if (translated.some((line) => {
     try {
@@ -392,6 +401,12 @@ function processPiJsonEvent(
   }
   const terminal = terminalAssistantMessage(evt);
   if (terminal) {
+    if (terminal.model) {
+      opts.translate.model = {
+        ...terminal.model,
+        ...(opts.translate.model?.agent ? { agent: opts.translate.model.agent } : {}),
+      };
+    }
     if (terminal.errorMessage) {
       trackAsync(state, opts.onStderr(terminal.errorMessage));
     } else if (!state.sawTextDelta) {

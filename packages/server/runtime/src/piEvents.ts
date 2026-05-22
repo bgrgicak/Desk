@@ -74,6 +74,33 @@ export interface TerminalAssistantMessage {
   model?: { providerID: string; modelID: string };
 }
 
+export function modelSelectionFromEvent(evt: PiJsonEvent): { providerID: string; modelID: string } | null {
+  if (!evt || typeof evt !== "object") return null;
+  if (evt.type === "model_select") {
+    const model = (evt as { model?: unknown }).model;
+    if (!model || typeof model !== "object") return null;
+    const m = model as { provider?: unknown; id?: unknown; modelId?: unknown };
+    const providerID = typeof m.provider === "string" ? m.provider : undefined;
+    const modelID = typeof m.id === "string"
+      ? m.id
+      : typeof m.modelId === "string"
+        ? m.modelId
+        : undefined;
+    return providerID && modelID ? { providerID, modelID } : null;
+  }
+  if (evt.type === "model_change") {
+    const e = evt as { provider?: unknown; modelId?: unknown; model?: unknown };
+    const providerID = typeof e.provider === "string" ? e.provider : undefined;
+    const modelID = typeof e.modelId === "string"
+      ? e.modelId
+      : typeof e.model === "string"
+        ? e.model
+        : undefined;
+    return providerID && modelID ? { providerID, modelID } : null;
+  }
+  return null;
+}
+
 /**
  * Maps one pi JSON event to one (or zero) run-format JSON line(s). Returns
  * the JSON string(s) ready to be emitted via `onLog({kind: "event"})`.
