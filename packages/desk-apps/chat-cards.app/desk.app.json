@@ -1,0 +1,9 @@
+{
+  "name": "chat-cards",
+  "displayName": "chat-cards",
+  "description": "A Desk app with fragments for showing one or more cards in chat. Each card can carry an optional title, description, image, and link; cards can be clickable as a whole or carry explicit action buttons that either open a URL or post a reply back to the chat. Use the `grid` fragment for image-led or browseable result sets, and the `list` fragment for text-heavy or vertical reading. Works for search results, recommendations, comparisons, source listings — anything where a scannable card layout beats prose.",
+  "version": "0.1.0",
+  "capabilities": ["chats.write"],
+  "params": {},
+  "fragments": ["grid", "list"]
+}

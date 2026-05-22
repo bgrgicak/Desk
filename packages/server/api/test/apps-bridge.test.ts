@@ -10,15 +10,23 @@ import { BRIDGE_SCRIPT_BODY } from "../src/routes/apps.js";
  * class of bug the wizard fragment hit.
  */
 describe("BRIDGE_SCRIPT_BODY", () => {
-  it("measures documentElement, not just body", () => {
-    // body.scrollHeight understates when a min-height + flex-center child
-    // is taller than the min — documentElement always reflects the real
-    // layout box.
-    expect(BRIDGE_SCRIPT_BODY).toContain("documentElement");
-    expect(BRIDGE_SCRIPT_BODY).toContain("d.scrollHeight");
+  it("measures body dimensions to size the iframe to actual content", () => {
+    // body.scrollHeight/offsetHeight reflect actual content size regardless
+    // of the iframe viewport. documentElement.scrollHeight (and
+    // getBoundingClientRect) used to be in the max() but they're at minimum
+    // the html element's rendered box — which by default fills the iframe
+    // viewport — so once the iframe grew they would keep reporting that
+    // larger size forever (a one-way ratchet preventing later, shorter
+    // wizard steps from shrinking the iframe back down).
+    expect(BRIDGE_SCRIPT_BODY).toContain("b.scrollHeight");
+    expect(BRIDGE_SCRIPT_BODY).toContain("b.offsetHeight");
+    expect(BRIDGE_SCRIPT_BODY).not.toContain("d.scrollHeight");
+    expect(BRIDGE_SCRIPT_BODY).not.toContain("getBoundingClientRect");
   });
 
   it("observes both documentElement and body for resizes", () => {
+    // We still observe the html element so layout changes that resize it
+    // (e.g. viewport-relative children) re-fire the measurement function.
     expect(BRIDGE_SCRIPT_BODY).toContain("ro.observe(document.body)");
     expect(BRIDGE_SCRIPT_BODY).toContain("ro.observe(document.documentElement)");
   });

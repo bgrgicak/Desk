@@ -26,6 +26,7 @@ import {
   type FileRef,
   type StorageContext,
 } from "@agent-desk/storage";
+import { writeBuiltinApps } from "@agent-desk/runtime";
 import { workspaceSlugForChat } from "./chats-shared.js";
 
 const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
@@ -155,7 +156,18 @@ export async function attachArtifactRef(
     if (!abs.startsWith(appsRoot + path.sep)) {
       throw new ValidationError(`Path traversal detected: ${data.path}`);
     }
-    const stat = await fs.stat(abs).catch(() => null);
+    let stat = await fs.stat(abs).catch(() => null);
+    if (!stat) {
+      // The .apps mirror is populated once on server start by
+      // writeBuiltinApps. If desk-apps was built (or freshly checked
+      // out) after start, the mirror is stale and a path the agent
+      // legitimately expects ("/opt/desk-apps/chat-forms.app/...") will
+      // 404 — pushing the agent onto a workspace-relative fallback that
+      // gets rendered in library scope and can't post chat messages.
+      // Re-sync once on miss and retry the stat before giving up.
+      await writeBuiltinApps(storage.home).catch(() => undefined);
+      stat = await fs.stat(abs).catch(() => null);
+    }
     if (!stat) throw new NotFoundError(`Built-in app artifact not found: ${insidePath}`);
     if (!stat.isFile() && !stat.isDirectory()) {
       throw new ValidationError(`Artifact path must point to a file or directory: ${insidePath}`);

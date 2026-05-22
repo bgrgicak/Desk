@@ -398,16 +398,19 @@ function applyScriptNonce(html: string, nonce: string): string {
  * payload. The body intentionally does NOT include the surrounding IIFE —
  * `injectBridge` wraps it.
  *
- * Height reporting: we measure both `documentElement.scrollHeight` and
- * `body.scrollHeight` and take the max. `body.scrollHeight` alone
- * understates when the body's child uses `min-height` + flex centering and
- * the natural content is taller than the min — the documentElement value
- * tracks the real layout box. We observe both elements so subsequent
- * mutations (wizard step changes, form errors) re-fire `v()`, and we
- * re-measure once `document.fonts.ready` resolves so font-induced layout
- * shifts don't leave the iframe one frame short.
+ * Height reporting: we measure `body.scrollHeight` (with `offsetHeight` as
+ * a fallback) — these reflect actual content size regardless of the iframe
+ * viewport. We deliberately do NOT use `documentElement.scrollHeight` or
+ * `getBoundingClientRect()` here: those track the html element's rendered
+ * box, which by default fills the iframe viewport, so once the iframe
+ * grew they would keep reporting that larger size forever (a one-way
+ * ratchet — the iframe could never shrink when a later wizard step had
+ * less content). We observe both body and documentElement so subsequent
+ * mutations re-fire `v()`, and re-measure once `document.fonts.ready`
+ * resolves so font-induced layout shifts don't leave the iframe one
+ * frame short.
  */
-export const BRIDGE_SCRIPT_BODY = `const t="desk.app.request";const r="desk.app.response";const s="desk.app.resize";let n=0;const p=new Map;function q(method,params){return new Promise((resolve,reject)=>{const id=Date.now()+":"+(++n);p.set(id,{resolve,reject});window.parent.postMessage({type:t,id,key:c.bridgeKey,method,params},"*")})}window.addEventListener("message",e=>{const m=e.data;if(!m||m.type!==r||!p.has(m.id))return;const h=p.get(m.id);p.delete(m.id);m.ok?h.resolve(m.result):h.reject(new Error(m.error||"Desk app bridge request failed"))});const storage={list(collection){return q("storage.list",{collection})},get(collection,id){return q("storage.get",{collection,id})},create(collection,doc){return q("storage.create",{collection,doc})},put(collection,id,doc){return q("storage.put",{collection,id,doc})},delete(collection,id){return q("storage.delete",{collection,id})}};const chat={sendMessage(text,opts){return q("chat.sendMessage",{text,artifactRefMessageId:opts&&opts.artifactRefMessageId})}};function u(){const d=document.documentElement;const b=document.body;const h=Math.ceil(Math.max(d?d.scrollHeight:0,b?b.scrollHeight:0,b?b.offsetHeight:0,d?d.getBoundingClientRect().height:0));window.parent.postMessage({type:s,key:c.bridgeKey,height:h},"*")}let o=0;function v(){if(o)return;o=requestAnimationFrame(()=>{o=0;u()})}function w(){u();if(typeof ResizeObserver!=="undefined"){const ro=new ResizeObserver(v);if(document.body)ro.observe(document.body);if(document.documentElement)ro.observe(document.documentElement);window.addEventListener("load",v,{once:true});if(document.fonts&&document.fonts.ready)document.fonts.ready.then(v)}else{window.addEventListener("resize",v);window.addEventListener("load",v,{once:true})}}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",w,{once:true})}else{w()}window.desk={app:c.app,chatId:c.chatId,capabilities:c.capabilities,storage,chat,fetch(){throw new Error("desk.fetch is not enabled; use explicit window.desk capabilities")}};`;
+export const BRIDGE_SCRIPT_BODY = `const t="desk.app.request";const r="desk.app.response";const s="desk.app.resize";let n=0;const p=new Map;function q(method,params){return new Promise((resolve,reject)=>{const id=Date.now()+":"+(++n);p.set(id,{resolve,reject});window.parent.postMessage({type:t,id,key:c.bridgeKey,method,params},"*")})}window.addEventListener("message",e=>{const m=e.data;if(!m||m.type!==r||!p.has(m.id))return;const h=p.get(m.id);p.delete(m.id);m.ok?h.resolve(m.result):h.reject(new Error(m.error||"Desk app bridge request failed"))});const storage={list(collection){return q("storage.list",{collection})},get(collection,id){return q("storage.get",{collection,id})},create(collection,doc){return q("storage.create",{collection,doc})},put(collection,id,doc){return q("storage.put",{collection,id,doc})},delete(collection,id){return q("storage.delete",{collection,id})}};const chat={sendMessage(text,opts){return q("chat.sendMessage",{text,artifactRefMessageId:opts&&opts.artifactRefMessageId})}};function u(){const b=document.body;const h=Math.ceil(Math.max(b?b.scrollHeight:0,b?b.offsetHeight:0));window.parent.postMessage({type:s,key:c.bridgeKey,height:h},"*")}let o=0;function v(){if(o)return;o=requestAnimationFrame(()=>{o=0;u()})}function w(){u();if(typeof ResizeObserver!=="undefined"){const ro=new ResizeObserver(v);if(document.body)ro.observe(document.body);if(document.documentElement)ro.observe(document.documentElement);window.addEventListener("load",v,{once:true});if(document.fonts&&document.fonts.ready)document.fonts.ready.then(v)}else{window.addEventListener("resize",v);window.addEventListener("load",v,{once:true})}}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",w,{once:true})}else{w()}window.desk={app:c.app,chatId:c.chatId,capabilities:c.capabilities,storage,chat,fetch(){throw new Error("desk.fetch is not enabled; use explicit window.desk capabilities")}};`;
 
 function injectBridge(html: string, ctx: BridgeContext, nonce: string): string {
   const payload = JSON.stringify({
@@ -677,28 +680,21 @@ export async function handleStaticAppRequest(
   const { distDir } = await resolveChatAppDist(pool, storage, chatId, appName);
   const cookiePath = `/apps/chat/${encodeURIComponent(chatId)}/${encodeURIComponent(appName)}`;
 
-  // Bootstrap (query token present): set cookie, redirect to clean URL
-  // so the address bar doesn't leak the token to copy-paste. Preserve a
-  // trailing slash on the requested path so the browser treats the
-  // redirected URL as a directory (relative asset paths inside the
-  // served HTML resolve correctly).
+  // Bootstrap (query token present): set the cookie and serve the
+  // response inline. Earlier versions 302-redirected here to strip the
+  // token from the address bar, but the redirect Location had to preserve
+  // any non-`t` query params the caller passed (e.g. chat-cards' `items`
+  // JSON or chat-forms' `steps`). For bulky payloads that header blew
+  // past nginx's default 4K `proxy_buffer_size` and surfaced as a 502 —
+  // see commit log + the `upstream sent too big header` nginx errors.
+  // The iframe is sandboxed to an opaque origin, the user never sees its
+  // URL, and the bearer token is a short-lived one-shot hashed in DB, so
+  // the original "address-bar leak" risk doesn't apply here.
   if (queryToken) {
     setAppCookie(res, cookieName, queryToken, cookiePath);
-    const incoming = new URL(req.url ?? "/", "http://localhost");
-    const trailingSlash = incoming.pathname.endsWith("/") ? "/" : "";
-    // Strip only the bearer token; preserve any other query params the
-    // caller passed (e.g. fragment params like ?question=... or ?steps=...).
-    // Dropping the full search broke fragments that depend on URL params.
-    const cleanSearch = new URLSearchParams(incoming.search);
-    cleanSearch.delete("t");
-    const cleanQs = cleanSearch.toString();
-    const cleanPath = `/${segments.join("/")}${trailingSlash}${cleanQs ? `?${cleanQs}` : ""}`;
-    res.writeHead(302, { Location: cleanPath });
-    res.end();
-    return true;
   }
 
-  // Cookie-authenticated request — serve the asset.
+  const bridgeToken = queryToken ?? cookieToken!;
   const entry = matchEntryPoint(tail);
   if (entry) {
     await serveIndex({
@@ -707,7 +703,7 @@ export async function handleStaticAppRequest(
       bridge: {
         chatId,
         appName,
-        bridgeKey: bridgeKeyFor(cookieToken),
+        bridgeKey: bridgeKeyFor(bridgeToken),
         capabilities: session.capabilities,
       },
       res,
@@ -912,22 +908,15 @@ export async function handleStaticGlobalAppRequest(
   const { distDir } = await resolveGlobalAppDist(storage, appName);
   const cookiePath = `/apps/global/${encodeURIComponent(chatId)}/${encodeURIComponent(appName)}`;
 
+  // Bootstrap (query token present): see the chat handler above — we set
+  // the cookie and serve the response inline rather than 302-redirecting,
+  // because preserving bulky fragment params in the Location header blew
+  // past nginx's default 4K `proxy_buffer_size` and produced a 502.
   if (queryToken) {
     setAppCookie(res, cookieName, queryToken, cookiePath);
-    const incoming = new URL(req.url ?? "/", "http://localhost");
-    const trailingSlash = incoming.pathname.endsWith("/") ? "/" : "";
-    // Strip only the bearer token; preserve any other query params the
-    // caller passed (e.g. fragment params like ?question=... or ?steps=...).
-    // Dropping the full search broke fragments that depend on URL params.
-    const cleanSearch = new URLSearchParams(incoming.search);
-    cleanSearch.delete("t");
-    const cleanQs = cleanSearch.toString();
-    const cleanPath = `/${segments.join("/")}${trailingSlash}${cleanQs ? `?${cleanQs}` : ""}`;
-    res.writeHead(302, { Location: cleanPath });
-    res.end();
-    return true;
   }
 
+  const bridgeToken = queryToken ?? cookieToken!;
   const entry = matchEntryPoint(tail);
   if (entry) {
     await serveIndex({
@@ -936,7 +925,7 @@ export async function handleStaticGlobalAppRequest(
       bridge: {
         chatId,
         appName,
-        bridgeKey: bridgeKeyFor(cookieToken),
+        bridgeKey: bridgeKeyFor(bridgeToken),
         capabilities: session.capabilities,
       },
       res,
@@ -1230,35 +1219,28 @@ export async function handleStaticLibraryAppRequest(
     : `/apps/library/${encodeURIComponent(appName)}`;
   const cookieName = libraryCookieNameFor(workspaceId!, appName);
 
+  // Bootstrap (query token present): see the chat handler — we set the
+  // cookie and serve inline. The previous 302 redirect carried any
+  // non-`t` query params in the Location header, which exceeded nginx's
+  // default 4K `proxy_buffer_size` for bulky fragment payloads (502).
   if (queryToken) {
     setAppCookie(res, cookieName, queryToken, cookiePath);
-    const incoming = new URL(req.url ?? "/", "http://localhost");
-    const trailingSlash = incoming.pathname.endsWith("/") ? "/" : "";
-    // Strip only the bearer token; preserve any other query params the
-    // caller passed (e.g. fragment params like ?question=... or ?steps=...).
-    // Dropping the full search broke fragments that depend on URL params.
-    const cleanSearch = new URLSearchParams(incoming.search);
-    cleanSearch.delete("t");
-    const cleanQs = cleanSearch.toString();
-    const cleanPath = `/${segments.join("/")}${trailingSlash}${cleanQs ? `?${cleanQs}` : ""}`;
-    res.writeHead(302, { Location: cleanPath });
-    res.end();
-    return true;
   }
 
+  const bridgeToken = queryToken ?? cookieToken!;
   const entry = entryPoint;
   if (entry) {
     await serveIndex({
       distDir,
       subpath: entry.subpath,
-        bridge: {
-          chatId: "",
-          appName,
-          bridgeKey: bridgeKeyFor(cookieToken!),
-          capabilities: session.capabilities,
-        },
-        res,
-      });
+      bridge: {
+        chatId: "",
+        appName,
+        bridgeKey: bridgeKeyFor(bridgeToken),
+        capabilities: session.capabilities,
+      },
+      res,
+    });
     return true;
   }
   await serveAsset(distDir, tail, res);

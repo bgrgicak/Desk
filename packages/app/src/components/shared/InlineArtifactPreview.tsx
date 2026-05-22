@@ -135,7 +135,10 @@ export function useArtifactPreview({ workspaceId, chatId, path, name, mime, para
     }
     return {
       ...base,
-      ...(base.scope === 'library' ? { workspaceId } : {}),
+      // Library refs rendered inline inside a chat (e.g. a chat-forms
+      // fragment attached via a workspace path) need the surrounding chat
+      // id so the bridge's `chat.sendMessage` can find a target chat.
+      ...(base.scope === 'library' ? { workspaceId, ...(chatId ? { chatId } : {}) } : {}),
       ...(params ? { params } : {}),
     }
   }, [path, name, mime, params, workspaceId, chatId])
@@ -316,9 +319,8 @@ export function InlineArtifactPreview({ workspaceId, chatId, path, name, mime, p
   // chat.
   return (
     <div
-      className="my-5 mx-auto w-full min-w-0 max-w-full overflow-hidden rounded-xl border border-foreground/10 bg-background shadow-md sm:max-w-5xl"
+      className="my-5 mx-auto w-full min-w-0 max-w-full max-h-[60vh] overflow-y-auto rounded-xl border border-foreground/10 bg-background shadow-md sm:max-w-5xl"
       data-testid="artifact-fragment-inline"
-      style={{ height: 280 }}
     >
       <ArtifactPreviewBody
         state={state}

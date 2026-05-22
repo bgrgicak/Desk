@@ -6,7 +6,7 @@
  * full path:
  *   1. `POST /apps/chat/:chatId/:appName/issue` returns a per-app token
  *      and bootstrap URL.
- *   2. `GET <bootstrap-url>` (with `?t=` query) → 302 + Set-Cookie.
+ *   2. `GET <bootstrap-url>` (with `?t=` query) → 200 inline HTML + Set-Cookie.
  *   3. `GET .../dist/` (cookie-authenticated) → injected index.html.
  *   4. `GET .../dist/assets/...` (cookie-authenticated) → asset bytes.
  *   5. Cross-app cookie isolation: a cookie for app A doesn't authorize
@@ -251,9 +251,14 @@ describe("static-app route + capability bridge", () => {
     expect(issued.url).toContain(`/apps/chat/${chatId}/${APP_NAME}/dist/`);
     expect(issued.url).toContain(`?t=`);
 
-    // Bootstrap with ?t= → 302 Redirect + Set-Cookie
+    // Bootstrap with ?t= → 200 inline HTML + Set-Cookie. We used to 302
+    // here to strip the token from the address bar, but the Location
+    // header had to preserve any non-`t` query params (chat-cards items
+    // JSON, chat-forms steps) which exceeded nginx's default 4K
+    // proxy_buffer_size for bulky payloads → 502. The iframe is sandboxed
+    // and its URL isn't user-visible, so the redirect dance was overkill.
     const bootstrap = await httpRaw("GET", issued.url);
-    expect(bootstrap.status).toBe(302);
+    expect(bootstrap.status).toBe(200);
     const cookie = pickSetCookie(bootstrap.headers, issued.cookieName);
     expect(cookie, "expected Set-Cookie for the per-app session").toBeTruthy();
 
@@ -265,22 +270,22 @@ describe("static-app route + capability bridge", () => {
     expect(setCookieRaw).toContain("HttpOnly");
     expect(setCookieRaw).toContain("SameSite=Strict");
 
-    const cleanPath = bootstrap.headers["location"];
-    expect(cleanPath).toBe(`/apps/chat/${chatId}/${APP_NAME}/dist/`);
+    // Bootstrap response body is the injected index.html.
+    expect(bootstrap.headers["content-type"]).toContain("text/html");
+    expect(bootstrap.body).toContain("window.desk");
+    expect(bootstrap.body).toContain("desk.app.request");
+    expect(bootstrap.body).toContain("storage.list");
+    expect(bootstrap.body).toContain(`"bridgeKey":"${issued.bridgeKey}"`);
+    expect(bootstrap.body).toContain(`"chatId":"${chatId}"`);
+    expect(bootstrap.body).toContain(`"name":"${APP_NAME}"`);
+    expect(bootstrap.body).toContain('"library.read"');
 
-    // Cookie-authenticated GET of dist root → injected index.html
-    const indexResp = await httpRaw("GET", String(cleanPath), {
+    // Subsequent cookie-authenticated GET of the same path still works.
+    const indexResp = await httpRaw("GET", `/apps/chat/${chatId}/${APP_NAME}/dist/`, {
       headers: { Cookie: cookie! },
     });
     expect(indexResp.status).toBe(200);
     expect(indexResp.headers["content-type"]).toContain("text/html");
-    expect(indexResp.body).toContain("window.desk");
-    expect(indexResp.body).toContain("desk.app.request");
-    expect(indexResp.body).toContain("storage.list");
-    expect(indexResp.body).toContain(`"bridgeKey":"${issued.bridgeKey}"`);
-    expect(indexResp.body).toContain(`"chatId":"${chatId}"`);
-    expect(indexResp.body).toContain(`"name":"${APP_NAME}"`);
-    expect(indexResp.body).toContain('"library.read"');
 
     // Cookie-authenticated asset → bytes
     const assetResp = await httpRaw(
@@ -484,13 +489,9 @@ describe("static-app route + capability bridge", () => {
       { bearer: authToken },
     );
     const issued = issue.bodyJson as { url: string; cookieName: string };
-    const bootstrap = await httpRaw("GET", issued.url);
-    const cookie = pickSetCookie(bootstrap.headers, issued.cookieName)!;
-    const cleanPath = bootstrap.headers["location"]!;
-
-    const idx = await httpRaw("GET", String(cleanPath), {
-      headers: { Cookie: cookie },
-    });
+    // Bootstrap serves the index inline now; the response itself is what
+    // we used to fetch via the redirect target.
+    const idx = await httpRaw("GET", issued.url);
     expect(idx.status).toBe(200);
     const csp = String(idx.headers["content-security-policy"] ?? "");
     expect(csp).toContain("default-src 'self'");
@@ -516,11 +517,12 @@ describe("static-app route + capability bridge", () => {
       new RegExp(`<script\\s+nonce="${escapedNonce}"\\s+type="module"\\s+src="\\./assets/index\\.js"`),
     );
 
-    // Asset responses set the same defense headers.
+    // Asset responses set the same defense headers. Assets are served
+    // unauthenticated (the URL is unguessable, and the iframe's opaque
+    // sandbox origin doesn't send cookies on module-script fetches).
     const asset = await httpRaw(
       "GET",
       `/apps/chat/${chatId}/${APP_NAME}/dist/assets/index.js`,
-      { headers: { Cookie: cookie } },
     );
     expect(asset.status).toBe(200);
     expect(asset.headers["x-content-type-options"]).toBe("nosniff");
@@ -548,12 +550,9 @@ describe("static-app route + capability bridge", () => {
       { bearer: authToken },
     );
     const issued = issue.bodyJson as { url: string; cookieName: string };
-    const bootstrap = await httpRaw("GET", issued.url);
-    const cookie = pickSetCookie(bootstrap.headers, issued.cookieName)!;
-    const cleanPath = bootstrap.headers["location"]!;
-    const indexResp = await httpRaw("GET", String(cleanPath), {
-      headers: { Cookie: cookie },
-    });
+    // Bootstrap serves the index inline now — the bridge payload lives
+    // in this response body directly, no redirect follow-up needed.
+    const indexResp = await httpRaw("GET", issued.url);
 
     // The HTML body has exactly two `</script>` substrings: the one we
     // emit closing our injected `<script>` tag, and any closing tags

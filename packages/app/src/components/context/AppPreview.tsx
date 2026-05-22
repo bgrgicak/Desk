@@ -32,7 +32,11 @@ interface IssuedAppSession {
 
 type AppPreviewProps =
   | { scope: 'chat'; chatId: string; appName: string; fragment?: string; params?: Record<string, string>; variant?: AppPreviewVariant }
-  | { scope: 'library'; appName: string; appPath?: string; workspaceId?: string; fragment?: string; params?: Record<string, string>; variant?: AppPreviewVariant }
+  // `chatId` is optional for library scope: when a library-shaped artifact is
+  // rendered inline inside a chat (e.g. a chat-forms fragment attached via a
+  // workspace path), the surrounding chat id flows through so the bridge's
+  // `chat.sendMessage` can resolve a target.
+  | { scope: 'library'; appName: string; appPath?: string; workspaceId?: string; chatId?: string; fragment?: string; params?: Record<string, string>; variant?: AppPreviewVariant }
   | { scope: 'global'; chatId: string; appName: string; fragment?: string; params?: Record<string, string>; variant?: AppPreviewVariant }
 
 export type AppPreviewVariant = 'detail' | 'inline'
@@ -93,7 +97,10 @@ export function AppPreview(props: AppPreviewProps) {
   const initialHeight = variant === 'inline' ? 240 : 640
   const appPath = props.scope === 'library' ? props.appPath : undefined
   const workspaceId = props.scope === 'library' ? props.workspaceId : undefined
-  const chatId = props.scope === 'chat' || props.scope === 'global' ? props.chatId : null
+  const chatId =
+    props.scope === 'chat' || props.scope === 'global'
+      ? props.chatId
+      : props.chatId ?? null
   const fragment = props.fragment ?? null
   const paramsKey = props.params ? JSON.stringify(props.params) : ''
   const [session, setSession] = useState<IssuedAppSession | null>(null)
@@ -103,13 +110,17 @@ export function AppPreview(props: AppPreviewProps) {
   const [retryToken, setRetryToken] = useState(0)
   const [frameHeight, setFrameHeight] = useState(initialHeight)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
-  // Cap frame height at 85% of the viewport for both variants. The content
-  // inside an inline fragment drives its own height via the resize bridge;
-  // we only need a ceiling so a runaway fragment can't push the chat
-  // composer off-screen. The previous 500px hard cap was too tight for
-  // multi-step wizards and produced an inner scrollbar even when the
-  // fragment's natural height would have fit fine.
-  const getMaxFrameHeight = () => Math.floor(window.innerHeight * 0.85)
+  // Inline iframes match content exactly — the wrapper around them
+  // (`InlineArtifactPreview`) has its own `max-h-[60vh] overflow-y-auto`
+  // that provides the scrollable cap. Capping the iframe here would
+  // create empty space whenever content is shorter than the cap (because
+  // the iframe would render at the cap, not the content). The detail
+  // panel still caps at 85% of viewport so a runaway fragment can't push
+  // the page chrome off-screen.
+  const getMaxFrameHeight = () =>
+    variant === 'inline'
+      ? Number.POSITIVE_INFINITY
+      : Math.floor(window.innerHeight * 0.85)
 
   useEffect(() => {
     let cancelled = false

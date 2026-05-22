@@ -44,6 +44,7 @@ export function Wizard({
   const [answers, setAnswers] = useState<Answers>(initial)
   const [current, setCurrent] = useState(0)
   const [submittedText, setSubmittedText] = useState<string | null>(null)
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   if (steps.length === 0) {
     return (
@@ -60,20 +61,26 @@ export function Wizard({
   const ready = isAnswered(step, value)
   const isFirst = current === 0
   const isLast = current === steps.length - 1
-  const disabled = submittedText !== null
+  // Disabled only while a submit is in-flight or succeeded. A failed
+  // submit re-enables the form so the user can retry — otherwise the
+  // bridge failure leaves them staring at an unresponsive form.
+  const disabled = submittedText !== null && submitError === null
 
   const submit = async (finalAnswers: Answers) => {
     const text = formatAnswers(steps, finalAnswers)
     setSubmittedText(text)
+    setSubmitError(null)
     try {
       if (onSubmit) {
         await onSubmit(text, finalAnswers)
       } else if (typeof window !== 'undefined') {
         await getChatClient().sendMessage(text)
       }
-    } catch {
-      // Keep submittedText set — UI still shows "Submitted" so the user
-      // isn't stuck on an unresponsive form if the bridge fails.
+    } catch (err) {
+      // Surface the failure so the user knows nothing was posted and
+      // can retry. Earlier this branch was silent and the UI kept
+      // saying "Submitted." even though the bridge had thrown.
+      setSubmitError(err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -165,9 +172,15 @@ export function Wizard({
         </div>
       )}
 
-      {submittedText !== null && (
+      {submittedText !== null && submitError === null && (
         <p className="mt-4 text-center text-sm text-muted-foreground">
           Submitted.
+        </p>
+      )}
+
+      {submitError !== null && (
+        <p className="mt-4 text-center text-sm text-destructive">
+          Couldn't submit: {submitError}
         </p>
       )}
     </Shell>
