@@ -422,7 +422,13 @@ describe("recoverOrphanedRuns", () => {
     expect(msg!.state).toBe("pending");
   });
 
-  it("fails orphaned task_run messages", async () => {
+  it("fails orphaned task_run messages and resets the parent task off 'running'", async () => {
+    // Reproduces the "stuck in Active" bug: an agent-authored unscheduled
+    // task gets promoted to state='running' on auto-fire (see
+    // dispatch/sandbox.ts and runs.ts:fireMessage). If the server dies
+    // before afterTaskRun mirrors the terminal state, the child task_run
+    // is recovered as 'failed' but the parent stays 'running' forever,
+    // which the status selector reads as Active on every list.
     const taskId = generateId("message");
     await messages.insert(p, {
       id: taskId,
@@ -442,6 +448,62 @@ describe("recoverOrphanedRuns", () => {
     expect(result.failed).toBeGreaterThanOrEqual(1);
     const run = await messages.findById(p, runId);
     expect(run!.state).toBe("failed");
+    const parent = await messages.findById(p, taskId);
+    expect(parent!.state).toBe("pending");
+    expect(parent!.startedAt).toBeUndefined();
+    expect(parent!.endedAt).toBeUndefined();
+  });
+
+  it("resets a parent task stuck in 'running' even with no child task_run row", async () => {
+    // Covers the gap where the run row was never written (e.g. crash
+    // between updateMessageIfState promote-to-running and beginTaskRun)
+    // but the parent did get promoted. The previous orphan sweep only
+    // looked at task_run/agent_turn rows, so this parent was invisible.
+    const taskId = generateId("message");
+    await messages.insert(p, {
+      id: taskId,
+      chatId: cId,
+      role: "user",
+      content: { type: "text", text: "orphan parent only" },
+      kind: "task",
+      state: "running",
+    });
+    await messages.recoverOrphanedRuns(p);
+    const parent = await messages.findById(p, taskId);
+    expect(parent!.state).toBe("pending");
+  });
+
+  it("leaves pending tasks alone — they're legitimate scheduled work, not orphans", async () => {
+    const future = new Date(Date.now() + 3600_000).toISOString();
+    const taskId = generateId("message");
+    await messages.insert(p, {
+      id: taskId,
+      chatId: cId,
+      role: "user",
+      content: { type: "text", text: "scheduled" },
+      kind: "task",
+      state: "pending",
+      executeAt: future,
+    });
+    await messages.recoverOrphanedRuns(p);
+    const parent = await messages.findById(p, taskId);
+    expect(parent!.state).toBe("pending");
+    expect(parent!.executeAt).toBe(future);
+  });
+
+  it("leaves terminal-state tasks alone", async () => {
+    const taskId = generateId("message");
+    await messages.insert(p, {
+      id: taskId,
+      chatId: cId,
+      role: "user",
+      content: { type: "text", text: "done task" },
+      kind: "task",
+      state: "succeeded",
+    });
+    await messages.recoverOrphanedRuns(p);
+    const parent = await messages.findById(p, taskId);
+    expect(parent!.state).toBe("succeeded");
   });
 
   it("leaves scheduled pending messages alone (future execute_at)", async () => {

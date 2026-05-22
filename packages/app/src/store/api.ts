@@ -146,6 +146,8 @@ export function buildMessagesQuery(f: MessagesFilter): string {
   if (f.contentKind && f.contentKind.length > 0)
     params.set("contentKind", f.contentKind.join(","));
   if (f.kind && f.kind.length > 0) params.set("kind", f.kind.join(","));
+  if (f.taskStatus && f.taskStatus.length > 0)
+    params.set("taskStatus", f.taskStatus.join(","));
   if (f.parentId) params.set("parentId", f.parentId);
   if (f.since) params.set("since", f.since);
   if (f.limit !== undefined) params.set("limit", String(f.limit));
@@ -249,6 +251,18 @@ export const api = createApi({
     getMe: build.query<ServerUser, void>({
       query: () => "/me",
       providesTags: ["Me"],
+    }),
+    /**
+     * Returns the hub-backed "Ask AI" chat for the current user (the
+     * oldest chat in their hub workspace). Server creates it on first
+     * call. The hub workspace itself is not exposed via the workspaces
+     * API; this is the single seam through which the Home → Ask AI
+     * surface discovers its chat id.
+     */
+    getAskAiChat: build.query<ServerChat, void>({
+      query: () => "/me/ask-ai-chat",
+      providesTags: (result) =>
+        result ? [{ type: "Chat", id: result.id }] : [],
     }),
     patchMe: build.mutation<
       ServerUser,
@@ -1241,6 +1255,7 @@ export const api = createApi({
 
 export const {
   useGetMeQuery,
+  useGetAskAiChatQuery,
   usePatchMeMutation,
   useChangePasswordMutation,
   useGetProviderKeysQuery,

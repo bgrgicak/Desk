@@ -27,3 +27,8 @@ export {
   updateMessage,
   updateMessageIfState,
 } from "./messages-writes.js";
+export {
+  decorateMessageWithTaskStatus,
+  decorateMessagesWithTaskStatus,
+  findTasksAffectedByChat,
+} from "./messages-task-status.js";

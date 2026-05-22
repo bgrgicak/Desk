@@ -195,6 +195,35 @@ export async function listWithLatestMessage(
   }));
 }
 
+/**
+ * Returns the oldest chat in a workspace whose title matches exactly,
+ * or `null` if none exist. Used by `getOrCreateAskAiChat` to find the
+ * single titled hub chat that backs the Home → Ask AI surface without
+ * being confused by sibling internal chats (reflections, future
+ * automation) that may have landed in the hub first.
+ */
+export async function findByWorkspaceAndTitle(
+  db: Pool,
+  workspaceId: string,
+  title: string,
+): Promise<Chat | null> {
+  const { rows } = await db.query(
+    `SELECT c.*,
+            ${latestAgentTurnStateMatchesSql(["pending", "running"])} AS is_running,
+            ${latestAgentTurnStateMatchesSql(["failed"])} AS is_failed,
+            (cp.chat_id IS NOT NULL) AS is_pinned
+       FROM chats c
+       LEFT JOIN chat_pins cp
+         ON cp.workspace_id = c.workspace_id AND cp.chat_id = c.id
+      WHERE c.workspace_id = ?
+        AND c.title = ?
+      ORDER BY c.created_at ASC, c.id ASC
+      LIMIT 1`,
+    [workspaceId, title],
+  );
+  return rows.length ? rowToChat(rows[0]) : null;
+}
+
 export async function findById(db: Pool, id: string): Promise<Chat | null> {
   // LEFT JOIN chat_pins so the WS chat.updated payload always carries
   // the current pinned flag, plus inline subqueries for running/failed

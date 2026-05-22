@@ -16,7 +16,12 @@ export async function requireOwnedWorkspace(
   userId: string,
 ): Promise<Workspace> {
   const ws = await queries.workspaces.findById(pool, workspaceId);
-  if (!ws || ws.userId !== userId) {
+  // Hubs are internal — treat them as nonexistent for any API caller so
+  // direct GET/PATCH/DELETE/chats/library/pins on the hub's ID 404
+  // symmetrically with the hub being filtered out of `listWorkspaces`.
+  // Internal callers (createHub, ensureHubsForAllUsers, pin storage
+  // writes) bypass this helper and go straight through `queries.*`.
+  if (!ws || ws.userId !== userId || ws.kind === "hub") {
     throw new NotFoundError(`Workspace not found: ${workspaceId}`);
   }
   return ws;

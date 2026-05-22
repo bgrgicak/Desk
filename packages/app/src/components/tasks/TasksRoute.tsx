@@ -133,12 +133,26 @@ export function TasksRoute({ workspaceId, selectedTaskId, onSelectTask }: TasksR
   // URL param (selectedTaskId) rather than the card's onSelect — the
   // card itself navigates via <Link to={href}>, which never fires
   // onSelect.
+  //
+  // Deps MUST be primitives (chatId string, unread bool). Depending on
+  // the `tasks` array reference would refire whenever getMessages
+  // refetches — and the server's chat.updated → message.updated task
+  // cascade refetches getMessages on every chat patch. That closed a
+  // PATCH /chats/:id loop at ~75 req/s.
+  const selectedTaskChatId = useMemo(
+    () => (selectedTaskId ? tasks.find(t => t.id === selectedTaskId)?.chatId ?? null : null),
+    [selectedTaskId, tasks],
+  )
+  const selectedTaskChatUnread = useMemo(
+    () => (selectedTaskChatId
+      ? !!serverChats?.find(c => c.id === selectedTaskChatId)?.unread
+      : false),
+    [selectedTaskChatId, serverChats],
+  )
   useEffect(() => {
-    if (!selectedTaskId) return
-    const chatId = tasks.find(t => t.id === selectedTaskId)?.chatId
-    if (!chatId) return
-    markChatReadQuietly(chatId, dispatch, appStore.getState)
-  }, [selectedTaskId, tasks, dispatch, appStore])
+    if (!selectedTaskChatId || !selectedTaskChatUnread) return
+    markChatReadQuietly(selectedTaskChatId, dispatch, appStore.getState)
+  }, [selectedTaskChatId, selectedTaskChatUnread, dispatch, appStore])
 
   const [createChatMutation] = useCreateChatMutation()
   const [postMessageMutation] = usePostChatMessageMutation()
@@ -173,6 +187,7 @@ export function TasksRoute({ workspaceId, selectedTaskId, onSelectTask }: TasksR
         executeAt: input.executeAt,
         cron: input.cron,
         attachments: input.attachments.length ? input.attachments : undefined,
+        files: input.files.length ? input.files : undefined,
       }).unwrap()
     } catch (err) {
       toast.error('Failed to create task', { description: extractApiError(err) })

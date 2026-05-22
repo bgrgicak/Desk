@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   MESSAGE_ROLES,
 } from "./constants.js";
+import { TASK_STATUSES } from "./task-status.js";
 
 export const UserSchema = z.object({
   id: z.string(),
@@ -333,6 +334,17 @@ export const MessageSchema = z.object({
   /** When set, this message is the anchor of a thread; the referenced
    * chat holds the thread transcript. */
   threadChatId: z.string().optional(),
+
+  /**
+   * Server-computed user-facing task lifecycle column. Only set on
+   * `kind: 'task'` rows; absent otherwise. The API decorates every
+   * Message it ships (REST and WS) with this so the SPA can render the
+   * status badge without joining chats + task_runs + per-row logic on
+   * its own (which used to drift between surfaces). Persisted nowhere
+   * — computed at the read/broadcast boundary from
+   * `computeTaskStatus()`.
+   */
+  taskStatus: z.enum(TASK_STATUSES).optional(),
 });
 export type Message = z.infer<typeof MessageSchema>;
 

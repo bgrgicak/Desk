@@ -1,14 +1,19 @@
 /**
  * Integration tests for the per-user hub workspace.
  *
- * Covers:
- *   - the boot pass auto-creates a hub for every user (idempotent)
- *   - the hub workspace ships empty — no seeded chat, no greeting
- *   - `GET /workspaces` sorts the hub first and exposes `kind`
- *   - the hub can't be deleted via the API
- *   - the hub can't be renamed via PATCH
- *   - users can't create or rename a workspace into a reserved `-hub` slug
- *   - the API rejects a client-supplied `kind` field
+ * The hub still exists in the DB (it backs cross-workspace pin storage
+ * and per-user bookkeeping), but it's an *internal* slot — the API
+ * hides it everywhere:
+ *
+ *   - `GET /workspaces` omits it (`listWorkspaces` filters `kind=hub`)
+ *   - `GET/PATCH/DELETE /workspaces/{hub-id}` returns 404
+ *   - `GET /chats?workspaceId=<hub-id>` and `GET /library?...` return 404
+ *   - `/workspaces/{hub-id}/pins` returns 404 (route is gated by the
+ *     same ownership helper)
+ *
+ * The boot-pass invariants still hold — the hub row, its on-disk
+ * directory, and the auto-enrolled agent are all created. They're just
+ * never reachable through the request-time API surface.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as http from "node:http";
@@ -204,8 +209,11 @@ describe("hub workspace boot pass", () => {
 });
 
 describe("GET /workspaces", () => {
-  it("sorts the hub first and exposes kind", async () => {
-    // Create one project workspace; the hub should still appear first.
+  it("hides the hub workspace from the list", async () => {
+    // Sanity check: the hub exists in the DB before we hit the API.
+    const hubRow = await queries.workspaces.findHubByUser(pool, userId);
+    expect(hubRow).not.toBeNull();
+
     const create = await request("POST", "/workspaces", token, {
       name: "Project Alpha",
     });
@@ -214,12 +222,10 @@ describe("GET /workspaces", () => {
     const list = await request("GET", "/workspaces", token);
     expect(list.status).toBe(200);
     const items = list.body as Array<{ id: string; kind: string; path: string }>;
-    expect(items.length).toBeGreaterThanOrEqual(2);
-    expect(items[0].kind).toBe("hub");
-    expect(items[0].path).toBe(`${userSlug}-hub`);
-    // Subsequent items must not be hubs.
-    for (const w of items.slice(1)) {
+    expect(items.length).toBeGreaterThanOrEqual(1);
+    for (const w of items) {
       expect(w.kind).toBe("project");
+      expect(w.id).not.toBe(hubRow!.id);
     }
   });
 });
@@ -252,37 +258,48 @@ describe("workspace CRUD guards", () => {
     expect(rename.status).toBe(400);
   });
 
-  it("rejects renaming the hub", async () => {
+  it("404s GET on the hub by id", async () => {
+    const hub = await queries.workspaces.findHubByUser(pool, userId);
+    const res = await request("GET", `/workspaces/${hub!.id}`, token);
+    expect(res.status).toBe(404);
+  });
+
+  it("404s PATCH on the hub by id", async () => {
     const hub = await queries.workspaces.findHubByUser(pool, userId);
     const res = await request("PATCH", `/workspaces/${hub!.id}`, token, {
       name: "Renamed Hub",
     });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
   });
 
-  it("rejects DELETE on the hub", async () => {
+  it("404s DELETE on the hub by id", async () => {
     const hub = await queries.workspaces.findHubByUser(pool, userId);
     const res = await request("DELETE", `/workspaces/${hub!.id}`, token);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
   });
 });
 
 describe("hub workspace — chats and library access", () => {
-  it("GET /chats?workspaceId=<hub-id> returns the hub's chats (not 400)", async () => {
+  it("GET /chats?workspaceId=<hub-id> 404s (hub is API-hidden)", async () => {
     const hub = await queries.workspaces.findHubByUser(pool, userId);
     const res = await request("GET", `/chats?workspaceId=${hub!.id}`, token);
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.status).toBe(404);
   });
 
-  it("GET /library?workspaceId=<hub-id> returns the hub's library (not 400)", async () => {
+  it("GET /library?workspaceId=<hub-id> 404s (hub is API-hidden)", async () => {
     const hub = await queries.workspaces.findHubByUser(pool, userId);
     const res = await request("GET", `/library?workspaceId=${hub!.id}`, token);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(404);
   });
 });
 
-describe("pins — hub capabilities", () => {
+describe("pins — hub endpoints are API-hidden", () => {
+  // The pin tables and storage are still in place — they're the
+  // backing store for cross-workspace pinning. They're just no longer
+  // reachable through `/workspaces/{hub-id}/pins`, which now 404s
+  // alongside every other hub-by-id route. When the frontend wires
+  // pins back up, it'll need an endpoint that does not require the
+  // caller to know (or address) the hub's id.
   let hubId: string;
   let projectId: string;
 
@@ -293,63 +310,29 @@ describe("pins — hub capabilities", () => {
     projectId = (create.body as { id: string }).id;
   });
 
-  it("GET /workspaces/{hub-id}/pins returns empty array initially", async () => {
+  it("GET /workspaces/{hub-id}/pins 404s", async () => {
     const res = await request("GET", `/workspaces/${hubId}/pins`, token);
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.status).toBe(404);
   });
 
-  it("POST /workspaces/{hub-id}/pins creates a pin from an owned workspace", async () => {
+  it("POST /workspaces/{hub-id}/pins 404s", async () => {
     const res = await request("POST", `/workspaces/${hubId}/pins`, token, {
       sourceWorkspaceId: projectId,
       kind: "chat",
       refId: "cht_fake123",
     });
-    expect(res.status).toBe(201);
-    const pin = res.body as { id: string; workspaceId: string; sourceWorkspaceId: string; kind: string; refId: string };
-    expect(pin.workspaceId).toBe(hubId);
-    expect(pin.sourceWorkspaceId).toBe(projectId);
-    expect(pin.kind).toBe("chat");
-    expect(pin.refId).toBe("cht_fake123");
+    expect(res.status).toBe(404);
   });
 
-  it("POST /workspaces/{hub-id}/pins is idempotent on duplicate (same ref)", async () => {
-    const first = await request("POST", `/workspaces/${hubId}/pins`, token, {
-      sourceWorkspaceId: projectId,
-      kind: "chat",
-      refId: "cht_idempotent",
-    });
-    const second = await request("POST", `/workspaces/${hubId}/pins`, token, {
-      sourceWorkspaceId: projectId,
-      kind: "chat",
-      refId: "cht_idempotent",
-    });
-    expect(first.status).toBe(201);
-    expect(second.status).toBe(201);
-    expect((first.body as { id: string }).id).toBe((second.body as { id: string }).id);
-  });
-
-  it("DELETE /workspaces/{hub-id}/pins/{pinId} removes a pin", async () => {
-    const create = await request("POST", `/workspaces/${hubId}/pins`, token, {
-      sourceWorkspaceId: projectId,
-      kind: "artifact",
-      refId: "art_todelete",
-    });
-    const pinId = (create.body as { id: string }).id;
-    const del = await request("DELETE", `/workspaces/${hubId}/pins/${pinId}`, token);
-    expect(del.status).toBe(200);
-    const list = await request("GET", `/workspaces/${hubId}/pins`, token);
-    const ids = (list.body as Array<{ id: string }>).map((p) => p.id);
-    expect(ids).not.toContain(pinId);
+  it("DELETE /workspaces/{hub-id}/pins/{pinId} 404s", async () => {
+    const res = await request("DELETE", `/workspaces/${hubId}/pins/pin_anything`, token);
+    expect(res.status).toBe(404);
   });
 });
 
 describe("project workspace chats/messages with hub present", () => {
-  // Regression guard: the Hub PR changed workspace ordering so that hub sorts
-  // first. Tests and frontend code that blindly pick workspaces[0] now get the
-  // hub instead of the project workspace, silently skipping project-path coverage.
-  // This suite verifies that project workspace chats and their messages are
-  // fully accessible via the API after ensureHubsForAllUsers has run.
+  // Regression guard: even with a hub workspace in the DB, project
+  // workspace chats and messages remain fully accessible via the API.
   let projectId: string;
   let agentId: string;
 
@@ -421,6 +404,110 @@ describe("project workspace chats/messages with hub present", () => {
     const getRes = await request("GET", `/chats/${chatId}`, token);
     expect(getRes.status).toBe(200);
     expect((getRes.body as { workspaceId: string }).workspaceId).toBe(projectId);
+  });
+});
+
+describe("GET /me/ask-ai-chat", () => {
+  // The hub is hidden from `GET /workspaces`, so the Home → Ask AI
+  // surface needs a dedicated endpoint to discover its chat id. The
+  // endpoint must:
+  //   - create the chat on first call when the hub has none
+  //   - return that same chat on subsequent calls (no duplicates)
+  //   - hand back a chat the caller can post messages to via
+  //     `POST /chats/{id}/messages` (the regular chat surface still
+  //     accepts hub-owned chat ids because `requireOwnedChat` only
+  //     checks user ownership, not workspace kind)
+
+  it("creates the hub's Ask AI chat on first call", async () => {
+    const hub = await queries.workspaces.findHubByUser(pool, userId);
+    expect(hub).not.toBeNull();
+    // Sanity check: no chats in the hub before we call the endpoint.
+    // (Earlier tests in this suite never seed hub chats.)
+    const before = await queries.chats.listWithLatestMessage(pool, hub!.id);
+    expect(before).toHaveLength(0);
+
+    const res = await request("GET", "/me/ask-ai-chat", token);
+    expect(res.status).toBe(200);
+    const chat = res.body as { id: string; workspaceId: string; title: string };
+    expect(chat.id).toMatch(/^cht_/);
+    expect(chat.workspaceId).toBe(hub!.id);
+    expect(chat.title).toBe("Ask AI");
+  });
+
+  it("returns the same chat on a second call (idempotent)", async () => {
+    const first = await request("GET", "/me/ask-ai-chat", token);
+    const second = await request("GET", "/me/ask-ai-chat", token);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect((first.body as { id: string }).id).toBe((second.body as { id: string }).id);
+  });
+
+  it("posting to the returned chat id works through the regular chat API", async () => {
+    const chatRes = await request("GET", "/me/ask-ai-chat", token);
+    const chatId = (chatRes.body as { id: string }).id;
+
+    const sendRes = await request("POST", `/chats/${chatId}/messages`, token, {
+      content: "hello from ask ai",
+    });
+    expect(sendRes.status).toBe(201);
+
+    const listRes = await request("GET", `/chats/${chatId}/messages`, token);
+    expect(listRes.status).toBe(200);
+    const body = listRes.body as { items: Array<{ content: { type: string; text?: string } }> };
+    const textMessages = body.items.filter((m) => m.content.type === "text");
+    expect(textMessages.some((m) => m.content.text === "hello from ask ai")).toBe(true);
+  });
+
+  it("401s without an auth token", async () => {
+    const res = await request("GET", "/me/ask-ai-chat", null);
+    expect(res.status).toBe(401);
+  });
+
+  // Regression: before the title-based lookup, getOrCreateAskAiChat
+  // picked the oldest chat in the hub by `created_at ASC`. The daily
+  // reflection chat inserted with `created_at = ''` (the schema's
+  // empty-string default; migration 0042 couldn't use a non-constant
+  // ALTER TABLE default) silently sorted before every real ISO
+  // timestamp and hijacked the slot — users opening "Ask AI" got the
+  // workspace reflection chat (full of `reflection_request` plumbing
+  // and journal entries) instead of their own thread.
+  it("creates a fresh Ask AI chat when an internal hub chat predates it", async () => {
+    const regUserId = generateId("user");
+    const regUserSlug = "askai-regression";
+    await queries.users.insert(pool, {
+      id: regUserId,
+      username: regUserSlug,
+      passwordHash: await hashPassword("pw"),
+      email: "askai-regression@example.com",
+    });
+    await createHub(pool, home, regUserId, regUserSlug);
+    const regHub = await queries.workspaces.findHubByUser(pool, regUserId);
+    expect(regHub).not.toBeNull();
+
+    // Seed an internal chat the same way a daily-reflection insert
+    // would (empty `created_at`, different title) — this reproduces
+    // the corrupted ordering the old lookup tripped over.
+    const [regAgent] = await queries.workspaceAgents.listForWorkspace(pool, regHub!.id);
+    expect(regAgent).toBeDefined();
+    const intruderId = generateId("chat");
+    await pool.query(
+      `INSERT INTO chats (id, workspace_id, agent_id, title, unread, created_at)
+       VALUES (?, ?, ?, ?, 0, '')`,
+      [intruderId, regHub!.id, regAgent.agentId, "Workspace reflection"],
+    );
+
+    const login = await request("POST", "/auth/login", null, {
+      username: regUserSlug,
+      password: "pw",
+    });
+    const regToken = (login.body as { token: string }).token;
+
+    const res = await request("GET", "/me/ask-ai-chat", regToken);
+    expect(res.status).toBe(200);
+    const chat = res.body as { id: string; workspaceId: string; title: string };
+    expect(chat.workspaceId).toBe(regHub!.id);
+    expect(chat.title).toBe("Ask AI");
+    expect(chat.id).not.toBe(intruderId);
   });
 });
 

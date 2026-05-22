@@ -1,8 +1,9 @@
 /**
- * Slice 16 — Provider keys: ChatGPT/Claude live under Settings → Models
- * (the new ModelsSection); GitHub stays in Settings → Connections via the
- * connector-credentials flow. All three persist via PUT /me/providers and
- * echo back masked from GET /me/providers.
+ * Slice 16 — Provider keys: ChatGPT/Claude live under My account → Models
+ * (the new ModelsSection in global user settings); GitHub stays in
+ * workspace Customize → Connections via the connector-credentials flow.
+ * All three persist via PUT /me/providers and echo back masked from
+ * GET /me/providers.
  */
 import { test, expect } from "../fixtures";
 
@@ -18,7 +19,8 @@ async function deleteAgentByName(serverUrl: string, token: string, name: string)
 }
 
 async function openModelsTab(page: import("@playwright/test").Page) {
-  await page.getByRole("button", { name: /Customize/ }).click();
+  await page.getByTestId("account-avatar").click();
+  await page.getByTestId("open-my-account").click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: /^Models$/i }).click();
   return dialog;

@@ -8,6 +8,7 @@ import {
   NotFoundError,
   ValidationError,
   slugifyWorkspaceName,
+  type Chat,
   type Workspace,
 } from "@agent-desk/shared";
 import { ensureWorkspaceLayout, renameWorkspaceDir, trashWorkspaceDir } from "@agent-desk/storage";
@@ -21,9 +22,19 @@ const DEFAULT_AGENT_MODEL = "anthropic/claude-haiku-4-5";
 const HUB_NAME = "Hub";
 const HUB_DESCRIPTION = "Your home base across all workspaces.";
 
+/**
+ * The hub workspace is an internal slot — it backs cross-workspace pin
+ * storage and per-user bookkeeping, but the user never navigates to it
+ * or sees it in any list. We strip it here so every consumer of the
+ * public list (sidebar, pickers, "first workspace" redirects) sees only
+ * project workspaces. Direct access to the hub by ID is blocked
+ * symmetrically in `requireOwnedWorkspace`.
+ */
 export async function listWorkspaces(pool: Pool, userId?: string) {
-  if (userId) return queries.workspaces.listByUser(pool, userId);
-  return queries.workspaces.list(pool);
+  const rows = userId
+    ? await queries.workspaces.listByUser(pool, userId)
+    : await queries.workspaces.list(pool);
+  return rows.filter((w) => w.kind !== "hub");
 }
 
 async function ensureWorkspaceAgent(pool: Pool, workspaceId: string, userId: string) {
@@ -109,6 +120,41 @@ export async function ensureHubsForAllUsers(pool: Pool, home: string): Promise<v
       );
     }
   }
+}
+
+const ASK_AI_CHAT_TITLE = "Ask AI";
+
+/**
+ * Returns the user's "Ask AI" chat — the dedicated hub-workspace chat
+ * titled `"Ask AI"`, created on demand. The hub itself is not exposed
+ * via the public workspaces API (filtered out of `listWorkspaces`,
+ * treated as 404 by `requireOwnedWorkspace`), so this is the dedicated
+ * seam for the Home → Ask AI surface to discover its chat id without
+ * leaking the hub workspaceId to client logic.
+ *
+ * Lookup is by title rather than "oldest in hub": the hub also hosts
+ * internal task_run chats (daily reflections, future automation), and
+ * those routinely land first — so a positional pick would silently
+ * hand the user a system chat full of `reflection_request` plumbing.
+ * Title is the explicit primitive that matches the surface's intent.
+ */
+export async function getOrCreateAskAiChat(pool: Pool, userId: string): Promise<Chat> {
+  const hub = await queries.workspaces.findHubByUser(pool, userId);
+  if (!hub) throw new NotFoundError("Hub workspace not provisioned for user");
+
+  const existing = await queries.chats.findByWorkspaceAndTitle(pool, hub.id, ASK_AI_CHAT_TITLE);
+  if (existing) return existing;
+
+  const memberships = await ensureWorkspaceAgent(pool, hub.id, userId);
+  const agentId = memberships[0]?.agentId;
+  if (!agentId) throw new NotFoundError("No agent available for hub workspace");
+
+  return queries.chats.insert(pool, {
+    id: generateId("chat"),
+    workspaceId: hub.id,
+    agentId,
+    title: ASK_AI_CHAT_TITLE,
+  });
 }
 
 /**

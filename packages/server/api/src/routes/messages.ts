@@ -3,9 +3,11 @@ import { queries } from "@agent-desk/db";
 import {
   MESSAGE_KINDS,
   MESSAGE_STATES,
+  TASK_STATUSES,
   ValidationError,
   type MessageKind,
   type MessageState,
+  type TaskStatus,
 } from "@agent-desk/shared";
 import { requireOwnedChat, requireOwnedWorkspace } from "../auth/ownership.js";
 
@@ -104,6 +106,18 @@ export async function listMessages(
     contentKinds = parsed;
   }
 
+  const taskStatusRaw = query.get("taskStatus");
+  let taskStatuses: TaskStatus[] | undefined;
+  if (taskStatusRaw !== null && taskStatusRaw !== "") {
+    const parsed = parseCsv(taskStatusRaw);
+    for (const s of parsed) {
+      if (!(TASK_STATUSES as readonly string[]).includes(s)) {
+        throw new ValidationError(`Invalid taskStatus: ${s}`);
+      }
+    }
+    taskStatuses = parsed as TaskStatus[];
+  }
+
   const kindRaw = query.get("kind");
   let kinds: MessageKind[] | undefined;
   if (kindRaw !== null && kindRaw !== "") {
@@ -176,5 +190,6 @@ export async function listMessages(
     cursor,
     limit,
     view,
+    taskStatuses,
   });
 }

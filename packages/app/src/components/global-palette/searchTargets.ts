@@ -12,10 +12,12 @@ export interface NavTarget {
   label: string
   keywords?: string[]
   icon: LucideIcon
-  /** RouteView to navigate to. */
+  /** RouteView to navigate to inside the active workspace. */
   view?: RouteView
-  /** When set, opens the Today sheet instead of navigating to a route. */
-  opensToday?: boolean
+  /** Navigate to the cross-room Home screen (Your day) instead of a workspace view. */
+  goHome?: boolean
+  /** Open the user's My Account modal. */
+  openMyAccount?: boolean
 }
 
 export interface SettingsTarget {
@@ -43,10 +45,10 @@ export const WORKSPACE_TARGETS: SearchTarget[] = [
 
 /** Global / user-level destinations. */
 export const SETTINGS_TARGETS: SearchTarget[] = [
-  { kind: 'page',     id: 'page:today',        label: 'Today',               icon: Sun,      opensToday: true, keywords: ['inbox'] },
-  { kind: 'settings', id: 'set:account',       label: 'My account',          icon: User,     section: 'account', keywords: ['profile', 'me'] },
+  { kind: 'page',     id: 'page:your-day',     label: 'Your day',            icon: Sun,      goHome: true,        keywords: ['today', 'home', 'inbox'] },
+  { kind: 'page',     id: 'page:account',      label: 'My account',          icon: User,     openMyAccount: true, keywords: ['profile', 'me', 'user settings'] },
   { kind: 'settings', id: 'set:models',        label: 'Models',              icon: Bot,      section: 'models', keywords: ['ai', 'bot', 'assistant', 'fallbacks', 'api keys', 'providers'] },
-  { kind: 'settings', id: 'set:preferences',   label: 'Preferences',         icon: Sliders,  section: 'preferences', keywords: ['theme', 'timezone'] },
+  { kind: 'settings', id: 'set:customize',     label: 'Customize',           icon: Sliders,  section: 'workspace', keywords: ['preferences', 'theme', 'timezone', 'workspace settings'] },
 ]
 
 function matches(target: SearchTarget, q: string): boolean {

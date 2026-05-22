@@ -4,6 +4,7 @@ import * as accountRoutes from "../routes/account.js";
 import * as authRoutes from "../routes/auth.js";
 import * as localSourceRoutes from "../routes/localSources.js";
 import * as vaultRoutes from "../routes/vault.js";
+import * as workspaceRoutes from "../routes/workspaces.js";
 import { parseBody, sendJson } from "../http/io.js";
 import { denyOverLimit } from "../http/rate-limit-response.js";
 import { getClientIp } from "../auth/rateLimit.js";
@@ -87,6 +88,11 @@ export async function dispatchAccount(
   // ── /me ─────────────────────────────────────────────────────────────
   if (path === "/me" && method === "GET") {
     const result = await accountRoutes.getMe(pool, userId);
+    sendJson(res, 200, result);
+    return true;
+  }
+  if (path === "/me/ask-ai-chat" && method === "GET") {
+    const result = await workspaceRoutes.getOrCreateAskAiChat(pool, userId);
     sendJson(res, 200, result);
     return true;
   }

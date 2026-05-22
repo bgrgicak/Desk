@@ -63,10 +63,10 @@ import { useAppDispatch, useAppSelector, useAppStore } from '@/store/hooks'
 import {
   setArtifactTransitionSource,
   setArtifactBackLabel,
-  setTodaySheetOpen,
   markArtifactSaved,
   setPendingNewChatAgentId,
   setPendingSettingsSection,
+  setPendingMyAccountOpen,
 } from '@/store/slices/uiSlice'
 import { buildArtifactPrompt } from '@/lib/artifact-prompt'
 import { markChatReadQuietly } from '@/store/ws/middleware'
@@ -290,7 +290,6 @@ function AppInner() {
 
   const artifactTransitionSource = useAppSelector(s => s.ui.artifactTransitionSource)
   const savedArtifactIdList = useAppSelector(s => s.ui.savedArtifactIds)
-  const todaySheetOpen = useAppSelector(s => s.ui.todaySheetOpen)
 
   const savedArtifactIds = useMemo(() => new Set(savedArtifactIdList), [savedArtifactIdList])
 
@@ -465,21 +464,16 @@ function AppInner() {
     goTo({ chat: NEW_CHAT_ID })
   }, [goTo])
 
-  const handleGlobalToday = useCallback(() => {
-    dispatch(setTodaySheetOpen(!todaySheetOpen))
-  }, [dispatch, todaySheetOpen])
-
   // Click on the *current* workspace tab is "go home in this workspace" —
   // always lands on the default view. Click on a *different* workspace tab
   // is "switch and resume" — lands on whatever URL that workspace was last
   // viewed at, falling back to its default view on first visit.
   const handleSelectWorkspace = useCallback((id: string) => {
-    dispatch(setTodaySheetOpen(false))
     const target = id === activeWorkspaceId
       ? buildDefaultViewPath(id, defaultView)
       : (getLastWorkspaceUrl(id) ?? buildDefaultViewPath(id, defaultView))
     navigate(target)
-  }, [activeWorkspaceId, navigate, dispatch, defaultView])
+  }, [activeWorkspaceId, navigate, defaultView])
 
   const handleArtifactClick = useCallback((artifact: Artifact, source?: 'compose' | 'chat', backLabel?: string) => {
     dispatch(setArtifactTransitionSource(source ?? null))
@@ -788,8 +782,12 @@ function AppInner() {
       <GlobalPalette
         activeWorkspaceId={activeWorkspaceId}
         onNavigatePage={(t) => {
-          if (t.opensToday) {
-            dispatch(setTodaySheetOpen(true))
+          if (t.goHome) {
+            navigate('/')
+            return
+          }
+          if (t.openMyAccount) {
+            dispatch(setPendingMyAccountOpen(true))
             return
           }
           if (t.view) goTo({ view: t.view })
@@ -835,9 +833,6 @@ function AppInner() {
         activeWorkspaceId={activeWorkspaceId}
         onSelectWorkspace={handleSelectWorkspace}
         getWorkspaceHref={(id) => getLastWorkspaceUrl(id) ?? buildDefaultViewPath(id, defaultView)}
-        onGlobalToday={handleGlobalToday}
-        todaySheetOpen={todaySheetOpen}
-        onTodaySheetClose={() => dispatch(setTodaySheetOpen(false))}
         onSignOut={() => void logout()}
         pinnedEntries={pinnedEntries}
         isPinnedLoading={!!activeWorkspaceId && !pinnedResp && (pinnedLoading || pinnedFetching || pinnedUninitialized)}

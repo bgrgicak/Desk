@@ -95,10 +95,6 @@ export function GlobalPaletteSearch({
   const chatResults = useMemo(() => searchResults.filter(r => r.type === 'chat' || r.type === 'message'), [searchResults])
   const fileResults = useMemo(() => searchResults.filter(r => r.type === 'file'), [searchResults])
 
-  const hasAnyResults =
-    workspaceMatches.length + settingsMatches.length + workspaceListMatches.length +
-    chatResults.length + fileResults.length > 0
-
   const renderTarget = (t: SearchTarget) => {
     const onSelect = t.kind === 'page'
       ? () => onNavigatePage(t)
@@ -131,8 +127,6 @@ export function GlobalPaletteSearch({
             </CommandItem>
           </CommandGroup>
         )}
-
-        {isSearching && hasAnyResults && <CommandSeparator />}
 
         {/* Default view ─ no query: recent global Ask AI chats. */}
         {!isSearching && recentChats && recentChats.length > 0 && (

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   Sun,
@@ -80,7 +80,7 @@ import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'
 import { useHomePins, removeHomePin, type HomePinKind } from '@/hooks/use-home-pins'
 import { useHomeSections, HOME_SECTION_LABELS, type HomeSectionKey } from '@/hooks/use-home-sections'
 import { generateHomeDigest, type HomeDigest } from '@/lib/home-summary'
-import { buildPath } from '@/router/nav'
+import { buildPath, type RouteView } from '@/router/nav'
 import { buildDefaultViewPath } from '@/App'
 import { logout } from '@/auth/session'
 import { DeskWordmark } from './DeskWordmark'
@@ -101,7 +101,6 @@ import {
   PREVIEW_MIN_CHAT_WIDTH,
   PREVIEW_MIN_PANEL_WIDTH,
 } from '@/store/slices/previewPanelSlice'
-import { mockHomeBuckets, MOCK_HOME_TASKS_ENABLED } from './mock-home-tasks'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
@@ -130,29 +129,47 @@ function recency(t: Task): number {
   return (t.completedAt ?? t.nextRun ?? t.startedAt).getTime()
 }
 
-/** A selectable top-level nav row (Your day / Ask AI). */
+/** A click that the browser should handle natively (open in a new tab,
+ *  background tab, new window) rather than our client-side handler. We
+ *  let it fall through so middle-click and cmd/ctrl/shift-click on a
+ *  Link still open in a new tab, even when the row's onClick would
+ *  otherwise preventDefault to run a slide-out animation. */
+function isModifiedClick(e: React.MouseEvent): boolean {
+  return (
+    e.button !== 0 ||
+    e.metaKey ||
+    e.ctrlKey ||
+    e.shiftKey ||
+    e.altKey
+  )
+}
+
+/** A selectable top-level nav row (Your day / Ask AI). Rendered as a
+ *  Link so middle/cmd-click opens the view in a new tab. */
 function HomeNavItem({
   icon: Icon,
   label,
+  href,
   active,
   badge,
-  onSelect,
 }: {
   icon: React.ComponentType<{ className?: string }>
   label: string
+  href: string
   active: boolean
   badge?: number
-  onSelect: () => void
 }) {
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
+        asChild
         isActive={active}
-        onClick={onSelect}
         className={cn(SIDEBAR_ROW_STATE_CLASS, 'text-foreground', badge ? 'pr-10' : undefined)}
       >
-        <Icon className="h-4 w-4 text-muted-foreground" />
-        <span className="flex-1 min-w-0 truncate text-left">{label}</span>
+        <Link to={href}>
+          <Icon className="h-4 w-4 text-muted-foreground" />
+          <span className="flex-1 min-w-0 truncate text-left">{label}</span>
+        </Link>
       </SidebarMenuButton>
       {badge ? (
         // Outline-style badge. `right-2` puts the badge's right edge
@@ -170,13 +187,20 @@ function HomeNavItem({
 }
 
 /** Room row — owns its own per-room "Needs input" badge query, and a
- *  hover kebab with a Delete-room action (AlertDialog confirm). */
+ *  hover kebab with a Delete-room action (AlertDialog confirm).
+ *
+ *  Rendered as a Link so middle/cmd-click opens the room in a new tab.
+ *  Unmodified left-clicks preventDefault and route through `onOpen` so
+ *  the parent can still run the sidebar slide-out animation before
+ *  navigating. */
 function HomeRoomItem({
   workspace,
+  href,
   onOpen,
   onRequestDelete,
 }: {
   workspace: ServerWorkspace
+  href: string
   onOpen: (ws: ServerWorkspace) => void
   onRequestDelete: (ws: ServerWorkspace) => void
 }) {
@@ -200,19 +224,28 @@ function HomeRoomItem({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
-        onClick={() => onOpen(workspace)}
+        asChild
         className={cn(SIDEBAR_ROW_STATE_CLASS, 'pr-10 text-foreground')}
         data-testid={`home-room-${workspace.id}`}
       >
-        {icon ? (
-          <img src={icon} alt="" className="h-4 w-4 shrink-0 rounded-full object-cover" />
-        ) : (
-          <span
-            className="h-4 w-4 shrink-0 rounded-full border-2"
-            style={{ borderColor: roomColor(info.bg) }}
-          />
-        )}
-        <span className="flex-1 min-w-0 truncate text-left">{info.name}</span>
+        <Link
+          to={href}
+          onClick={(e) => {
+            if (isModifiedClick(e)) return
+            e.preventDefault()
+            onOpen(workspace)
+          }}
+        >
+          {icon ? (
+            <img src={icon} alt="" className="h-4 w-4 shrink-0 rounded-full object-cover" />
+          ) : (
+            <span
+              className="h-4 w-4 shrink-0 rounded-full border-2"
+              style={{ borderColor: roomColor(info.bg) }}
+            />
+          )}
+          <span className="flex-1 min-w-0 truncate text-left">{info.name}</span>
+        </Link>
       </SidebarMenuButton>
       {badgeCount > 0 && (
         <SidebarMenuBadge
@@ -346,6 +379,7 @@ function SectionEmpty({
  */
 export function HomePage() {
   const navigate = useNavigate()
+  const location = useLocation()
   // `?task=<id>` opens that task's chat thread in a docked side panel
   // on the right (same UX as the Tasks page) without leaving Home.
   // Cmd-click / middle-click on a card hits this URL form too, so
@@ -360,7 +394,24 @@ export function HomePage() {
   const [myAccountOpen, setMyAccountOpen] = useState(false)
   const [roomsCollapsed, setRoomsCollapsed] = useState(false)
   const [favCollapsed, setFavCollapsed] = useState(false)
-  const [view, setView] = useState<'day' | 'askai'>('day')
+  // View is persisted in the URL (`?view=askai`) so a reload — or a
+  // bookmark / shared link — keeps the user on the Ask AI screen
+  // instead of snapping back to Your day.
+  const view: 'day' | 'askai' = searchParams.get('view') === 'askai' ? 'askai' : 'day'
+  // Hrefs for the top-level nav (Your day / Ask AI). Built from the
+  // current URL so other params (`?task=<id>`) survive a view switch
+  // AND so middle-click / cmd-click opens the same URL in a new tab.
+  const dayHref = useMemo(() => {
+    const sp = new URLSearchParams(searchParams)
+    sp.delete('view')
+    const s = sp.toString()
+    return `${location.pathname}${s ? '?' + s : ''}`
+  }, [searchParams, location.pathname])
+  const askAiHref = useMemo(() => {
+    const sp = new URLSearchParams(searchParams)
+    sp.set('view', 'askai')
+    return `${location.pathname}?${sp.toString()}`
+  }, [searchParams, location.pathname])
   // Ask AI right-side panel (Files / Tasks stub) — persisted across
   // reloads, mirrors the chat view's `panelOpen` pattern.
   const [askAiPanelOpen, setAskAiPanelOpen] = usePersistedState<boolean>(
@@ -464,23 +515,10 @@ export function HomePage() {
     const all = Object.values(bucketsByWs)
     const sortRows = (rows: HomeTask[]) =>
       [...rows].sort((a, b) => recency(b.task) - recency(a.task))
-    // Mock fixtures are merged in alongside real buckets so the
-    // carousel has something to render in dev. Drop the import / flip
-    // `MOCK_HOME_TASKS_ENABLED` once real data lands.
-    const mocks = MOCK_HOME_TASKS_ENABLED ? mockHomeBuckets() : null
     return {
-      needsInput: sortRows([
-        ...all.flatMap(b => b.needsInput),
-        ...(mocks?.needsInput ?? []),
-      ]),
-      active: sortRows([
-        ...all.flatMap(b => b.active),
-        ...(mocks?.active ?? []),
-      ]),
-      done: sortRows([
-        ...all.flatMap(b => b.done),
-        ...(mocks?.done ?? []),
-      ]),
+      needsInput: sortRows(all.flatMap(b => b.needsInput)),
+      active: sortRows(all.flatMap(b => b.active)),
+      done: sortRows(all.flatMap(b => b.done)),
     }
   }, [bucketsByWs])
 
@@ -886,15 +924,15 @@ export function HomePage() {
               <HomeNavItem
                 icon={Sun}
                 label="Your day"
+                href={dayHref}
                 active={view === 'day'}
                 badge={needsInput.length || undefined}
-                onSelect={() => setView('day')}
               />
               <HomeNavItem
                 icon={MessageCircle}
                 label="Ask AI"
+                href={askAiHref}
                 active={view === 'askai'}
-                onSelect={() => setView('askai')}
               />
             </SidebarMenu>
 
@@ -922,6 +960,7 @@ export function HomePage() {
                       <HomeRoomItem
                         key={ws.id}
                         workspace={ws}
+                        href={buildDefaultViewPath(ws.id, defaultView)}
                         onOpen={openRoom}
                         onRequestDelete={setPendingDeleteWs}
                       />
@@ -951,30 +990,44 @@ export function HomePage() {
                     <SidebarMenu>
                       {homePins.map(p => {
                         const Icon = FAVORITE_ICON[p.kind]
+                        // Pre-compute the destination so the row can be a
+                        // real Link (middle/cmd-click → new tab) AND so
+                        // the animated left-click path navigates to the
+                        // exact same URL the browser would have followed.
+                        const view_: RouteView = p.kind === 'task' ? 'tasks' : p.kind === 'file' ? 'context' : 'pinned'
+                        const q =
+                          p.kind === 'chat'
+                            ? { chat: p.id }
+                            : p.kind === 'task'
+                              ? { task: p.id }
+                              : p.kind === 'artifact'
+                                ? { artifact: p.id }
+                                : { item: p.id }
+                        const href = p.workspaceId
+                          ? buildPath(p.workspaceId, view_, q)
+                          : '#'
                         return (
                           <SidebarMenuItem key={`${p.kind}:${p.id}`}>
                             <SidebarMenuButton
+                              asChild
                               className={cn(SIDEBAR_ROW_STATE_CLASS, 'pr-9 text-foreground')}
-                              onClick={() => {
-                                if (!p.workspaceId) return
-                                const q =
-                                  p.kind === 'chat'
-                                    ? { chat: p.id }
-                                    : p.kind === 'task'
-                                      ? { task: p.id }
-                                      : p.kind === 'artifact'
-                                        ? { artifact: p.id }
-                                        : { item: p.id }
-                                const view_ = p.kind === 'task' ? 'tasks' : p.kind === 'file' ? 'context' : 'pinned'
-                                setLeaving(true)
-                                window.setTimeout(
-                                  () => navigate(buildPath(p.workspaceId!, view_, q)),
-                                  200,
-                                )
-                              }}
                             >
-                              <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                              <span className="flex-1 min-w-0 truncate text-left">{p.label}</span>
+                              <Link
+                                to={href}
+                                onClick={(e) => {
+                                  if (!p.workspaceId) {
+                                    e.preventDefault()
+                                    return
+                                  }
+                                  if (isModifiedClick(e)) return
+                                  e.preventDefault()
+                                  setLeaving(true)
+                                  window.setTimeout(() => navigate(href), 200)
+                                }}
+                              >
+                                <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                <span className="flex-1 min-w-0 truncate text-left">{p.label}</span>
+                              </Link>
                             </SidebarMenuButton>
                             <RowKebab align="start" side="right" contentClassName="w-40" label="Favorite options">
                               <DropdownMenuItem onClick={() => removeHomePin(p.kind, p.id)}>

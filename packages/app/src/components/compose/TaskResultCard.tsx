@@ -41,9 +41,11 @@ function errMsg(err: unknown): string | undefined {
  * message (the AI creating a task, or a task brought up in chat).
  * Built on the artifact inline-card shell but task-flavoured: a Zap
  * icon, the task title, a status badge, a subtle meta line, and a
- * View button + kebab (Mark as done / Run now / Pause / Delete) — the
- * same actions as the Tasks-page card. The card itself is not
- * clickable.
+ * kebab (Mark as done / Run now / Pause / Delete) — the same actions
+ * as the Tasks-page card. The whole card is a router `<Link>` so
+ * clicking opens the task's chat; on the Tasks view it docks the task
+ * in the right-hand panel via `?task=<id>`, elsewhere it opens the
+ * task's thread chat via `?chat=<threadChatId>`.
  */
 export function TaskResultCard({
   message,
@@ -74,13 +76,21 @@ export function TaskResultCard({
   if (task.priority) meta.push(PRIORITY_LABELS[task.priority])
   if (task.schedule?.trim()) meta.push(describeCron(task.schedule.trim()))
 
-  // Open the task's dedicated chat the same way the left sidebar opens
-  // chats — set `?chat=…` on the current view rather than switching to
-  // the tasks list. Falls back to the parent chat when the task has no
-  // thread of its own (stand-alone tasks created from the tasks page).
+  // Fall back to the owning chat's workspace when the caller didn't pass
+  // one explicitly (e.g. GlobalPaletteChat) so the card can still link.
+  const wsId = workspaceId ?? chat?.workspaceId
+  // On the Tasks view, clicking the card docks the task in the right
+  // sidebar via `?task=<id>` (mirrors how TasksPage cards open). On
+  // every other view, open the task's dedicated thread chat via
+  // `?chat=<threadChatId>` — falling back to the parent chat when the
+  // task has no thread of its own.
   const taskChatId = task.threadChatId ?? task.chatId
-  const viewHref = workspaceId && taskChatId
-    ? buildPath(workspaceId, activeView, { chat: taskChatId })
+  const viewHref = wsId
+    ? activeView === 'tasks'
+      ? buildPath(wsId, 'tasks', { task: message.id })
+      : taskChatId
+        ? buildPath(wsId, activeView, { chat: taskChatId })
+        : undefined
     : undefined
 
   const markDone = async () => {
@@ -120,11 +130,37 @@ export function TaskResultCard({
     }
   }
 
+  // Card-level click handlers must not let the kebab trigger navigate the
+  // outer Link — the trigger sits inside the anchor, so stopPropagation
+  // alone leaves the browser's default action intact. preventDefault
+  // blocks the navigation; stopPropagation keeps neighbouring handlers
+  // (Radix focus management) from re-triggering it.
+  const stopNav = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }
+  const stop = (fn: () => void) => (e: React.MouseEvent) => {
+    stopNav(e)
+    fn()
+  }
+
+  // The whole card is the click target. Falls back to a plain div when
+  // we couldn't compute an href (no workspace yet) so the kebab still
+  // works. `Wrapper` is typed as the open element-type so the prop union
+  // between `Link` (requires `to`) and `div` (forbids it) doesn't trip
+  // the `to: To` check at the `<Wrapper {...wrapperProps}>` call site.
+  const Wrapper: React.ElementType = viewHref ? Link : 'div'
+  const wrapperProps: Record<string, unknown> = viewHref
+    ? { to: viewHref, draggable: false }
+    : {}
+
   return (
     // Mirror the artifact inline card exactly: one centred row, no
-    // footer/separator, actions on the right. Not clickable.
-    <div
-      className="mt-3 mb-5 flex w-full min-w-0 max-w-full items-center gap-3 rounded-xl border border-foreground/10 bg-background px-4 py-3"
+    // footer/separator, actions on the right. The card itself is the
+    // link — clicking anywhere opens the task's chat.
+    <Wrapper
+      {...wrapperProps}
+      className="mt-3 mb-5 flex w-full min-w-0 max-w-full items-center gap-3 rounded-xl border border-foreground/10 bg-background px-4 py-3 no-underline text-inherit transition-colors hover:bg-foreground/[0.02]"
       data-testid={`task-result-${message.id}`}
     >
       <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-foreground/[0.04]">
@@ -133,9 +169,9 @@ export function TaskResultCard({
 
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Title row: on mobile the status pill drops below the title
-            (`flex-wrap`) so it doesn't visually fuse with the View
-            button on the right — at 375 px the title truncates hard,
-            leaving the pill butted right up against View. */}
+            (`flex-wrap`) so it doesn't visually fuse with the kebab on
+            the right — at 375 px the title truncates hard, leaving the
+            pill butted right up against the menu trigger. */}
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 sm:flex-nowrap">
           <span className="min-w-0 truncate text-sm font-medium leading-5 text-foreground">
             {task.title || task.name}
@@ -150,11 +186,6 @@ export function TaskResultCard({
       </div>
 
       <div className="flex shrink-0 items-center gap-1 self-start sm:self-center">
-        {viewHref && (
-          <Button asChild variant="outline" size="sm" className="h-7 px-2.5 text-xs">
-            <Link to={viewHref}>View</Link>
-          </Button>
-        )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -163,44 +194,45 @@ export function TaskResultCard({
               className="h-7 w-7 text-muted-foreground hover:text-foreground"
               aria-label="Task actions"
               data-testid={`task-result-menu-${message.id}`}
+              onClick={stopNav}
             >
               <MoreVertical className="h-3.5 w-3.5" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-44">
-            <DropdownMenuItem onClick={() => void markDone()} disabled={isDone}>
+          <DropdownMenuContent align="end" className="w-44" onClick={(e) => e.stopPropagation()}>
+            <DropdownMenuItem onClick={stop(() => void markDone())} disabled={isDone}>
               <CheckCircle2 className="h-4 w-4 mr-2" />
               {isDone ? 'Done' : 'Mark as done'}
             </DropdownMenuItem>
             {canRunNow && (
-              <DropdownMenuItem onClick={() => void runNow()}>
+              <DropdownMenuItem onClick={stop(() => void runNow())}>
                 <Play className="h-4 w-4 mr-2" />
                 Run now
               </DropdownMenuItem>
             )}
             {canPause && (
-              <DropdownMenuItem onClick={() => void pause()}>
+              <DropdownMenuItem onClick={stop(() => void pause())}>
                 <Pause className="h-4 w-4 mr-2" />
                 Pause
               </DropdownMenuItem>
             )}
-            {workspaceId && (
+            {wsId && (
               <ShowInHomeMenuItem
                 pin={{
                   kind: 'task',
                   id: message.id,
-                  workspaceId,
+                  workspaceId: wsId,
                   label: task.title || task.name,
                 }}
               />
             )}
-            <DropdownMenuItem onClick={() => void remove()}>
+            <DropdownMenuItem onClick={stop(() => void remove())}>
               <Trash2 className="h-4 w-4 mr-2" />
               Delete
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-    </div>
+    </Wrapper>
   )
 }

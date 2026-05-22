@@ -22,6 +22,17 @@ import {
  * - `task_run`: mark as `failed`. The parent task re-schedules via cron;
  *   one-shot tasks need manual retry.
  *
+ * - `kind='task'` parents stuck in `state='running'`: reset to `pending`.
+ *   Agent-authored unscheduled tasks get promoted to `running` on
+ *   auto-fire (see api/src/dispatch/sandbox.ts and scheduler/src/runs.ts:
+ *   fireMessage). If the previous process died between promote-to-running
+ *   and `afterTaskRun`, the parent stays `running` forever and the task
+ *   status selector pins the kanban card to Active on every refresh.
+ *   Reset to `pending` so cron tasks re-fire on the next tick, one-shot
+ *   scheduled tasks re-fire on their existing executeAt, and unscheduled
+ *   tasks land in the user-actionable Open column (or Needs input if the
+ *   chat is unread) so the user can decide whether to re-run.
+ *
  * Returns the IDs of the re-queued chat messages so the caller can fire
  * them immediately rather than waiting for the next scheduler tick.
  */
@@ -67,6 +78,21 @@ export async function recoverOrphanedRuns(db: Pool): Promise<{ requeued: string[
      WHERE state IN ('running', 'pending')
        AND kind = 'task_run'
        AND (execute_at IS NULL OR execute_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+    [],
+  );
+  // Reset task parents stuck in 'running'. Runs above have all been moved
+  // to a terminal state, so no child run is in flight; whatever process
+  // promoted the parent is gone. 'pending' is the right neutral resting
+  // state — scheduled tasks re-fire on their existing executeAt/cron, and
+  // unscheduled tasks fall through the status selector to todo / needs_input.
+  await db.query(
+    `UPDATE messages
+     SET state = 'pending',
+         started_at = NULL,
+         ended_at = NULL,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE state = 'running'
+       AND kind = 'task'`,
     [],
   );
   return {

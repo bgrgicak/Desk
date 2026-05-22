@@ -108,7 +108,7 @@ async function insertAgent(name: string): Promise<string> {
     id,
     userId,
     name,
-    model: "opencode/big-pickle",
+    model: "anthropic/claude-haiku-4-5",
   });
   return id;
 }
@@ -140,7 +140,7 @@ describe("POST /workspaces — ensure a default workspace agent", () => {
     expect(stillEnrolled[0].agentId).toBe(zetaId);
   });
 
-  it("creates and enrolls a default agent for a user with no agents", async () => {
+  it("creates and enrolls a default Anthropic agent for a user with no agents", async () => {
     const otherUserId = generateId("user");
     await queries.users.insert(pool, {
       id: otherUserId,
@@ -177,12 +177,12 @@ describe("POST /workspaces — ensure a default workspace agent", () => {
     ]);
 
     const patchRes = await request("PATCH", `/agents/${memberships[0].agentId}`, otherToken, {
-      model: "opencode/hy3-preview-free",
+      model: "anthropic/claude-sonnet-4-5",
     });
     expect(patchRes.status).toBe(200);
     expect(patchRes.body).toMatchObject({
       id: memberships[0].agentId,
-      model: "opencode/hy3-preview-free",
+      model: "anthropic/claude-sonnet-4-5",
     });
 
     const removeRes = await request(
