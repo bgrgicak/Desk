@@ -17,8 +17,6 @@ import {
   Activity,
   CheckCircle2,
   RotateCcw,
-  PanelRight,
-  PanelRightClose,
   Search,
   X,
 } from 'lucide-react'
@@ -111,7 +109,6 @@ import {
   PREVIEW_MIN_CHAT_WIDTH,
   PREVIEW_MIN_PANEL_WIDTH,
 } from '@/store/slices/previewPanelSlice'
-import { usePersistedState } from '@/hooks/use-persisted-state'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   HomeWorkspaceTasks,
