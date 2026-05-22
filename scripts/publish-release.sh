@@ -4,36 +4,31 @@
 # Interactive release script for Roomy.
 #
 # Flow:
-#   1. Pre-flight checks (Node 23, clean tree, on trunk, gh + npm logged in).
+#   1. Pre-flight checks (Node 23, clean tree, on trunk, gh + npm + docker logged in).
 #   2. Pick a new version (next alpha, next minor+alpha.0, or custom).
 #   3. Bump every PUBLIC workspace + @roomy-ai/desktop's package.json to that version.
 #   4. Install + build + npm pack smoke test.
 #   5. Final confirm — last chance to bail.
 #   6. git commit "chore(release): vX".
 #   7. npm publish --workspaces --access public  (uses local npm login; publishConfig.tag=alpha).
-#   8. git tag vX, push branch + tag. The tag push triggers
-#      .github/workflows/release-sandbox-image.yml on CI, which builds + pushes
-#      the sandbox Docker image to Docker Hub.
-#   9. Build desktop locally (electron-builder for the current host platform)
-#      and publish installers to the GitHub Release for tag vX via
-#      `electron-builder --publish always` (uses `gh auth token`).
-#  10. (Optional) gh run watch the sandbox-image workflow.
+#   8. Build + push the sandbox Docker image to Docker Hub at
+#      <namespace>/sandbox:<version> + <namespace>/sandbox:alpha (uses `docker login`).
+#   9. git tag vX, push branch + tag. The tag push triggers
+#      .github/workflows/desktop-release.yml, which builds the macOS DMG
+#      on a macos-latest runner and uploads it to the GH Release.
+#  10. (Optional) gh run watch the desktop-release workflow.
 #
-# Why npm + desktop run locally and Docker runs in CI:
-#   - npm publish is fast (a few MB per package) and the local login flow is
-#     simpler than juggling NPM_TOKEN secrets.
-#   - The sandbox Docker image is ~650 MiB multi-arch with Playwright/Firefox
-#     pre-installed. Existing GitHub Action builds it on GH runners.
-#   - Desktop installers must match the host: macOS DMG can only be built on
-#     macOS, Linux AppImage/deb only on Linux. Building locally means whatever
-#     host you run this from is what gets shipped — if you want both mac and
-#     linux installers in the same release, re-run the upload step from the
-#     other host (electron-builder will add to the existing GH Release).
+# Why npm + Docker run locally and Desktop runs in CI:
+#   - npm publish + docker push both work fine from a dev machine with a
+#     normal interactive login — no secret-juggling.
+#   - The macOS DMG can ONLY be built on macOS (Apple toolchain). The dev
+#     box is Linux, so desktop fans out to a macos-latest runner via the
+#     tag push.
 #
-# Re-run safety: if npm publish fails partway, the local version bump commit
-# is still there but the git tag has NOT been created or pushed, so the
-# Docker workflow won't fire for a half-published release. You can fix the
-# underlying issue, bump to a fresh version, and re-run.
+# Re-run safety: if npm publish or docker push fails partway, the version
+# bump commit is still there but the git tag has NOT been created or
+# pushed, so the desktop workflow won't fire for a half-published release.
+# You can fix the underlying issue, bump to a fresh version, and re-run.
 
 set -euo pipefail
 
@@ -169,6 +164,27 @@ if ! npm access list packages @roomy-ai >/dev/null 2>&1; then
   confirm "Continue anyway?" || die "Aborted. Get added to the @roomy-ai org first."
 fi
 
+# Docker — installed, daemon up, logged in to Docker Hub.
+command -v docker >/dev/null 2>&1 || die "docker is not installed."
+docker info >/dev/null 2>&1 || die "Docker daemon not reachable. Start docker first."
+say "Checking Docker Hub authentication..."
+# `docker info` lists the active registry username when logged in.
+docker_user="$(docker info 2>/dev/null | awk -F': ' '/^[[:space:]]*Username:/ {print $2; exit}')"
+if [ -z "$docker_user" ]; then
+  warn "Not logged in to Docker Hub."
+  echo "Running \`docker login\` — enter your Docker Hub credentials..."
+  docker login
+  docker_user="$(docker info 2>/dev/null | awk -F': ' '/^[[:space:]]*Username:/ {print $2; exit}')"
+  [ -n "$docker_user" ] || die "docker login failed."
+fi
+ok "Docker logged in as: $docker_user"
+
+# Namespace to push under. Override via ROOMY_DOCKER_NAMESPACE to push to
+# an org instead of the personal account.
+DOCKER_NAMESPACE="${ROOMY_DOCKER_NAMESPACE:-$(ask "Docker Hub namespace to push to" "$docker_user")}"
+[ -n "$DOCKER_NAMESPACE" ] || die "No Docker namespace given."
+ok "Will push image as: ${c_bold}${DOCKER_NAMESPACE}/sandbox${c_reset}"
+
 hr
 
 # ---------- step 1: pick a version ----------
@@ -268,11 +284,12 @@ echo "     packages:"
 for ws in "${PUBLIC_WORKSPACES[@]}"; do
   echo "       - $(pkg_get "$ws/package.json" name)"
 done
-echo "  3. git tag $TAG and push trunk + $TAG to origin"
-echo "     → triggers .github/workflows/release-sandbox-image.yml on CI"
-echo "       (builds + pushes the sandbox image to Docker Hub)"
-echo "  4. Build the desktop app for $(uname -s) locally and upload installers"
-echo "     to the GitHub Release for $TAG via electron-builder."
+echo "  3. docker build + push:"
+echo "       ${DOCKER_NAMESPACE}/sandbox:${NEW_VERSION}"
+echo "       ${DOCKER_NAMESPACE}/sandbox:alpha"
+echo "  4. git tag $TAG and push trunk + $TAG to origin"
+echo "     → triggers .github/workflows/desktop-release.yml on a macos-latest"
+echo "       runner, which builds + uploads the macOS DMG to the GH Release."
 echo
 confirm "Proceed?" || die "Aborted. Local version bumps remain; revert with: git checkout -- packages/"
 
@@ -284,12 +301,6 @@ say "Committing version bump..."
 git add packages/*/package.json packages/server/*/package.json package-lock.json
 git commit -m "chore(release): $TAG"
 ok "Committed."
-
-# The desktop install was just a `npm ci` at the root — make sure the
-# nested `packages/desktop` workspace has its own modules installed (the
-# postinstall electron-rebuild step and electron-builder both expect them).
-say "Installing desktop dependencies..."
-( cd "$DESKTOP_PKG_DIR" && npm ci )
 
 # ---------- step 6: publish to npm ----------
 
@@ -304,7 +315,33 @@ if ! npm publish --workspaces --access public; then
 fi
 ok "npm publish complete."
 
-# ---------- step 7: tag + push ----------
+# ---------- step 7: docker build + push ----------
+
+IMAGE_VERSION_TAG="${DOCKER_NAMESPACE}/sandbox:${NEW_VERSION}"
+IMAGE_ALPHA_TAG="${DOCKER_NAMESPACE}/sandbox:alpha"
+
+say "Building sandbox Docker image (this can take a few minutes)..."
+# Build once with both tags so the alpha pointer and the pinned version
+# share the same image ID — no duplicate work for the second push.
+if ! docker build \
+    -f packages/server/runtime/Dockerfile.sandbox \
+    -t "$IMAGE_VERSION_TAG" \
+    -t "$IMAGE_ALPHA_TAG" \
+    .; then
+  warn "docker build failed. npm packages are already out. Fix the build and re-run:"
+  warn "    docker build -f packages/server/runtime/Dockerfile.sandbox \\"
+  warn "      -t $IMAGE_VERSION_TAG -t $IMAGE_ALPHA_TAG ."
+  warn "    docker push $IMAGE_VERSION_TAG && docker push $IMAGE_ALPHA_TAG"
+  die "Docker build aborted."
+fi
+
+say "Pushing $IMAGE_VERSION_TAG..."
+docker push "$IMAGE_VERSION_TAG" || die "docker push failed for $IMAGE_VERSION_TAG."
+say "Pushing $IMAGE_ALPHA_TAG..."
+docker push "$IMAGE_ALPHA_TAG" || die "docker push failed for $IMAGE_ALPHA_TAG."
+ok "Sandbox image pushed."
+
+# ---------- step 8: tag + push ----------
 
 say "Tagging $TAG..."
 git tag -a "$TAG" -m "Release $TAG"
@@ -312,43 +349,9 @@ git tag -a "$TAG" -m "Release $TAG"
 say "Pushing trunk and $TAG to origin..."
 git push origin "$branch"
 git push origin "$TAG"
-ok "Pushed. The Docker release workflow has been triggered by the tag push."
+ok "Pushed. The desktop release workflow has been triggered by the tag push."
 
-# ---------- step 8: build desktop locally + publish to GH Release ----------
-
-hr
-say "Building desktop app + uploading installers to GH Release $TAG..."
-
-# electron-builder reads GH_TOKEN from the env to upload to the GitHub
-# Release. Sourced from `gh auth token` — same identity the rest of the
-# script uses for git push, no extra config needed.
-GH_TOKEN="$(gh auth token)"
-export GH_TOKEN
-
-# Stage the bundled server tree that electron-builder copies into
-# Resources/server/. Builds the TS main process first (npm run dist
-# also does this, but we want a clean error early if the desktop
-# build is broken).
-say "Building desktop main process..."
-( cd "$DESKTOP_PKG_DIR" && npm run build )
-
-say "Staging server bundle into $DESKTOP_PKG_DIR/build-server/..."
-( cd "$DESKTOP_PKG_DIR" && npm run stage-server )
-
-say "Running electron-builder for the current host platform..."
-# --publish always: upload artifacts to the GH Release for this version.
-# electron-builder creates the release if it doesn't exist yet, then
-# attaches the platform-appropriate installers. Re-running from another
-# host (e.g. macOS later) adds to the same release without recreating it.
-if ! ( cd "$DESKTOP_PKG_DIR" && npx electron-builder --publish always ); then
-  warn "electron-builder failed. npm + Docker release are already out;"
-  warn "fix the desktop build and re-run this step manually:"
-  warn "    cd $DESKTOP_PKG_DIR && GH_TOKEN=\$(gh auth token) npx electron-builder --publish always"
-  exit 1
-fi
-ok "Desktop installers uploaded to the GH Release."
-
-# ---------- step 9: monitor Docker workflow ----------
+# ---------- step 9: monitor desktop workflow ----------
 
 hr
 echo "What just happened:"
@@ -357,17 +360,21 @@ for ws in "${PUBLIC_WORKSPACES[@]}"; do
   name="$(pkg_get "$ws/package.json" name)"
   echo "    https://www.npmjs.com/package/$name/v/$NEW_VERSION"
 done
+echo "  • Pushed Docker image:"
+echo "      https://hub.docker.com/r/${DOCKER_NAMESPACE}/sandbox/tags"
+echo "      ${IMAGE_VERSION_TAG}"
+echo "      ${IMAGE_ALPHA_TAG}"
 echo "  • Pushed git tag $TAG (https://github.com/bgrgicak/Desk/releases/tag/$TAG)"
-echo "  • Docker workflow: https://github.com/bgrgicak/Desk/actions/workflows/release-sandbox-image.yml"
-echo "  • Desktop installers uploaded to: https://github.com/bgrgicak/Desk/releases/tag/$TAG"
+echo "  • Desktop workflow (macOS DMG):"
+echo "      https://github.com/bgrgicak/Desk/actions/workflows/desktop-release.yml"
 echo
 
-if confirm "Stream the Docker release workflow run here?"; then
+if confirm "Stream the desktop release workflow run here?"; then
   # gh needs a moment for the dispatched run to register.
   sleep 4
-  run_id="$(gh run list --workflow=release-sandbox-image.yml --limit=1 --json databaseId --jq '.[0].databaseId' || true)"
+  run_id="$(gh run list --workflow=desktop-release.yml --limit=1 --json databaseId --jq '.[0].databaseId' || true)"
   if [ -n "$run_id" ]; then
-    gh run watch "$run_id" --exit-status || warn "Docker workflow failed — check the link above."
+    gh run watch "$run_id" --exit-status || warn "Desktop workflow failed — check the link above."
   else
     warn "Couldn't find the dispatched run yet. Check the link above."
   fi

@@ -37,13 +37,67 @@ Roomy is a personal AI platform for people who use AI every day to do real work 
 
 Roomy is open source software you run yourself — on your own laptop, or on a server you control if you want it reachable from anywhere. No accounts to sign up for, no vendor in the middle. Where Roomy lives, your data lives.
 
-## Download
+## Install
 
-Pre-built macOS desktop app releases are available on the [releases page](https://github.com/bgrgicak/Desk/releases/tag/desktop-latest) (Apple Silicon · arm64). New builds are published weekly.
+Two ways to run Roomy. Pick one — you don't need both.
+
+### Option 1 — Run from npm (macOS, Linux, Windows WSL)
+
+One command, no clone:
+
+```sh
+npx @roomy-ai/cli@alpha
+```
+
+This downloads the `@roomy-ai/cli` package, boots `roomy-server` in the foreground, and opens the UI at <http://127.0.0.1:35138/>. Stop it with `Ctrl+C`.
+
+Prefer a persistent install:
+
+```sh
+npm install -g @roomy-ai/cli@alpha
+roomy            # same as `roomy start`
+```
+
+**Requirements:** Node.js ≥ 22 and Docker (or nerdctl) running locally — Roomy uses a sandboxed container to run AI agents.
+
+**Run in the background** as a system service (launchd on macOS, systemd-user on Linux, Task Scheduler on Windows):
+
+```sh
+roomy service install        # register + start
+roomy service status         # check it's running
+roomy service stop           # stop without removing
+roomy service uninstall      # remove the service entry
+```
+
+**Uninstall everything:**
+
+```sh
+roomy uninstall                       # remove service + sandbox container images
+roomy uninstall --remove-roomy-files  # also delete ~/Roomy (your data)
+npm uninstall -g @roomy-ai/cli        # remove the CLI itself
+```
+
+Your conversations, files, and vault live in `~/Roomy/` — back that up to move between machines.
+
+### Option 2 — macOS desktop app
+
+Pre-built DMG releases (Apple Silicon · arm64) are on the [releases page](https://github.com/bgrgicak/Desk/releases/tag/desktop-latest). New builds are published weekly. Same data directory (`~/Roomy/`), same server underneath — just wrapped in an Electron shell.
+
+### First-run setup
+
+The first time you open Roomy:
+
+1. Create your owner account and a vault password (used to encrypt your API keys at rest).
+2. Open **Settings → AI providers** and paste an Anthropic and/or OpenAI API key. Roomy routes between providers; you bring the keys.
+3. Start a chat.
+
+On every server restart the vault locks — re-enter the vault password through the dialog. Set `ROOMY_AUTO_LOGIN=off` if you want to force the manual login screen instead of auto-signing in as the owner.
 
 ---
 
 ## For developers
+
+Only needed if you want to contribute or hack on Roomy itself. End users should use one of the [install options](#install) above.
 
 ### Quick start
 
@@ -54,7 +108,7 @@ npm install
 npm run dev
 ```
 
-`npm run dev` boots `roomy-server` (tsx watch) and Vite together, and rebuilds the `roomy/sandbox:v1` Docker image when its inputs change; one `Ctrl+C` stops both. Open <http://localhost:5173/>. Roomy auto-signs in to the local owner account in both dev and production builds; set `ROOMY_AUTO_LOGIN=off` if you need to force the manual login screen.
+`npm run dev` boots `roomy-server` (tsx watch) and Vite together, and rebuilds the `roomy/sandbox:v1` Docker image when its inputs change; one `Ctrl+C` stops both. Open <http://localhost:5173/>.
 
 ### Prerequisites
 

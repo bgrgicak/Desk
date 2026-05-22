@@ -1,0 +1,76 @@
+name: Release desktop app (macOS)
+
+# Triggered by `v*` tag push from scripts/publish-release.sh. Builds
+# the Electron desktop app as a signed-ish macOS DMG (arm64 + x64) and
+# attaches it to the GitHub Release that already exists for the tag
+# (created by the script's prior `gh release create` step, or by
+# electron-builder itself if missing).
+#
+# Why CI for desktop and not local: mac DMGs can only be built on
+# macOS, and the release script runs on a Linux dev machine. Docker
+# and npm both publish locally; desktop is the one fan-out that
+# physically needs a different OS.
+#
+# Auth: uses the auto-provided GITHUB_TOKEN. electron-builder reads
+# `publish: provider: github` from packages/desktop/electron-builder.yml
+# and uploads to the matching tag's release.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.1.0-alpha.0). Defaults to the dispatching ref."
+        required: false
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-macos:
+    name: Build macOS DMG
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "23"
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Build all packages
+        run: npm run build:packages
+
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: packages/desktop
+
+      - name: Build desktop main process
+        run: npm run build
+        working-directory: packages/desktop
+
+      - name: Stage server bundle
+        run: npm run stage-server
+        working-directory: packages/desktop
+
+      - name: Package + publish macOS (arm64 + x64)
+        run: npx electron-builder --mac --arm64 --x64 --publish always
+        working-directory: packages/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Unsigned for now (matches the original desktop-release.yml).
+          # To enable code signing later, add CSC_LINK + CSC_KEY_PASSWORD
+          # repo secrets and remove this line.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
