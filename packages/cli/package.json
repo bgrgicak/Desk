@@ -1,6 +1,6 @@
 {
   "name": "@roomy-ai/cli",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "license": "MIT",
   "description": "Host CLI for the Roomy personal AI assistant. `npx @roomy-ai/cli` boots the full stack on http://127.0.0.1:35138/.",
   "type": "module",
