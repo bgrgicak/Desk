@@ -3,57 +3,47 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  renderAgentFile,
   chatNeedsBrowser,
-  writeWorkspaceMcpConfig,
+  renderAgentFile,
   writeAgentFile,
-  readAgentsModelDigest,
+  writeWorkspaceMcpConfig,
 } from "../src/agentFile.js";
 import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@agent-desk/storage";
 
 describe("renderAgentFile", () => {
-  it("generates valid frontmatter and body", () => {
+  it("generates a plain markdown body (pi reads AGENTS.md as text, no frontmatter)", () => {
     const result = renderAgentFile({
       agentId: "agt_123",
       agentName: "Jarvis",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
       userName: "Desk",
     });
 
-    // Frontmatter
-    expect(result).toContain("---\n");
-    expect(result).toContain("description: Jarvis");
-    expect(result).toContain("model: opencode/big-pickle");
-    expect(result).toContain("mode: primary");
-    // Pre-authorize every tool — otherwise opencode stalls on
-    // `permission.asked` events for `bash`, `external_directory`, etc.
-    // Object form (per-tool) rather than the bare-string shorthand:
-    // opencode 1.14.50 mis-parses `permission: allow` as a per-character
-    // array.
-    expect(result).toContain("permission:");
-    expect(result).toContain("bash: allow");
-    expect(result).toContain("external_directory: allow");
-    expect(result).toContain("doom_loop: allow");
+    // Header from the new renderer
+    expect(result).toMatch(/^# Jarvis/);
+    // The opencode-specific YAML frontmatter is gone — pi treats this
+    // as plain system-prompt text and the model/permissions come from
+    // CLI flags. The body still uses long `---...---` divider lines, so
+    // assert the absence of frontmatter keys rather than the bare `---`.
+    expect(result).not.toMatch(/^---\n[\s\S]*?\nmodel:/);
+    expect(result).not.toContain("permission:");
+    expect(result).not.toContain("mode: primary");
 
     // Identity framing
     expect(result).toContain("You are Jarvis, call me Desk.");
 
     // Workspace-as-home framing
     expect(result).toContain("~/ is your workspace");
-    // Dotfile visibility rule
     expect(result).toContain("foo.md");
     expect(result).toContain(".foo.md");
-    // Per-chat artifacts
     expect(result).toContain("~/.chats/");
 
-    // Desk reference manuals are native OpenCode skills, not inlined prompt text.
+    // Desk reference manuals are skills, not inlined prompt text.
     expect(result).toContain("## Desk native skills");
     expect(result).toContain("desk-cli-task-schedule");
-    expect(result).toContain("desk-cli-file-to-markdown");
     expect(result).toContain("desk-agent task schedule");
     expect(result).not.toContain("# Desk CLI");
 
-    // Memory rules section is present (P1.3/P1.4).
     expect(result).toContain("## Memory and recall");
   });
 
@@ -61,7 +51,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_tz",
       agentName: "Helper",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
       userName: "Desk",
       userTimezone: "America/Los_Angeles",
     });
@@ -74,7 +64,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_no_tz",
       agentName: "Helper",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
       userName: "Desk",
     });
 
@@ -88,7 +78,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_goal_detect",
       agentName: "Helper",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
       userName: "Desk",
     });
 
@@ -99,7 +89,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_goal_detect",
       agentName: "Helper",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
       userName: "Desk",
       includeGoalAutodetect: false,
     });
@@ -111,7 +101,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_chat",
       agentName: "Helper",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
       userName: "Desk",
       chatId: "cht_abc",
     });
@@ -125,7 +115,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_summary",
       agentName: "Helper",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
       userName: "Desk",
       chatId: "cht_abc",
       runMode: "summary",
@@ -143,7 +133,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_nogoal",
       agentName: "Helper",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
       userName: "Desk",
     });
     expect(result).not.toContain("## User's goal:");
@@ -164,7 +154,7 @@ describe("renderAgentFile", () => {
       const result = renderAgentFile({
         agentId: `agt_${goal}`,
         agentName: "Helper",
-        model: "opencode/big-pickle",
+        model: "anthropic/claude-haiku-4-5",
         userName: "Desk",
         goal,
       });
@@ -176,7 +166,7 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_baseline",
       agentName: "Helper",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
       userName: "Desk",
     });
     expect(result).toContain("Your mandate is to help Desk accomplish their goals");
@@ -194,15 +184,13 @@ describe("renderAgentFile", () => {
     const result = renderAgentFile({
       agentId: "agt_doc",
       agentName: "Helper",
-      model: "opencode/big-pickle",
+      model: "anthropic/claude-haiku-4-5",
       userName: "Desk",
       chatId: "chat-x",
       goal: "document",
     });
-    // Spot-check the goal fragment + chat path render together.
     expect(result).toContain("Chat artifacts:   ~/.chats/chat-x/artifacts/");
     expect(result).toContain("## User's goal: write a document");
-    // Ordering: artifacts (chatId) renders before goal, goal before skill router.
     expect(result.indexOf("Chat artifacts:   ~/.chats/chat-x/artifacts/"))
       .toBeLessThan(result.indexOf("## User's goal: write a document"));
     expect(result.indexOf("## User's goal: write a document"))
@@ -211,12 +199,12 @@ describe("renderAgentFile", () => {
 });
 
 describe("chatNeedsBrowser", () => {
-  it("enables browser only for site/app goals", () => {
+  it("enables the browser only for site/app goals", () => {
     expect(chatNeedsBrowser("site")).toBe(true);
     expect(chatNeedsBrowser("app")).toBe(true);
-    // Conservative on purpose: a `document` chat that occasionally needs the
-    // browser still doesn't get firefox preloaded; the user can flip it on
-    // explicitly. Anything else returns false.
+    // Conservative on purpose: a `document` chat that occasionally needs
+    // the browser still doesn't pre-warm firefox; the user can flip it
+    // on explicitly. Anything else is false.
     expect(chatNeedsBrowser("document")).toBe(false);
     expect(chatNeedsBrowser("data")).toBe(false);
     expect(chatNeedsBrowser(null)).toBe(false);
@@ -225,156 +213,220 @@ describe("chatNeedsBrowser", () => {
 });
 
 describe("writeWorkspaceMcpConfig", () => {
-  it("writes playwright with enabled=true when the chat needs a browser", async () => {
+  it("writes the playwright entry with enabled=true and the right argv for browser-goal chats", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
     try {
       await ensureLayout(home);
-      await ensureWorkspaceLayout(home, "mcp-ws");
-      await writeWorkspaceMcpConfig(home, "mcp-ws", { enablePlaywright: true });
-      const cfg = JSON.parse(
-        await fs.readFile(path.join(workspaceRootPath(home, "mcp-ws"), ".opencode", "opencode.json"), "utf-8"),
-      );
-      expect(cfg.mcp.playwright.enabled).toBe(true);
-      expect(cfg.mcp.playwright.command).toEqual(["playwright-mcp", "--browser", "firefox"]);
+      await ensureWorkspaceLayout(home, "ws");
+      await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: true });
+      const target = path.join(workspaceRootPath(home, "ws"), ".agents", "mcp.json");
+      const cfg = JSON.parse(await fs.readFile(target, "utf-8"));
+      expect(cfg.mcpServers.playwright.enabled).toBe(true);
+      expect(cfg.mcpServers.playwright.command).toBe("playwright-mcp");
+      expect(cfg.mcpServers.playwright.args).toEqual(["--browser", "firefox"]);
+      // DISPLAY env passed so playwright-mcp's firefox child reaches the
+      // Xvfb display the host runtime started.
+      expect(cfg.mcpServers.playwright.env.DISPLAY).toBe(":99");
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }
   });
 
-  it("writes playwright with enabled=false otherwise, so an older image with playwright in the global config doesn't keep firefox alive", async () => {
+  it("emits enabled=false explicitly when the chat doesn't need a browser so a previously-enabled entry gets re-disabled", async () => {
+    // Without an explicit `enabled: false` the desk-mcp-bridge extension
+    // would still try to spawn playwright-mcp on first session_start,
+    // launching firefox unnecessarily. Explicit false is what makes the
+    // toggle real.
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
     try {
       await ensureLayout(home);
-      await ensureWorkspaceLayout(home, "mcp-ws");
-      await writeWorkspaceMcpConfig(home, "mcp-ws", { enablePlaywright: false });
-      const cfg = JSON.parse(
-        await fs.readFile(path.join(workspaceRootPath(home, "mcp-ws"), ".opencode", "opencode.json"), "utf-8"),
-      );
-      // The key still has to be present — `mcp: {}` would let a global
-      // `playwright.enabled=true` win the merge and keep firefox running.
-      expect(cfg.mcp.playwright).toBeDefined();
-      expect(cfg.mcp.playwright.enabled).toBe(false);
+      await ensureWorkspaceLayout(home, "ws");
+      await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: false });
+      const target = path.join(workspaceRootPath(home, "ws"), ".agents", "mcp.json");
+      const cfg = JSON.parse(await fs.readFile(target, "utf-8"));
+      expect(cfg.mcpServers.playwright.enabled).toBe(false);
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }
   });
 
+  it("returns changed=false when the file already has the desired content (the per-workspace lock dedupes)", async () => {
+    // Start with no file → first call writes managed config (changed=true).
+    // Second call with the same goal-gate is a no-op.
+    // Third call with the goal-gate FLIPPED off has no effect because the
+    // second call left enabled=true, which is the user-override sentinel —
+    // Desk doesn't overwrite it. (This sticky-on behavior is intentional
+    // under the user-override-beats-managed rule.)
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "ws");
+      const first = await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: false });
+      expect(first.changed).toBe(true);
+      const second = await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: false });
+      expect(second.changed).toBe(false);
+      // Toggling on writes enabled=true → changed.
+      const third = await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: true });
+      expect(third.changed).toBe(true);
+      // Now sticky: enabled=true wins, fourth call (off) is a no-op.
+      const fourth = await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: false });
+      expect(fourth.changed).toBe(false);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves user-added MCP servers across writes (merge, don't overwrite)", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "ws");
+      const target = path.join(workspaceRootPath(home, "ws"), ".agents", "mcp.json");
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(
+        target,
+        JSON.stringify({
+          mcpServers: {
+            filesystem: {
+              command: "npx",
+              args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/agent"],
+              enabled: true,
+            },
+          },
+        }),
+        "utf-8",
+      );
+
+      // Goal-off run still preserves the user's `filesystem` server
+      // and writes a managed playwright with enabled=false.
+      await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: false });
+      let cfg = JSON.parse(await fs.readFile(target, "utf-8"));
+      expect(cfg.mcpServers.filesystem.command).toBe("npx");
+      expect(cfg.mcpServers.filesystem.enabled).toBe(true);
+      expect(cfg.mcpServers.playwright.enabled).toBe(false);
+
+      // Goal-on run flips playwright to true; the user's entry is still
+      // here. (The merge is the load-bearing claim of this test — once
+      // playwright is enabled=true the user-override rule kicks in, so
+      // we stop here rather than testing the toggle back off.)
+      await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: true });
+      cfg = JSON.parse(await fs.readFile(target, "utf-8"));
+      expect(cfg.mcpServers.filesystem.command).toBe("npx");
+      expect(cfg.mcpServers.playwright.enabled).toBe(true);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("user-owned playwright entry (enabled=true in mcp.json) wins over the goal-gated managed config", async () => {
+    // The opt-in escape hatch: a user who hand-edits mcp.json to set
+    // playwright.enabled=true is telling Desk "I want browser tools
+    // in every chat, regardless of goal". Desk respects that and
+    // stops managing the entry — including keeping a non-standard
+    // command/args/env the user might have set (e.g. chromium
+    // instead of firefox).
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "ws");
+      const target = path.join(workspaceRootPath(home, "ws"), ".agents", "mcp.json");
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(
+        target,
+        JSON.stringify({
+          mcpServers: {
+            playwright: {
+              command: "playwright-mcp",
+              args: ["--browser", "chromium"],
+              enabled: true,
+              env: { DISPLAY: ":42" },
+            },
+          },
+        }),
+        "utf-8",
+      );
+
+      // Goal-gate says disable, but user explicit opt-in beats it.
+      await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: false });
+      const cfg = JSON.parse(await fs.readFile(target, "utf-8"));
+      expect(cfg.mcpServers.playwright.enabled).toBe(true);
+      expect(cfg.mcpServers.playwright.args).toEqual(["--browser", "chromium"]);
+      expect(cfg.mcpServers.playwright.env.DISPLAY).toBe(":42");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("resets a user's enabled=false playwright entry to managed (no opt-in signal → goal-gate applies)", async () => {
+    // Only enabled=true is an opt-in. Other values (false, missing,
+    // garbage) leave Desk in charge — otherwise a stale Desk-written
+    // enabled=false would prevent the goal-gate from ever re-enabling
+    // playwright for a site/app chat in that workspace.
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "ws");
+      const target = path.join(workspaceRootPath(home, "ws"), ".agents", "mcp.json");
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(
+        target,
+        JSON.stringify({
+          mcpServers: {
+            playwright: { command: "broken", args: [], enabled: false, env: {} },
+          },
+        }),
+        "utf-8",
+      );
+
+      await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: true });
+      const cfg = JSON.parse(await fs.readFile(target, "utf-8"));
+      expect(cfg.mcpServers.playwright.command).toBe("playwright-mcp");
+      expect(cfg.mcpServers.playwright.args).toEqual(["--browser", "firefox"]);
+      expect(cfg.mcpServers.playwright.env.DISPLAY).toBe(":99");
+      expect(cfg.mcpServers.playwright.enabled).toBe(true);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers from a malformed mcp.json by resetting to the managed config", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-mcp-cfg-"));
+    try {
+      await ensureLayout(home);
+      await ensureWorkspaceLayout(home, "ws");
+      const target = path.join(workspaceRootPath(home, "ws"), ".agents", "mcp.json");
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, "{ this is not json", "utf-8");
+
+      const res = await writeWorkspaceMcpConfig(home, "ws", { enablePlaywright: true });
+      expect(res.changed).toBe(true);
+      const cfg = JSON.parse(await fs.readFile(target, "utf-8"));
+      expect(cfg.mcpServers.playwright.enabled).toBe(true);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
 });
 
-describe("readAgentsModelDigest", () => {
-  const baseInput = {
-    agentName: "Jarvis",
-    userName: "Desk",
-  } as const;
-
-  it("returns an empty string when the agents dir does not exist yet", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-amd-"));
+describe("writeAgentFile", () => {
+  it("writes AGENTS.md at the workspace root (pi's auto-discovered location)", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-agentfile-"));
     try {
       await ensureLayout(home);
       await ensureWorkspaceLayout(home, "ws");
-      // No agent files written — readdir returns ENOENT or empty.
-      expect(await readAgentsModelDigest(home, "ws")).toBe("");
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
-    }
-  });
-
-  it("digest changes when the agent file's model: field changes", async () => {
-    // The point of the digest: a model rewrite must produce a
-    // different value so `ensureOpencodeServer`'s env-digest compare
-    // restarts the daemon — otherwise opencode-serve keeps its
-    // startup-cached `agent.<id>.model` alive and the rewrite is
-    // silently invisible.
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-amd-"));
-    try {
-      await ensureLayout(home);
-      await ensureWorkspaceLayout(home, "ws");
-
       await writeAgentFile(home, "ws", {
-        ...baseInput,
         agentId: "agt_x",
-        model: "opencode/big-pickle",
+        agentName: "Helper",
+        model: "anthropic/claude-haiku-4-5",
+        userName: "Desk",
       });
-      const first = await readAgentsModelDigest(home, "ws");
-      expect(first.length).toBeGreaterThan(0);
-
-      await writeAgentFile(home, "ws", {
-        ...baseInput,
-        agentId: "agt_x",
-        model: "opencode/qwen3.6-plus-free",
-      });
-      const second = await readAgentsModelDigest(home, "ws");
-      expect(second).not.toBe(first);
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
-    }
-  });
-
-  it("digest is stable across rewrites that don't touch model: (so the daemon doesn't churn on prompt-body refreshes)", async () => {
-    // The agent file is rewritten every turn — timestamps in the
-    // body, refreshed memory indexes, goal-fragment swaps. None of
-    // those need a daemon restart, only `model:` does. The digest
-    // hashes only the `model:` line so per-turn rewrites stay
-    // stable, avoiding a daemon restart on every single message.
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-amd-"));
-    try {
-      await ensureLayout(home);
-      await ensureWorkspaceLayout(home, "ws");
-
-      await writeAgentFile(home, "ws", {
-        ...baseInput,
-        agentId: "agt_x",
-        model: "opencode/big-pickle",
-        userTimezone: "America/Los_Angeles",
-      });
-      const first = await readAgentsModelDigest(home, "ws");
-
-      // Different prompt body (different timezone changes the
-      // rendered prompt) but same `model:` line.
-      await writeAgentFile(home, "ws", {
-        ...baseInput,
-        agentId: "agt_x",
-        model: "opencode/big-pickle",
-        userTimezone: "Europe/Berlin",
-      });
-      const second = await readAgentsModelDigest(home, "ws");
-      expect(second).toBe(first);
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
-    }
-  });
-
-  it("covers every agent file in the workspace (the daemon caches all of them)", async () => {
-    // opencode-serve loads every file in the agents dir at startup,
-    // not just the one bound to the current run. So a model rewrite
-    // on a DIFFERENT agent must still flip the digest — otherwise a
-    // chat switching to a stale agent later would keep using the
-    // old cached model.
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "desk-amd-"));
-    try {
-      await ensureLayout(home);
-      await ensureWorkspaceLayout(home, "ws");
-
-      await writeAgentFile(home, "ws", {
-        ...baseInput,
-        agentId: "agt_a",
-        model: "opencode/big-pickle",
-      });
-      await writeAgentFile(home, "ws", {
-        ...baseInput,
-        agentId: "agt_b",
-        model: "opencode/big-pickle",
-      });
-      const before = await readAgentsModelDigest(home, "ws");
-
-      // Touch the OTHER agent's model.
-      await writeAgentFile(home, "ws", {
-        ...baseInput,
-        agentId: "agt_b",
-        model: "opencode/qwen3.6-plus-free",
-      });
-      const after = await readAgentsModelDigest(home, "ws");
-      expect(after).not.toBe(before);
+      const target = path.join(workspaceRootPath(home, "ws"), "AGENTS.md");
+      const body = await fs.readFile(target, "utf-8");
+      expect(body).toContain("# Helper");
+      expect(body).toContain("You are Helper, call me Desk.");
+      // No opencode-specific frontmatter leaks into the file.
+      expect(body).not.toContain("model:");
+      expect(body).not.toContain("permission:");
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }

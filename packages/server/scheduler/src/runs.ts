@@ -39,14 +39,11 @@ import {
   buildOutputContent,
   computeNextRun,
   errorLogLines,
-  FALLBACK_MODEL,
-  isNonEmpty,
   isUnscheduledTask,
   outputContentTypeFor,
   readLogEntries,
   reflectionOutcomeText,
   resolveModelForRun,
-  type ModelResolutionReason,
   type SummaryModelTokenLimits,
 } from "./runs-helpers.js";
 import { withModule } from "@agent-desk/shared/logger";
@@ -82,89 +79,12 @@ export interface RunManagerOptions {
 }
 
 // Re-export the model resolver from runs-helpers so existing callers
-// keep working. The implementation moved out of runs.ts so reflection.ts
+// keep working. The implementation lives in helpers so reflection.ts
 // can use it without creating a runs ↔ reflection import cycle.
 export {
-  FALLBACK_MODEL,
   resolveModelForRun,
   type ModelResolutionReason,
 } from "./runs-helpers.js";
-
-/**
- * Returns true when the chain entry has live auth in the current run
- * env, so the driver should actually attempt it. Mirrors the gate logic
- * inside `resolveModelForRun`: `opencode/*` is always reachable (free
- * tier, no key), `openai/*` and `codex/*` need either OPENAI_API_KEY or
- * the Codex OAuth blob, `anthropic/*` needs ANTHROPIC_API_KEY. Any other
- * provider passes through (Desk doesn't gatekeep it; opencode-serve
- * applies its own validation).
- */
-function modelHasLiveAuth(
-  model: string,
-  providerKeys: Record<string, string>,
-  extraEnv?: Record<string, string>,
-): boolean {
-  const hasOpenAiKey = isNonEmpty(providerKeys.OPENAI_API_KEY);
-  const hasAnthropicKey = isNonEmpty(providerKeys.ANTHROPIC_API_KEY);
-  const oauthAvailable = isNonEmpty(extraEnv?.OPENCODE_AUTH_CONTENT);
-  if (model.startsWith("opencode/")) return true;
-  if (model.startsWith("codex/")) return oauthAvailable || hasOpenAiKey;
-  if (model.startsWith("openai/")) return hasOpenAiKey || oauthAvailable;
-  if (model.startsWith("anthropic/")) return hasAnthropicKey;
-  return true;
-}
-
-/**
- * Drops chain entries whose provider has no live auth — they'd round-
- * trip to the daemon only to come back as a 401 anyway. Preserves order
- * so the user's preferred model still leads when authed.
- */
-function filterUnauthedModels(
-  chain: string[],
-  providerKeys: Record<string, string>,
-  extraEnv?: Record<string, string>,
-): string[] {
-  return chain.filter((m) => modelHasLiveAuth(m, providerKeys, extraEnv));
-}
-
-function uniqStrings(items: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const item of items) {
-    if (seen.has(item)) continue;
-    seen.add(item);
-    out.push(item);
-  }
-  return out;
-}
-
-/**
- * Resolves the ordered fallback chain for a single run. Phase 1: chain
- * is `[selectedModel, FALLBACK_MODEL]`, deduped and filtered to entries
- * with live auth. `goal` is accepted but unused — Phase 2 will key
- * goal-specific chains off it, and keeping the signature stable now
- * means callers don't churn between phases.
- *
- * Returns `{ chain, providerKeys, reason }` mirroring `resolveModelForRun`
- * so the call site can keep using `providerKeys`/`reason` unchanged.
- * `chain[0]` is the model the driver attempts first; `chain` is also
- * forwarded into the driver's `RunOptions.modelChain` for in-driver
- * fallback when chain[0] surfaces a retryable upstream error mid-turn.
- */
-export async function resolveModelChainForRun(
-  model: string,
-  goal: GoalKey | null,
-  providerKeys: Record<string, string>,
-  extraEnv?: Record<string, string>,
-): Promise<{ chain: string[]; providerKeys: Record<string, string>; reason: ModelResolutionReason }> {
-  void goal; // reserved for Phase 2 (goal-specific chains from the goals table)
-  const head = resolveModelForRun(model, providerKeys, extraEnv);
-  const raw = uniqStrings([head.runtimeModel, FALLBACK_MODEL]);
-  const chain = filterUnauthedModels(raw, head.providerKeys, extraEnv);
-  // FALLBACK_MODEL is `opencode/*` so `modelHasLiveAuth` always keeps it —
-  // the chain is therefore guaranteed non-empty.
-  return { chain, providerKeys: head.providerKeys, reason: head.reason };
-}
 
 /**
  * @deprecated Kept for backwards-compatibility with existing tests
@@ -569,7 +489,7 @@ export function createRunManager(opts: RunManagerOptions) {
       const agentFileInput: AgentFileInput = {
         agentId,
         agentName: agent?.name ?? "Desk Agent",
-        model: agent?.model ?? "opencode/big-pickle",
+        model: agent?.model ?? "anthropic/claude-haiku-4-5",
         userName,
         userTimezone,
         chatId: executionChatId,
@@ -638,51 +558,16 @@ export function createRunManager(opts: RunManagerOptions) {
         // actually handled the run, which may be a freshly-created one if
         // the chat had none or the stored id was stale on the daemon.
         let opencodeSessionId = await queries.chats.getOpencodeSessionId(pool, executionChatId);
-        // `resolveModelForRun` settles three concerns at once: it
-        // translates `codex/<name>` to opencode-serve's `openai/<name>`
-        // and strips `OPENAI_API_KEY` when the OAuth path is the
-        // intended one; it falls back to the cloud key when Codex is
-        // disabled; and — critically — it substitutes the free
-        // `FALLBACK_MODEL` when no auth at all is available for the
-        // requested provider. Without the last branch, a chat whose
-        // agent still points at `codex/X` or `openai/X` after the user
-        // disabled every model provider stalls on a daemon-side
-        // `ProviderModelNotFoundError` or, worse, silently rides a
-        // stale OAuth blob that opencode-serve cached from a previous
-        // spawn.
-        const billing = await resolveModelChainForRun(
-          agentFileInput.model,
-          chatGoal,
-          providerKeys,
-          extraEnv,
-        );
-        const billingHeadModel = billing.chain[0];
-        if (billing.reason === "no-auth-fallback") {
-          // Surface the downgrade so the user sees what changed.
-          //
-          // Important caveat we name explicitly: the free fallback runs
-          // through opencode.ai's zen endpoint and that tier has
-          // historically been intermittently available — deprecated
-          // model ids, rate limits, regional outages. When zen is
-          // down, the daemon resolves the sendMessage call cleanly
-          // with an `info.error` payload (no HTTP exception) and the
-          // driver reports it via the upstream-error stderr line.
-          // Setting expectations here so the user reads "enable a
-          // provider" as the fix path, not "try again."
-          await onLog({
-            runId,
-            seq: 0,
-            kind: "stderr",
-            payload:
-              `No live auth for ${agentFileInput.model}; falling back to the free ${billingHeadModel}. ` +
-              `Free fallback can be rate-limited or unavailable upstream — ` +
-              `enable a model provider in Settings → Connections to restore the picked model reliably.`,
-          });
-        }
+        // Translate the Desk model id into pi's view: `codex/<n>` →
+        // `openai-codex/<n>` when OAuth is live, `openai/<n>` when only
+        // an API key is. Other models pass through. Missing-auth is
+        // handled by pi itself, which raises a clear "No API key found
+        // for <provider>" message — no Desk-side substitution.
+        const billing = resolveModelForRun(agentFileInput.model, providerKeys, extraEnv);
         const runtimeAgentInput: AgentFileInput =
-          billingHeadModel === agentFileInput.model
+          billing.runtimeModel === agentFileInput.model
             ? agentFileInput
-            : { ...agentFileInput, model: billingHeadModel };
+            : { ...agentFileInput, model: billing.runtimeModel };
         // Transparent container-gone retry: a reaper, manual `rm -f`, or
         // some other rare race outside the per-workspace createOrReuse
         // mutex can leave the sandbox container removed between
@@ -724,7 +609,6 @@ export function createRunManager(opts: RunManagerOptions) {
                 extraEnv,
                 mountPlan,
                 opencodeSessionId,
-                modelChain: billing.chain,
                 onLog: onLogWithStderrCapture,
               });
             } catch (err) {

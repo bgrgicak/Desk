@@ -16,7 +16,7 @@ import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("api/routes/workspaces");
 
 const DEFAULT_AGENT_NAME = "Desk";
-const DEFAULT_AGENT_MODEL = "opencode/big-pickle";
+const DEFAULT_AGENT_MODEL = "anthropic/claude-haiku-4-5";
 
 const HUB_NAME = "Hub";
 const HUB_DESCRIPTION = "Your home base across all workspaces.";

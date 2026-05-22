@@ -60,11 +60,9 @@ export async function handleAutoLogin(
  * `DESK_ENABLE_SIGNUP=1`.
  *
  * When enabled, this creates the user row, bootstraps a hub workspace,
- * sets up the per-user vault when DESK_VAULT_PASSWORD is set, and
- * returns a session token. Hub creation + vault setup mirror what
- * main.ts does for users that existed at boot — a new signup gets the
- * same shape immediately so the SPA doesn't land on "No workspaces"
- * right after the redirect.
+ * and returns a session token. The per-user vault is NOT created here —
+ * the user picks a vault password through the VaultDialog the first time
+ * they store an API key, so the master never lives in the server .env.
  */
 export function isSignupEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.DESK_ENABLE_SIGNUP === "1";
@@ -170,19 +168,15 @@ export async function handleSignup(
     log.warn({ username, err: (err as Error).message }, "signup: hub-creation failed");
   }
 
-  // If the server is in auto-unlock mode (DESK_VAULT_PASSWORD set), the
-  // boot loop already set up vaults for the users that existed at boot.
-  // A user who signs up after boot needs the same treatment so the AI
-  // provider key flow (PUT /me/providers) works without a manual vault
-  // setup step. Also best-effort.
-  const vaultPassword = env.DESK_VAULT_PASSWORD;
-  if (ctx.vault && vaultPassword) {
-    try {
-      await ctx.vault.setup(id, vaultPassword);
-    } catch (err) {
-      log.warn({ username, err: (err as Error).message }, "signup: vault auto-setup failed");
-    }
-  }
+  // No vault is created at signup. The user picks a vault password on
+  // their first credential-store action through the VaultDialog UI; until
+  // then the per-user vault simply doesn't exist and `/vault/status`
+  // returns `{ exists: false, locked: true }`.
+  //
+  // The DESK_VAULT_PASSWORD env still controls boot-time auto-unlock for
+  // pre-existing vaults (so dev/CI restarts don't lose state), but it no
+  // longer creates vaults at signup — that would re-introduce the
+  // plaintext-in-.env weakness for anyone who signs up after boot.
 
   return { token };
 }

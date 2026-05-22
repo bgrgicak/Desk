@@ -45,7 +45,6 @@ function renderSkill(spec: DeskSkillSpec): string {
     "---",
     `name: ${frontmatterScalar(spec.name)}`,
     `description: ${frontmatterScalar(spec.description)}`,
-    "compatibility: opencode",
     "metadata:",
     "  source: desk",
     ...metadata.map(([key, value]) => `  ${key}: ${frontmatterScalar(value)}`),
@@ -57,9 +56,9 @@ function renderSkill(spec: DeskSkillSpec): string {
 }
 
 /**
- * Materializes packaged Desk reference docs as native OpenCode skills.
- * The host directory is mounted read-only inside the sandbox at OpenCode's
- * global skills path: ~/.config/opencode/skills.
+ * Materializes packaged Desk reference docs as native pi skills following
+ * the Agent Skills standard. The host directory is mounted read-only inside
+ * the sandbox and symlinked into pi's discovery path: ~/.agents/skills.
  */
 export async function writeDeskSkillFiles(home: string): Promise<void> {
   const skillsDir = skillsHostDir(home);

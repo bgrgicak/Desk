@@ -26,13 +26,7 @@ import {
   buildDefaultMountPlan,
   type MountPlan,
 } from "./mounts.js";
-import {
-  detectEngine,
-  PortPublishConflictError,
-  type BindMount,
-  type Engine,
-} from "./engine.js";
-import { OPENCODE_SERVE_CONTAINER_PORT } from "./opencodeServer.js";
+import { detectEngine, type BindMount, type Engine } from "./engine.js";
 import { withModule } from "@agent-desk/shared/logger";
 const log = withModule("runtime/docker");
 
@@ -81,20 +75,11 @@ export interface SandboxHandle {
  *
  * The numbers were measured from real sandbox baseline (5 PIDs / ~50 MB
  * idle, ~20 PIDs / 300-400 MB during a chat run, ~50-100 PIDs / ~1 GB
- * for site/app work with firefox).
- *
- * Memory baseline raised from 512 MiB → 1 GiB after chaos-test data
- * (CHAOS_TESTING.md) showed the previous baseline was consistently
- * exceeded during cold-start when N concurrent chats hit a single
- * workspace daemon simultaneously: each chat creates its own opencode
- * session inside the shared `opencode serve` daemon, and the per-chat
- * session state (model context, tool registrations, MCP clients) adds
- * up faster than the auto-grow loop can react. The grow path still
- * exists for genuinely-large workloads, but 1 GiB makes the cold-start
- * failure mode disappear for typical 4-6 concurrent chats per workspace.
+ * for site/app work with firefox). 512 / 512 MB is comfortably above
+ * idle, ~50 % headroom for chat work, and growth handles the rest.
  */
 const SANDBOX_BASELINE_PIDS = 512;
-const SANDBOX_BASELINE_MEMORY_BYTES = 1024 * 1024 * 1024;
+const SANDBOX_BASELINE_MEMORY_BYTES = 512 * 1024 * 1024;
 const SANDBOX_MAX_PIDS = 4096;
 const SANDBOX_MAX_MEMORY_BYTES = 8 * 1024 * 1024 * 1024;
 const SANDBOX_TMPFS: Record<string, string> = { "/tmp": "size=512m" };
@@ -118,7 +103,7 @@ const SANDBOX_READY_TIMEOUT_MS = 300_000;
  * decision; growing an existing sandbox is a follow-up (see
  * `packages/server/docs/plans/sandbox-autoscaling.md`).
  */
-const SANDBOX_RUNTIME_TAG = "opencode-serve-v1";
+const SANDBOX_RUNTIME_TAG = "pi-runtime-v1";
 
 function resourceProfileString(): string {
   return `runtime=${SANDBOX_RUNTIME_TAG},user=root+sudo`;
@@ -169,14 +154,6 @@ export function classifyResourceError(
   // a non-OOM signal kill that hits this path will at worst grow the
   // sandbox once before the user-visible failure surfaces.
   if (s.includes("setsid:") && s.includes("did not exit normally")) return "memory";
-  // opencode-serve daemon mid-run failure: HTTP calls to a dead daemon
-  // surface as `fetch failed` / `ECONNREFUSED` in stderr, not as a
-  // child-process exit code. The driver probes the container's cgroup
-  // `memory.events.oom_kill` after a daemon-gone error and emits a
-  // marker line when the kernel actually OOM-killed it. That's the
-  // signal the auto-scaler needs to grow memory before retry instead
-  // of failing the user with no recovery.
-  if (s.includes("opencode-serve was oom-killed")) return "memory";
   return null;
 }
 
@@ -368,34 +345,6 @@ export async function createOrReuse(
   }
 }
 
-/**
- * Outer-loop attempt cap for `createOrReuseImpl`. Each iteration may
- * remove a broken container and try again — the cases we self-heal
- * inside the loop are:
- *
- *   1. Drift: image/mount/user mismatch → remove + recreate.
- *   2. Networking broken on a reused container (RootlessKit didn't wire
- *      up the port publish, or the container came back from a shim
- *      crash without rejoining the bridge): `publishedPorts` empty or
- *      `engine.port()` returns null → remove + recreate.
- *   3. Port-bind race on create (`PortPublishConflictError`): the
- *      engine has already backed-off + retried internally; reaching
- *      here means the previous proxy is still squatting the slot after
- *      seconds. Remove and try a fresh host port on the next loop.
- *   4. waitForEntrypointReady reports "container gone" mid-poll: a
- *      parallel reaper raced our create. Re-inspect and either adopt
- *      the winner or recreate.
- *   5. Name conflict from a parallel `createOrReuse` for the same
- *      workspace name (the in-flight serializer should make this rare,
- *      but a manual `docker run --name=…` from outside the runtime can
- *      still hit it). Adopt the winner if it's healthy, else recreate.
- *
- * Three attempts is enough to absorb stacked transients (e.g. a port
- * race during creation + a slow shim attach on the next try) without
- * letting a truly broken host loop forever.
- */
-const CREATE_OR_REUSE_MAX_ATTEMPTS = 3;
-
 async function createOrReuseImpl(
   workspaceId: string,
   workspaceSlug: string,
@@ -416,277 +365,141 @@ async function createOrReuseImpl(
   const expectedUser = SANDBOX_CONTAINER_USER;
   const agentUser = await sandboxUser(engine);
 
-  // Pre-create every source dir and nested target mount point once
-  // upfront so a recreate-retry doesn't have to redo this work. The
-  // operations are idempotent (`mkdir -p`-equivalent), so calling them
-  // before the inspect/drift branch is safe even when we end up reusing.
+  // Reuse the container only if its image, binds, container user, and agent
+  // user still match the current expectation; otherwise tear it down and fall
+  // through to the create path. Bind order isn't meaningful, compare as sets.
+  const existing = await engine.inspect(containerName);
+  if (existing) {
+    const currentImageId = await engine.imageId(sandboxImage(workspaceKind));
+    const imageMatches = currentImageId !== null && existing.imageId === currentImageId;
+    const mountsMatch = bindsSatisfy(existing.binds, expectedBindStrings);
+    const userMatches = existing.user === expectedUser;
+    const resourcesMatch = existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL] === expectedResourceProfile;
+    const agentUserMatches = existing.labels[SANDBOX_AGENT_USER_LABEL] === agentUser;
+    let containerAlreadyGone = false;
+    if (imageMatches && mountsMatch && userMatches && resourcesMatch && agentUserMatches) {
+      if (!existing.running) await engine.start(containerName);
+      try {
+        await waitForEntrypointReady(engine, existing.id);
+        // Note: we never resize on plain reuse. Sandboxes start at the
+        // baseline and only grow when a run actually fails with a
+        // resource-shaped error — see `growSandboxForResourceError`. A
+        // re-use that *would* benefit from a larger sandbox surfaces that
+        // need by failing first, which is the correct signal.
+        return { containerId: existing.id, workspaceId };
+      } catch (err) {
+        // The container can vanish between inspect() above and the first
+        // exec poll — reaper, drift recreate elsewhere, parallel fire's
+        // remove, or a manual rm. waitForEntrypointReady's fast-bail
+        // surfaces that as a "no longer present" error. Falling through
+        // to the create-fresh path below recovers in seconds rather than
+        // making every caller paper over the race with its own retry.
+        if (!/no longer present|no such (container|object)/i.test(
+          (err as Error).message ?? "",
+        )) {
+          throw err;
+        }
+        containerAlreadyGone = true;
+      }
+    }
+    // Don't re-issue a name-targeted remove if waitForEntrypointReady just
+    // confirmed the container is gone. Under a parallel fire, the name
+    // may already point at the winner's brand-new container — issuing
+    // `docker rm -f <name>` here would clobber it. The drift-recreate
+    // path still needs the remove because the existing container is
+    // alive but no longer matches our expected layout.
+    if (!containerAlreadyGone) {
+      await engine.remove(containerName, true);
+    }
+  }
+
+  // Pre-create every source dir and nested target mount point so the runtime
+  // doesn't auto-create them as root and break subsequent non-root writes.
   for (const entry of plan) {
     if (entry.ensureSource !== false) await fs.mkdir(entry.sourcePath, { recursive: true });
   }
   await ensureNestedMountTargets(plan);
 
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < CREATE_OR_REUSE_MAX_ATTEMPTS; attempt++) {
-    // Re-inspect every loop iteration: the container can have appeared
-    // (a parallel writer just created one) or vanished (we just removed
-    // a broken one) since the last iteration. Cheap; the source of truth
-    // for every drift / pre-flight decision below.
-    const existing = await engine.inspect(containerName);
-    if (existing) {
-      const currentImageId = await engine.imageId(sandboxImage(workspaceKind));
-      const imageMatches = currentImageId !== null && existing.imageId === currentImageId;
-      const mountsMatch = bindsSatisfy(existing.binds, expectedBindStrings);
-      const userMatches = existing.user === expectedUser;
-      const resourcesMatch = existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL] === expectedResourceProfile;
-      const agentUserMatches = existing.labels[SANDBOX_AGENT_USER_LABEL] === agentUser;
-      // Pre-flight: the host-side port publish must be live. A container
-      // can be `running` with `publishedPorts` empty when RootlessKit's
-      // PortManager.AddPort failed at create time and the desk-server
-      // crashed/restarted before it could tear the half-init container
-      // down. Treat as drift; recreate.
-      const portWired = hasOpencodeServePort(existing.publishedPorts);
-      const driftReasons = collectDriftReasons({
-        imageMatches,
-        mountsMatch,
-        userMatches,
-        resourcesMatch,
-        agentUserMatches,
-        portWired: portWired || !existing.running, // skip port check on stopped containers; engine.start populates it
-      });
-      if (driftReasons.length === 0) {
-        try {
-          if (!existing.running) {
-            await engine.start(containerName);
-          }
-          await waitForEntrypointReady(engine, existing.id);
-          // Post-start pre-flight: confirm engine actually published 9105.
-          // This catches the "started but no Ports map" case that the
-          // upfront `publishedPorts` check skipped for stopped containers.
-          const binding = await engine.port(
-            existing.id,
-            OPENCODE_SERVE_CONTAINER_PORT,
-            "tcp",
-          );
-          if (!binding) {
-            log.warn(
-              { containerName, attempt },
-              "sandbox: reused container has no host-side binding for opencode-serve port; recreating",
-            );
-            await engine.remove(containerName, true).catch(() => {});
-            continue;
-          }
-          return { containerId: existing.id, workspaceId };
-        } catch (err) {
-          // The container can vanish between inspect and start/poll — a
-          // parallel reaper, a manual rm, or a drift-recreate elsewhere.
-          // Fall through to the create path on this iteration.
-          const message = (err as Error).message ?? "";
-          if (/no longer present|no such (container|object)/i.test(message)) {
-            log.info(
-              { containerName, attempt, message },
-              "sandbox: existing container vanished mid-reuse; creating a fresh one",
-            );
-            // Don't re-issue a name-targeted remove: under a parallel
-            // fire the name may already point at the winner's container.
-          } else if (err instanceof PortPublishConflictError) {
-            log.warn(
-              { containerName, attempt, originalStderr: err.originalStderr },
-              "sandbox: rootless port-bind race on start; recreating",
-            );
-            await engine.remove(containerName, true).catch(() => {});
-            lastErr = err;
-            continue;
-          } else {
-            throw err;
-          }
-        }
-      } else {
-        log.info(
-          {
-            containerName,
-            attempt,
-            drift: driftReasons,
-            // Include the actual vs expected so we can diagnose
-            // mount-layout-mismatch loops without re-running with
-            // extra instrumentation.
-            ...(driftReasons.includes("mount-layout-mismatch")
-              ? {
-                  actualBinds: existing.binds ?? [],
-                  expectedBinds: expectedBindStrings,
-                }
-              : {}),
-            ...(driftReasons.includes("resource-profile-mismatch")
-              ? {
-                  actualProfile: existing.labels[SANDBOX_RESOURCE_PROFILE_LABEL],
-                  expectedProfile: expectedResourceProfile,
-                }
-              : {}),
-          },
-          "sandbox: removing drifted container",
-        );
-        await engine.remove(containerName, true).catch(() => {});
-      }
-    }
-
-    // Fresh create. Egress policy: default "bridge" (full outbound) —
-    // the sandbox needs to reach AI provider APIs, GitHub, tool
-    // registries. Operators can flip DESK_SANDBOX_NETWORK="none" to
-    // drop egress; that breaks AI calls but keeps purely-local
-    // workloads working. A real domain allowlist would need a sidecar
-    // proxy and is out of scope for v1.
+  try {
+    // Egress policy. Default is "bridge" (full outbound) because the
+    // sandbox needs to reach AI provider APIs (Anthropic, OpenAI,
+    // opencode), GitHub for git operations, and tool registries.
+    // Operators running a paranoid deployment can set
+    // DESK_SANDBOX_NETWORK="none" to drop all egress — breaks AI calls
+    // and any tooling that downloads from the network, but keeps the
+    // sandbox effective for purely-local workloads (file editing,
+    // text-only chats with a pre-cached model).
+    //
+    // A full domain-based allowlist would require a sidecar HTTP
+    // proxy (squid / mitmproxy in transparent mode) and is out of
+    // scope for v1; the two-option knob ("unrestricted" vs "none")
+    // covers the realistic deployment matrix.
     const egressMode = (process.env.DESK_SANDBOX_NETWORK ?? "bridge").toLowerCase();
     const network = egressMode === "none" ? "none" : "bridge";
 
-    let containerId: string;
-    try {
-      containerId = await engine.create({
-        name: containerName,
-        image: sandboxImage(workspaceKind),
-        // Start the long-lived container as root so the entrypoint can wire up
-        // the per-host `agent` user and passwordless sudo. Individual agent
-        // execs still run as `sandboxUser()` below, keeping normal workspace
-        // writes owned by the host user on rootful Docker.
-        user: expectedUser,
-        env: [
-          ...providerKeyEnv(providerKeys, extraEnv),
-          `DESK_SANDBOX_AGENT_USER=${agentUser}`,
-        ],
-        labels: {
-          [SANDBOX_RESOURCE_PROFILE_LABEL]: expectedResourceProfile,
-          [SANDBOX_AGENT_USER_LABEL]: agentUser,
-        },
-        network,
-        // host-gateway lets the in-sandbox `desk` CLI reach the host-side
-        // desk-server REST API as `host.docker.internal`. `--network none`
-        // drops this capability; an operator who picks "none" accepts
-        // losing in-sandbox host callbacks.
-        extraHosts: network === "none" ? [] : ["host.docker.internal:host-gateway"],
-        pidsLimit: SANDBOX_BASELINE_PIDS,
-        memoryBytes: SANDBOX_BASELINE_MEMORY_BYTES,
-        tmpfs: SANDBOX_TMPFS,
-        binds: expectedBinds,
-        // Publish opencode-serve to a host-auto-assigned port on 127.0.0.1.
-        ports: [{ containerPort: OPENCODE_SERVE_CONTAINER_PORT, hostIp: "127.0.0.1" }],
-        // Docker `--init` (bundled tini) is PID 1; reaps reparented children.
-        init: true,
-      });
-    } catch (err) {
-      // Name-conflict race: two `startSandbox` calls for the same workspace
-      // both passed the inspect() check and both tried to create. The
-      // loser sees this branch. Wait briefly for the winner's container
-      // to be fully created (post-conflict inspects can briefly return
-      // null), then adopt it if healthy, else fall back to recreate.
-      if ((err as { conflict?: boolean }).conflict) {
-        const deadline = Date.now() + 2000;
-        while (Date.now() < deadline) {
-          const winner = await engine.inspect(containerName);
-          if (winner) {
-            // Try the next loop iteration so the winner gets validated by
-            // the same drift + pre-flight checks as any reused container.
-            break;
-          }
-          await delay(100);
-        }
-        lastErr = err;
-        continue;
-      }
-      // PortPublishConflictError from `engine.create` means the inner
-      // retry budget was exhausted. Outer loop tries one more recreate;
-      // by then the prior docker-proxy has almost certainly released.
-      if (err instanceof PortPublishConflictError) {
-        log.warn(
-          { containerName, attempt, originalStderr: err.originalStderr },
-          "sandbox: rootless port-bind race during create; recreating with a new host port",
-        );
-        // `engine.create` already removed the half-created container in
-        // its retry loop, but defensive remove costs nothing.
-        await engine.remove(containerName, true).catch(() => {});
-        lastErr = err;
-        continue;
-      }
-      throw err;
-    }
-
-    try {
-      await waitForEntrypointReady(engine, containerId);
-    } catch (err) {
-      const message = (err as Error).message ?? "";
-      if (/no longer present|no such (container|object)/i.test(message)) {
-        // Someone removed it before the entrypoint signalled ready.
-        // Loop and either reuse the new winner or recreate.
-        log.info(
-          { containerName, attempt, message },
-          "sandbox: freshly created container vanished before entrypoint ready; retrying",
-        );
-        lastErr = err;
-        continue;
-      }
-      throw err;
-    }
-
-    // Post-create pre-flight: even after `waitForEntrypointReady` the
-    // userland port-forwarder may have failed silently — `publishedPorts`
-    // empty, `docker port` returns nothing. Surface that here so the
-    // next iteration recreates rather than handing the broken container
-    // to the daemon-start path (where it surfaces as the misleading
-    // "no host-side binding for container port 9105").
-    const binding = await engine.port(
-      containerId,
-      OPENCODE_SERVE_CONTAINER_PORT,
-      "tcp",
-    );
-    if (!binding) {
-      log.warn(
-        { containerName, attempt, containerId },
-        "sandbox: fresh container has no host-side binding for opencode-serve port; recreating",
-      );
-      await engine.remove(containerId, true).catch(() => {});
-      lastErr = new Error("fresh container had no host-side binding for opencode-serve port");
-      continue;
-    }
-
+    const containerId = await engine.create({
+      name: containerName,
+      image: sandboxImage(workspaceKind),
+      // Start the long-lived container as root so the entrypoint can wire up
+      // the per-host `agent` user and passwordless sudo. Individual agent
+      // execs still run as `sandboxUser()` below, keeping normal workspace
+      // writes owned by the host user on rootful Docker.
+      user: expectedUser,
+      env: [
+        ...providerKeyEnv(providerKeys, extraEnv),
+        `DESK_SANDBOX_AGENT_USER=${agentUser}`,
+      ],
+      labels: {
+        [SANDBOX_RESOURCE_PROFILE_LABEL]: expectedResourceProfile,
+        [SANDBOX_AGENT_USER_LABEL]: agentUser,
+      },
+      network,
+      // host-gateway lets the in-sandbox `desk` CLI reach the host-side
+      // desk-server REST API as `host.docker.internal`. Without it the
+      // bridge default has no DNS name for the host, so the agent has no
+      // route back to /sandbox/messages. `--network none` drops this
+      // capability; an operator who picks "none" accepts losing in-
+      // sandbox host callbacks.
+      extraHosts: network === "none" ? [] : ["host.docker.internal:host-gateway"],
+      pidsLimit: SANDBOX_BASELINE_PIDS,
+      memoryBytes: SANDBOX_BASELINE_MEMORY_BYTES,
+      tmpfs: SANDBOX_TMPFS,
+      binds: expectedBinds,
+      // Docker's `--init` (bundled tini) becomes PID 1 and reaps reparented
+      // children. The sandbox CMD is `sleep infinity`, which never reaps,
+      // so without this every npx/esbuild/playwright child that exits
+      // after its parent leaks a `<defunct>` slot until the container is
+      // restarted. The flag is part of the resource profile string above,
+      // so an old container created without it fails the drift check.
+      init: true,
+    });
+    await waitForEntrypointReady(engine, containerId);
     return { containerId, workspaceId };
+  } catch (err) {
+    // Race: two startSandbox() calls for the same workspace can both pass
+    // the inspect() check (no container) and both try to create. The
+    // loser sees a name conflict. The winner has a usable container with
+    // matching binds (we'd have reused it above otherwise), so reuse
+    // it instead of failing the fire.
+    //
+    // The first inspect-after-conflict can briefly return null on dockerd
+    // when the winning `docker run` has registered the name but the
+    // container isn't fully created yet, so the loser sees neither
+    // "exists" nor a fresh slot. Poll for up to ~2 s before giving up.
+    if ((err as { conflict?: boolean }).conflict) {
+      const deadline = Date.now() + 2000;
+      while (Date.now() < deadline) {
+        const winner = await engine.inspect(containerName);
+        if (winner) {
+          if (!winner.running) await engine.start(containerName);
+          await waitForEntrypointReady(engine, winner.id);
+          return { containerId: winner.id, workspaceId };
+        }
+        await delay(100);
+      }
+    }
+    throw err;
   }
-
-  // Outer loop exhausted. Every recoverable transient has had three
-  // chances; what we're seeing now is a real environment problem
-  // (Docker daemon down, image corrupted, /tmp full, etc.). Surface to
-  // the caller so the run fails cleanly rather than looping forever.
-  throw lastErr instanceof Error
-    ? lastErr
-    : new Error(
-        `createOrReuse: gave up after ${CREATE_OR_REUSE_MAX_ATTEMPTS} attempts for ${containerName}`,
-      );
-}
-
-/**
- * Drift breakdown for telemetry. Each entry is a kebab-case reason
- * so log aggregation can count drift causes without parsing strings.
- */
-function collectDriftReasons(checks: {
-  imageMatches: boolean;
-  mountsMatch: boolean;
-  userMatches: boolean;
-  resourcesMatch: boolean;
-  agentUserMatches: boolean;
-  portWired: boolean;
-}): string[] {
-  const reasons: string[] = [];
-  if (!checks.imageMatches) reasons.push("image-id-mismatch");
-  if (!checks.mountsMatch) reasons.push("mount-layout-mismatch");
-  if (!checks.userMatches) reasons.push("container-user-mismatch");
-  if (!checks.resourcesMatch) reasons.push("resource-profile-mismatch");
-  if (!checks.agentUserMatches) reasons.push("agent-user-mismatch");
-  if (!checks.portWired) reasons.push("opencode-serve-port-unbound");
-  return reasons;
-}
-
-function hasOpencodeServePort(
-  publishedPorts: Record<string, Array<{ hostIp: string; hostPort: number }>> | undefined,
-): boolean {
-  if (!publishedPorts) return false;
-  const bindings = publishedPorts[`${OPENCODE_SERVE_CONTAINER_PORT}/tcp`];
-  return Array.isArray(bindings) && bindings.length > 0;
 }
 
 export async function waitForEntrypointReady(
@@ -806,27 +619,15 @@ export async function sandboxUser(engine?: Engine): Promise<string> {
 }
 
 /**
- * Mount-layout drift check: every bind the caller said it NEEDS must
- * be present in the container. Extras in the container are tolerated.
+ * Subset semantics for bind-mount drift checks: actual must include every
+ * expected mount, but extras (mounts a previous caller asked for) are fine.
  *
- * Why subset, not set-equality:
- * - The scheduler's mountPlan includes local-filesystem connections
- *   (e.g. ~/Projects, ~/Downloads). Those mounts are bound into the
- *   container at create time.
- * - `execInSandbox` (called by `listModels`, etc.) re-resolves the
- *   sandbox WITHOUT specifying a mountPlan — it doesn't know or care
- *   about local-filesystem connections, it just wants to exec.
- *   `createOrReuse` then falls back to the *default* mount plan
- *   (workspace + skills, 2 binds).
- * - With set-equality the second caller's "expected" (2 binds) would
- *   never match the actual (4 binds), causing every utility exec to
- *   REMOVE the running container, recreate it without locals, then
- *   the next scheduler-driven run sees the smaller plan as drift and
- *   recreates again — an infinite ping-pong that the chaos test
- *   surfaced as repeated 512→1024 MiB memory grows on freshly-baseline
- *   containers (every recreate resets the cgroup limit).
- * - Subset is the correct invariant: "the caller's required mounts
- *   must be live; extras the previous caller asked for are harmless."
+ * Equality was rejected because two callers with different but-overlapping
+ * mount plans cause an infinite recreate ping-pong: each call fails the
+ * exact-match drift check, recreates the container with its plan, then the
+ * next call from the other caller sees missing mounts and recreates again.
+ * Subset is the correct invariant: "the caller's required mounts must be
+ * live; extras the previous caller asked for are harmless."
  */
 export function bindsSatisfy(actual: string[] | undefined, expected: string[]): boolean {
   if (expected.length === 0) return true;
@@ -1090,64 +891,17 @@ export async function reapIdleSandboxes(
 }
 
 /**
- * Soft idle tier: kill the `opencode serve` daemon inside sandbox
- * containers whose workspace has been quiet for `minAgeMs`, but leave
- * the container itself running. Saves ~400 MB of warm-daemon RSS per
- * sandbox without paying the full container cold-start on the next
- * message — the next `ensureOpencodeServer` re-spawns the daemon in
- * ~2-5 s against a still-warm container.
+ * No-op under the pi runtime — there is no long-lived per-container
+ * daemon to reap. Kept as an exported function so the scheduler's
+ * existing periodic call site doesn't need to know the runtime changed.
  *
- * Same `recentlyActiveWorkspaceIds` shape as `reapIdleSandboxes` so
- * the scheduler can reuse the existing active-workspace query.
- * Default 10 min — quiet enough to avoid killing daemons between
- * back-to-back chats but tight enough that long-idle workspaces
- * release the daemon's memory promptly.
- *
- * Returns the names of containers whose daemon was killed.
+ * Returns an empty list (no containers were touched).
  */
 export async function softReapIdleDaemons(
-  recentlyActiveWorkspaceIds: ReadonlySet<string>,
-  minAgeMs: number = 10 * 60 * 1000,
+  _recentlyActiveWorkspaceIds: ReadonlySet<string>,
+  _minAgeMs: number = 10 * 60 * 1000,
 ): Promise<string[]> {
-  const killed: string[] = [];
-  let engine: Engine;
-  try {
-    engine = await detectEngine();
-  } catch {
-    return killed;
-  }
-  let containers: Array<{ id: string; name: string }>;
-  try {
-    containers = await engine.list({ namePrefix: "desk-sandbox-", all: false });
-  } catch {
-    return killed;
-  }
-  const { killAnyOpencodeServeInContainer, invalidateOpencodeServerCache } = await import(
-    "./opencodeServer.js"
-  );
-  const now = Date.now();
-  for (const c of containers) {
-    if (c.name.startsWith("desk-sandbox-reflect-")) continue;
-    const workspaceId = c.name.slice("desk-sandbox-".length);
-    if (recentlyActiveWorkspaceIds.has(workspaceId)) continue;
-    if (growthInFlight.has(c.name)) continue;
-    // Don't touch a brand-new container whose first message hasn't
-    // bumped any DB row yet — same race window as the hard reap.
-    try {
-      const info = await engine.inspect(c.name);
-      if (!info) continue;
-      if (info.createdAt) {
-        const age = now - new Date(info.createdAt).getTime();
-        if (Number.isFinite(age) && age < minAgeMs) continue;
-      }
-      await killAnyOpencodeServeInContainer(engine, info.id);
-      invalidateOpencodeServerCache(info.id);
-      killed.push(c.name);
-    } catch (err) {
-      log.warn({ container: c.name, err: (err as Error).message }, "soft-reap failed");
-    }
-  }
-  return killed;
+  return [];
 }
 
 /** Stops a sandbox container. Idempotent. */
@@ -1186,52 +940,17 @@ export async function pruneDriftedContainers(drift: SandboxBindDrift[]): Promise
 }
 
 /**
- * Kill `opencode serve` daemons left running in workspace sandboxes by a
- * prior desk-server. Called once at startup, before `recoverOrphanedRuns`
- * requeues the rows that owned those processes.
+ * No-op under the pi runtime — there is no long-lived per-container
+ * daemon to clean up after a desk-server restart. Pi sessions are
+ * file-backed under the workspace bind-mount, so a desk-server restart
+ * naturally finds them on the next turn without any cross-boot reset.
  *
- * Why this matters: when a desk-server dies (tsx-watch reload, hard
- * crash), the in-container opencode daemon survives because nothing
- * inside the container knows the host process is gone. Its open SQLite
- * file (`~/.local/share/opencode/opencode.db`) is exclusive — the next
- * desk-server's first `opencode serve` spawn would fail to open it
- * (`SQLITE_BUSY`) and the chat would error out. Killing the orphaned
- * daemon ensures the new server starts fresh.
- *
- * Per-workspace, best-effort. Engine errors degrade to "didn't kill" —
- * a re-fire will surface the SQLite contention if anything actually
- * leaked through.
+ * Kept as an exported function so api/db boot paths can keep calling it
+ * without conditionals; returns "didn't kill" for every workspace.
  */
 export async function killOpencodeDaemonsForOrphans(
   workspaceIds: ReadonlyArray<string>,
-  engineOverride?: Engine,
+  _engineOverride?: Engine,
 ): Promise<{ workspaceId: string; killed: boolean }[]> {
-  const results: { workspaceId: string; killed: boolean }[] = [];
-  if (workspaceIds.length === 0) return results;
-  let engine: Engine;
-  if (engineOverride) {
-    engine = engineOverride;
-  } else {
-    try {
-      engine = await detectEngine();
-    } catch {
-      return workspaceIds.map((workspaceId) => ({ workspaceId, killed: false }));
-    }
-  }
-  const { stopOpencodeServer } = await import("./opencodeServer.js");
-  const perWorkspace = workspaceIds.map((workspaceId) =>
-    (async () => {
-      const containerName = `desk-sandbox-${workspaceId}`;
-      try {
-        const info = await engine.inspect(containerName);
-        if (!info) return { workspaceId, killed: false };
-        await stopOpencodeServer(engine, info.id);
-        return { workspaceId, killed: true };
-      } catch {
-        return { workspaceId, killed: false };
-      }
-    })(),
-  );
-  for (const r of await Promise.all(perWorkspace)) results.push(r);
-  return results;
+  return workspaceIds.map((workspaceId) => ({ workspaceId, killed: false }));
 }

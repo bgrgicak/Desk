@@ -40,43 +40,30 @@ export function isNonEmpty(v: string | undefined): boolean {
 }
 
 /**
- * Free `opencode/big-pickle` is the unauthenticated default. Every run
- * path falls back to it when the requested provider has no available
- * auth — keeping reflection / chat / summary alive instead of leaving a
- * run in a broken "no auth at all" state. Lives in helpers (not runs.ts)
- * so reflection can use the same resolver without creating a runs ↔
- * reflection import cycle.
+ * Reasons `resolveModelForRun` returned a model other than the requested
+ * one. `null` means "the requested model was used as-is".
  */
-export const FALLBACK_MODEL = "opencode/big-pickle";
-
 export type ModelResolutionReason =
   | null
-  | "codex-oauth"
-  | "codex-fallback-api-key"
-  | "no-auth-fallback";
+  | "codex-oauth"             // codex/* → openai-codex/* via OAuth path (Codex enabled)
+  | "codex-fallback-api-key"; // codex/* → openai/* via API-key fallback (Codex disabled, OPENAI key present)
 
 /**
- * Pick the model that should actually run, and the provider key map to
- * forward into the daemon.
+ * Translate a Desk model id to pi's view of the world.
  *
- *  1. Codex translation: `codex/X` is a Desk-only relabel — opencode-
- *     serve only knows the `openai` provider. With Codex OAuth available
- *     we route through it AND strip `OPENAI_API_KEY` so opencode picks
- *     the OAuth path. When Codex is disabled but `OPENAI_API_KEY` is
- *     present, we still unwrap the prefix and let the API key handle it.
- *  2. Hard fallback: when the requested model's provider has no auth at
- *     all, substitute `FALLBACK_MODEL`. The run keeps going on the free
- *     `opencode/*` model rather than dying with a
- *     `ProviderModelNotFoundError` or silently riding a stale auth blob
- *     the daemon cached from a previous spawn.
- *  3. No change for free models: `opencode/*` always runs as-is.
+ * Desk exposes Codex (ChatGPT-subscription) OpenAI models under a UI
+ * relabel `codex/<name>`; pi's actual provider id for that channel is
+ * `openai-codex`. So a saved agent with `model: "codex/gpt-5.5"` needs
+ * to land at pi as `openai-codex/gpt-5.5` when the OAuth bridge is on,
+ * or as `openai/gpt-5.5` when only an API key is configured.
  *
- * Callers should forward `runtimeModel` to BOTH the agent file (so the
- * daemon's startup cache picks the fallback up) AND the driver's
- * per-message `providerID/modelID`, and forward `providerKeys` into the
- * sandbox env. The daemon ignores per-message overrides for agent-bound
- * sessions, so feeding the resolved model into the agent file is what
- * actually makes the daemon use it.
+ * Other models pass through unchanged. When the requested provider has
+ * no live auth, pi itself surfaces the error to the user — Desk no
+ * longer substitutes a fallback. This matches pi's CLI semantics: pick
+ * a model, get a clear error if its auth is missing.
+ *
+ * Lives in helpers (not runs.ts) so reflection can use the same
+ * resolver without creating a runs ↔ reflection import cycle.
  */
 export function resolveModelForRun(
   model: string,
@@ -88,29 +75,19 @@ export function resolveModelForRun(
   reason: ModelResolutionReason;
 } {
   const hasOpenAiKey = isNonEmpty(providerKeys.OPENAI_API_KEY);
-  const hasAnthropicKey = isNonEmpty(providerKeys.ANTHROPIC_API_KEY);
   const oauthAvailable = isNonEmpty(extraEnv?.OPENCODE_AUTH_CONTENT);
 
   if (model.startsWith("codex/")) {
-    const bare = `openai/${model.slice("codex/".length)}`;
+    const suffix = model.slice("codex/".length);
     if (oauthAvailable) {
-      const { OPENAI_API_KEY: _strip, ...withoutOpenAiApiKey } = providerKeys;
-      return { runtimeModel: bare, providerKeys: withoutOpenAiApiKey, reason: "codex-oauth" };
+      return { runtimeModel: `openai-codex/${suffix}`, providerKeys, reason: "codex-oauth" };
     }
     if (hasOpenAiKey) {
-      return { runtimeModel: bare, providerKeys, reason: "codex-fallback-api-key" };
+      return { runtimeModel: `openai/${suffix}`, providerKeys, reason: "codex-fallback-api-key" };
     }
-    return { runtimeModel: FALLBACK_MODEL, providerKeys, reason: "no-auth-fallback" };
-  }
-
-  if (model.startsWith("openai/")) {
-    if (hasOpenAiKey || oauthAvailable) return { runtimeModel: model, providerKeys, reason: null };
-    return { runtimeModel: FALLBACK_MODEL, providerKeys, reason: "no-auth-fallback" };
-  }
-
-  if (model.startsWith("anthropic/")) {
-    if (hasAnthropicKey) return { runtimeModel: model, providerKeys, reason: null };
-    return { runtimeModel: FALLBACK_MODEL, providerKeys, reason: "no-auth-fallback" };
+    // Neither channel is live. Let pi raise its own "No API key found
+    // for openai-codex" — clearer than substituting a different model.
+    return { runtimeModel: `openai-codex/${suffix}`, providerKeys, reason: null };
   }
 
   return { runtimeModel: model, providerKeys, reason: null };

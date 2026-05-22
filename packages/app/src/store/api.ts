@@ -242,6 +242,7 @@ export const api = createApi({
     "ProvidersMeta",
     "LocalSources",
     "Models",
+    "VaultStatus",
   ],
   endpoints: (build) => ({
     // ── Me ────────────────────────────────────────────────────────────
@@ -283,6 +284,24 @@ export const api = createApi({
       transformResponse: (r: { providers: Record<string, string | null> }) =>
         r.providers,
       invalidatesTags: ["ProviderKeys", "ProvidersMeta", "ConnectorConnections", "Models"],
+    }),
+    getVaultStatus: build.query<{ exists: boolean; locked: boolean }, void>({
+      query: () => "/vault/status",
+      providesTags: ["VaultStatus"],
+    }),
+    setupVault: build.mutation<{ ok: true }, { password: string }>({
+      query: (body) => ({ url: "/vault/setup", method: "POST", body }),
+      // Unlocking the vault may unblock any cached "locked → null" reads,
+      // so refresh everything that depended on vault state.
+      invalidatesTags: ["VaultStatus", "ProviderKeys", "ConnectorConnections", "Models"],
+    }),
+    unlockVault: build.mutation<{ ok: true }, { password: string }>({
+      query: (body) => ({ url: "/vault/unlock", method: "POST", body }),
+      invalidatesTags: ["VaultStatus", "ProviderKeys", "ConnectorConnections", "Models"],
+    }),
+    lockVault: build.mutation<{ ok: true }, void>({
+      query: () => ({ url: "/vault/lock", method: "POST" }),
+      invalidatesTags: ["VaultStatus", "ProviderKeys", "ConnectorConnections", "Models"],
     }),
     getConnectorConnections: build.query<
       ConnectorConnection[],
@@ -1212,6 +1231,10 @@ export const {
   useChangePasswordMutation,
   useGetProviderKeysQuery,
   usePutProviderKeysMutation,
+  useGetVaultStatusQuery,
+  useSetupVaultMutation,
+  useUnlockVaultMutation,
+  useLockVaultMutation,
   useGetConnectorConnectionsQuery,
   useCreateConnectorConnectionMutation,
   usePatchConnectorConnectionMutation,

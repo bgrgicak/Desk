@@ -37,7 +37,9 @@ describe("Desk skills", () => {
         expect(name).toMatch(/^desk-[a-z0-9-]+$/);
         expect(skill).toContain(`name: ${name}\n`);
         expect(skill).toMatch(/description: "?(Use when|Use before)/);
-        expect(skill).toContain("compatibility: opencode");
+        // No opencode-specific compatibility marker — pi uses the
+        // standard Agent Skills frontmatter (name + description).
+        expect(skill).not.toContain("compatibility:");
         expect(skill).toContain("metadata:\n  source: desk");
         expect(skill).toMatch(/^---\n[\s\S]+\n---\n\n\S/);
       }

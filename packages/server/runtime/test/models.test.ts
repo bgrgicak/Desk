@@ -12,63 +12,64 @@ afterEach(() => {
 });
 
 describe("parseModelsOutput", () => {
-  it("parses provider/model lines", () => {
+  it("parses pi's column-table output", () => {
     const out = parseModelsOutput(
-      "opencode/big-pickle\nopenai/gpt-5\n  \nopencode/hy3-preview-free\n",
+      [
+        "provider  model                  context  max-out  thinking  images",
+        "openai    gpt-4                  8.2K     8.2K     no        no    ",
+        "openai    gpt-5                  400K     128K     yes       yes   ",
+        "anthropic claude-haiku-4-5       200K     64K      no        yes   ",
+        "",
+      ].join("\n"),
     );
     expect(out).toEqual([
-      { id: "opencode/big-pickle", provider: "opencode" },
+      { id: "openai/gpt-4", provider: "openai" },
       { id: "openai/gpt-5", provider: "openai" },
-      { id: "opencode/hy3-preview-free", provider: "opencode" },
+      { id: "anthropic/claude-haiku-4-5", provider: "anthropic" },
     ]);
   });
 
-  it("parses verbose model limits", () => {
-    const out = parseModelsOutput(`openai/gpt-5.5
-{
-  "id": "gpt-5.5",
-  "providerID": "openai",
-  "limit": {
-    "context": 400000,
-    "input": 272000,
-    "output": 128000
-  }
-}
-opencode/big-pickle
-{
-  "id": "big-pickle",
-  "providerID": "opencode",
-  "limit": {
-    "context": 200000,
-    "output": 128000
-  }
-}
-`);
-
-    expect(out).toEqual([
-      { id: "openai/gpt-5.5", provider: "openai", contextWindow: 400000, inputLimit: 272000, outputLimit: 128000 },
-      { id: "opencode/big-pickle", provider: "opencode", contextWindow: 200000, outputLimit: 128000 },
-    ]);
+  it("returns empty list when pi prints the no-providers banner", () => {
+    const out = parseModelsOutput(
+      "No models available. Use /login to log into a provider via OAuth or API key. See:\n  /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/docs/providers.md\n",
+    );
+    expect(out).toEqual([]);
   });
 
-  it("ignores blank lines and malformed entries", () => {
-    const out = parseModelsOutput("\nnoslash\n/justmodel\nprovider/\nok/yes");
+  it("ignores rows with malformed provider/model tokens", () => {
+    const out = parseModelsOutput(
+      [
+        "provider  model                  context",
+        "ok        yes                    1K",
+        "bad/prov  whatever               1K",
+        "spaced    name with spaces       1K",
+      ].join("\n"),
+    );
+    // The "spaced" row still parses — the model column is just the first
+    // whitespace-separated token. Pi's real output never embeds spaces in
+    // model ids, so this matches reality.
     expect(out).toEqual([
       { id: "ok/yes", provider: "ok" },
+      { id: "spaced/name", provider: "spaced" },
     ]);
   });
 });
 
 describe("listModels", () => {
-  it("returns free opencode models without a sandbox when the fake driver is active", async () => {
+  it("returns the fake-driver model set without a sandbox when DESK_SANDBOX_DRIVER=fake", async () => {
     process.env.DESK_SANDBOX_DRIVER = "fake";
 
-    await expect(listModels("wks_test", "desk")).resolves.toEqual([
-      { id: "opencode/big-pickle", provider: "opencode", contextWindow: 200_000, outputLimit: 128_000 },
+    // Unfiltered: every fake model surfaces (free `opencode/big-pickle`
+    // + a claude entry so consumers can exercise auth-required paths).
+    const all = await listModels("wks_test", "desk");
+    expect(all.some((m) => m.id === "opencode/big-pickle")).toBe(true);
+    expect(all.some((m) => m.id === "anthropic/claude-haiku-4-5")).toBe(true);
+
+    // Filtered to anthropic — only the claude entry remains.
+    await expect(listModels("wks_test", "desk", { provider: "anthropic" })).resolves.toEqual([
+      { id: "anthropic/claude-haiku-4-5", provider: "anthropic", contextWindow: 200_000, outputLimit: 64_000 },
     ]);
-    await expect(listModels("wks_test", "desk", { provider: "opencode" })).resolves.toEqual([
-      { id: "opencode/big-pickle", provider: "opencode", contextWindow: 200_000, outputLimit: 128_000 },
-    ]);
+    // openai isn't seeded in the fake driver.
     await expect(listModels("wks_test", "desk", { provider: "openai" })).resolves.toEqual([]);
   });
 });

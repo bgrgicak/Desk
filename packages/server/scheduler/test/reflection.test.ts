@@ -396,14 +396,13 @@ describe("runWorkspaceReflection", () => {
     expect(final).toMatch(/iteration=/);
   });
 
-  it("translates codex/* agent models so the daemon agent file lands on openai/*", async () => {
+  it("translates codex/* agent models so the daemon agent file lands on openai-codex/*", async () => {
     // The agent file the reflection sandbox writes ends up with the
-    // `model:` line passed via `input.agent.model`. opencode-serve
-    // doesn't know the `codex` provider — that's a Desk-side UI relabel.
-    // Without translation here the daemon resolves the agent against
-    // nothing and 500s every reflection. With OAuth content present, the
-    // OPENAI_API_KEY must also be stripped so the daemon doesn't pick a
-    // stale cloud key over the OAuth blob.
+    // `model:` line passed via `input.agent.model`. Pi exposes
+    // OAuth-authed OpenAI under the provider id `openai-codex`; `codex`
+    // is a Desk-side UI relabel. Without translation here the daemon
+    // resolves the agent against an unknown provider and 500s every
+    // reflection.
     let captured: WorkspaceReflectionInput | null = null;
     const reflectWorkspace: ReflectFn<WorkspaceReflectionInput> = async (input) => {
       captured = input;
@@ -419,36 +418,12 @@ describe("runWorkspaceReflection", () => {
       userId,
       userName: "reflector",
       agent: { id: agentId, name: "Reflector", model: "codex/gpt-5.5" },
-      providerKeys: { OPENAI_API_KEY: "sk-stale" },
+      providerKeys: { OPENAI_API_KEY: "sk-key" },
       extraEnv: { OPENCODE_AUTH_CONTENT: JSON.stringify({ openai: { type: "oauth" } }) },
       reflectWorkspace,
     });
     expect(captured).not.toBeNull();
-    expect(captured!.agent.model).toBe("openai/gpt-5.5");
-    expect(captured!.providerKeys).not.toHaveProperty("OPENAI_API_KEY");
-  });
-
-  it("falls back to the free model when the requested provider has no auth", async () => {
-    let captured: WorkspaceReflectionInput | null = null;
-    const reflectWorkspace: ReflectFn<WorkspaceReflectionInput> = async (input) => {
-      captured = input;
-      return { journal: "# noop\n", memoryEdits: [] };
-    };
-    await runWorkspaceReflection({
-      pool,
-      home,
-      date: REFLECTION_DATE,
-      workspaceId: workspaceAId,
-      workspaceSlug: workspaceASlug,
-      workspaceName: "WS A",
-      userId,
-      userName: "reflector",
-      agent: { id: agentId, name: "Reflector", model: "anthropic/claude-haiku" },
-      providerKeys: {},
-      reflectWorkspace,
-    });
-    expect(captured).not.toBeNull();
-    expect(captured!.agent.model).toBe("opencode/big-pickle");
+    expect(captured!.agent.model).toBe("openai-codex/gpt-5.5");
   });
 
   it("rejects malformed memory-edit paths (path traversal / non-md)", async () => {
