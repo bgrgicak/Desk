@@ -72,8 +72,9 @@ export interface RunOptions {
    */
   model?: string;
   /**
-   * Ordered fallback model ids. The driver passes the primary plus these
-   * fallbacks to pi as its model scope; pi owns any model switching.
+   * Ordered fallback model ids. The driver tries the primary and these
+   * fallbacks in order. Pi also receives the remaining scope for model
+   * cycling/selection, but non-interactive error fallback is owned here.
    */
   modelFallbacks?: string[];
   /**
@@ -324,46 +325,71 @@ function createRealDriver(): SandboxDriver {
         }
       };
 
-      const modelScope = modelAttemptSpecs(opts.model, opts.modelFallbacks)
-        .map(piModelReference);
-      const primaryModel = modelScope[0];
-      const parsed = primaryModel ? parseModelSpec(primaryModel) : { providerID: undefined, modelID: undefined };
-      const { providerID, modelID } = parsed;
-
       try {
-        const piHandle = runPi(engine, {
-          containerId: handle.containerId,
-          user,
-          cwd: SANDBOX_HOME,
-          sessionId,
-          hostSessionDir: opts.home
-            ? path.join(opts.home, opts.workspaceSlug, ".pi", "agent", "sessions", sessionId)
-            : undefined,
-          provider: providerID,
-          model: modelID,
-          models: modelScope.length > 0 ? modelScope : undefined,
-          env: piEnv,
-          prompt: buildPiPrompt({ prompt: opts.prompt, attachments: opts.attachments }),
-          onEvent: (line) => emitLog("event", line),
-          onStderr: (line) => emitLog("stderr", line),
-          translate: {
-            sessionID: sessionId,
-            assistantMessageId: `msg_${opts.runId}`,
-            ...(providerID && modelID
-              ? { model: { providerID, modelID, ...(opts.agentFileId ? { agent: opts.agentFileId } : {}) } }
-              : {}),
-          },
-        });
-        activeRuns.set(opts.runId, { containerId: handle.containerId, sessionId, handle: piHandle });
-        const result = await piHandle.done;
-        activeRuns.delete(opts.runId);
-        const exitCode = result.aborted ? 130 : result.exitCode;
+        const modelScope = modelAttemptSpecs(opts.model, opts.modelFallbacks)
+          .map(piModelReference);
+        const modelAttempts: Array<string | undefined> = modelScope.length > 0 ? modelScope : [undefined];
+        const prompt = buildPiPrompt({ prompt: opts.prompt, attachments: opts.attachments });
+        const hostSessionDir = opts.home
+          ? path.join(opts.home, opts.workspaceSlug, ".pi", "agent", "sessions", sessionId)
+          : undefined;
+
+        let lastResult: ExecResult | undefined;
+        for (let attemptIndex = 0; attemptIndex < modelAttempts.length; attemptIndex++) {
+          const attemptModel = modelAttempts[attemptIndex];
+          const parsed = attemptModel ? parseModelSpec(attemptModel) : undefined;
+          const providerID = parsed?.providerID;
+          const modelID = parsed?.modelID;
+          const remainingScope = modelScope.slice(attemptIndex);
+
+          const piHandle = runPi(engine, {
+            containerId: handle.containerId,
+            user,
+            cwd: SANDBOX_HOME,
+            sessionId,
+            hostSessionDir,
+            provider: providerID,
+            model: modelID,
+            models: remainingScope.length > 0 ? remainingScope : undefined,
+            env: piEnv,
+            prompt,
+            onEvent: (line) => emitLog("event", line),
+            onStderr: (line) => emitLog("stderr", line),
+            translate: {
+              sessionID: sessionId,
+              assistantMessageId: `msg_${opts.runId}`,
+              ...(providerID && modelID
+                ? { model: { providerID, modelID, ...(opts.agentFileId ? { agent: opts.agentFileId } : {}) } }
+                : {}),
+            },
+          });
+          activeRuns.set(opts.runId, { containerId: handle.containerId, sessionId, handle: piHandle });
+          const result = await piHandle.done;
+          activeRuns.delete(opts.runId);
+          const exitCode = result.aborted ? 130 : result.exitCode;
+          const handledModel = result.model ?? attemptModel;
+          lastResult = {
+            exitCode,
+            opencodeSessionId: sessionId,
+            model: handledModel,
+          };
+
+          await Promise.all(pendingLogs);
+
+          if (exitCode === 0 || exitCode === 130 || attemptIndex === modelAttempts.length - 1) {
+            return lastResult;
+          }
+
+          const nextModel = modelAttempts[attemptIndex + 1];
+          if (!nextModel) return lastResult;
+          emitLog(
+            "stderr",
+            `Model ${handledModel ?? attemptModel ?? "default"} failed with exit ${exitCode}; trying fallback ${nextModel}.`,
+          );
+        }
+
         await Promise.all(pendingLogs);
-        return {
-          exitCode,
-          opencodeSessionId: sessionId,
-          model: result.model ?? primaryModel,
-        };
+        return lastResult ?? { exitCode: 1, opencodeSessionId: sessionId };
       } finally {
         activeRuns.delete(opts.runId);
         if (opts.sandboxToken) {

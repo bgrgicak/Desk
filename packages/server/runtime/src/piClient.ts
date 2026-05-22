@@ -64,8 +64,9 @@ export interface PiRunOptions {
   /** Model id (with or without provider prefix). When omitted pi picks its default. */
   model?: string;
   /**
-   * Ordered model scope passed to pi's `--models` flag. Pi owns switching
-   * within this list; Desk only supplies the active global ordering.
+   * Ordered model scope passed to pi's `--models` flag for its model
+   * selector/cycling behavior. The runtime driver owns non-interactive
+   * fallback retries between invocations.
    */
   models?: string[];
   /**

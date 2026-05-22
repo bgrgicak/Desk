@@ -484,8 +484,12 @@ function setAppCookie(
  *
  * Tradeoffs:
  * - **`Content-Security-Policy`**: `'self'` for scripts + styles +
-  *   images + fonts + connect lets the app load its own bundles and
-  *   embed `@agent-desk/ui` styles. Privileged Desk calls go through the
+  *   fonts + connect lets the app load its own bundles and
+  *   embed `@agent-desk/ui` styles. `img-src` additionally allows
+  *   `https:` so result-set fragments (chat-cards thumbnails, etc.) can
+  *   render previews straight from third-party CDNs — images don't
+  *   execute and can't read data back, so the leak surface is just the
+  *   user's IP to the image host. Privileged Desk calls go through the
   *   parent postMessage bridge, not direct iframe fetches. Inline `<script>`
  *   from the bridge is gated on its sha256 hash so the CSP doesn't
  *   need `'unsafe-inline'`. Inline styles from Tailwind v4 / shadcn
@@ -520,7 +524,16 @@ function setSecurityHeaders(res: ServerResponse, nonce: string): void {
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
+    // `img-src` includes `https:` because the built-in chat-cards app
+    // (and similar result-set fragments) renders thumbnails for products,
+    // articles, papers, etc. straight from the source's CDN. Those URLs
+    // are always cross-origin. Images don't execute, the iframe is
+    // sandboxed to an opaque origin, and the parent doesn't see the
+    // requests — the worst-case leak is the user's IP to the image host,
+    // which any link the agent surfaces already implies on click. We do
+    // NOT widen `connect-src` for the same reason: fetches CAN read data
+    // back, images cannot.
+    "img-src 'self' data: blob: https:",
     "font-src 'self' data:",
     "connect-src 'self'",
     "frame-ancestors 'self'",

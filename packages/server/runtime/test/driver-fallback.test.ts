@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   createCalls: 0,
   containerSeq: 0,
   exitCodes: [] as number[],
+  aborted: [] as boolean[],
   resultModels: [] as Array<string | undefined>,
   runCalls: [] as Array<{
     containerId: string;
@@ -49,11 +50,12 @@ vi.mock("../src/piClient.js", async (importOriginal) => {
         models: opts.models,
       });
       const exitCode = state.exitCodes.shift() ?? 0;
+      const aborted = state.aborted.shift() ?? false;
       const model = state.resultModels.shift();
       if (exitCode !== 0) void opts.onStderr(`simulated exit ${exitCode}`);
       return {
         containerId: opts.containerId,
-        done: Promise.resolve({ exitCode, aborted: false, ...(model ? { model } : {}) }),
+        done: Promise.resolve({ exitCode, aborted, ...(model ? { model } : {}) }),
         cancel: async () => {},
       };
     }),
@@ -66,6 +68,7 @@ beforeEach(() => {
   state.createCalls = 0;
   state.containerSeq = 0;
   state.exitCodes = [];
+  state.aborted = [];
   state.resultModels = [];
   state.runCalls = [];
   delete process.env.DESK_SANDBOX_DRIVER;
@@ -113,8 +116,49 @@ describe("driver PI model scope", () => {
     ]);
   });
 
-  it("does not re-exec PI when the run fails because PI owns model swaps", async () => {
+  it("re-execs PI with the next fallback when a model exits nonzero", async () => {
+    state.exitCodes = [1, 0];
+    state.resultModels = [undefined, "openai/gpt-5.4"];
+    const logs: string[] = [];
+    const { createDriver } = await import("../src/driver.js");
+
+    const result = await createDriver().execRun("wks_fallback", {
+      runId: "run_fallback",
+      workspaceSlug: "fallback-workspace",
+      prompt: "hi",
+      model: "anthropic/claude-sonnet-4-6",
+      modelFallbacks: ["openai/gpt-5.4"],
+      onLog: (evt) => logs.push(evt.payload),
+    });
+
+    expect(result).toMatchObject({
+      exitCode: 0,
+      model: "openai/gpt-5.4",
+    });
+    expect(state.createCalls).toBe(1);
+    expect(state.runCalls).toEqual([
+      {
+        containerId: "ctr_1",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        models: [
+          "anthropic/claude-sonnet-4-6",
+          "openai/gpt-5.4",
+        ],
+      },
+      {
+        containerId: "ctr_1",
+        provider: "openai",
+        model: "gpt-5.4",
+        models: ["openai/gpt-5.4"],
+      },
+    ]);
+    expect(logs).toContain("Model anthropic/claude-sonnet-4-6 failed with exit 1; trying fallback openai/gpt-5.4.");
+  });
+
+  it("does not try fallbacks after an aborted run", async () => {
     state.exitCodes = [1];
+    state.aborted = [true];
     const { createDriver } = await import("../src/driver.js");
 
     const result = await createDriver().execRun("wks_fallback", {
@@ -127,14 +171,9 @@ describe("driver PI model scope", () => {
     });
 
     expect(result).toMatchObject({
-      exitCode: 1,
+      exitCode: 130,
       model: "anthropic/claude-sonnet-4-6",
     });
-    expect(state.createCalls).toBe(1);
     expect(state.runCalls).toHaveLength(1);
-    expect(state.runCalls[0]?.models).toEqual([
-      "anthropic/claude-sonnet-4-6",
-      "openai/gpt-5.4",
-    ]);
   });
 });

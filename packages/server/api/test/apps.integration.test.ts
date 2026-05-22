@@ -496,6 +496,12 @@ describe("static-app route + capability bridge", () => {
     const csp = String(idx.headers["content-security-policy"] ?? "");
     expect(csp).toContain("default-src 'self'");
     expect(csp).toMatch(/script-src 'self' 'nonce-[A-Za-z0-9+/=]+' 'strict-dynamic'/);
+    // `https:` belongs to img-src so chat-cards thumbnails (third-party
+    // product/article images) actually render. It must NOT appear in any
+    // other directive — connect/script/etc. stay locked to 'self'.
+    expect(csp).toContain("img-src 'self' data: blob: https:");
+    expect(csp).toContain("connect-src 'self'");
+    expect(csp).not.toMatch(/connect-src[^;]*https:/);
     expect(csp).toContain("frame-ancestors 'self'");
     expect(csp).toContain("navigate-to 'self'");
     expect(idx.headers["x-frame-options"]).toBe("SAMEORIGIN");
