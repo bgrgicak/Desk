@@ -55,9 +55,9 @@ async function main() {
     path.join(OUT, "package.json"),
     JSON.stringify(
       {
-        name: "roomy-server-bundle",
-        version: "0.0.0",
-        private: true,
+        name: "@roomy-ai/server-bundle",
+        version: "0.1.0-alpha.5",
+        publishConfig: { access: "public", tag: "alpha" },
         dependencies: collectedDeps,
       },
       null,

@@ -48,6 +48,14 @@ PUBLIC_WORKSPACES=(
   "packages/server/scheduler"
   "packages/server/shared"
   "packages/server/storage"
+  "packages/apps"
+  "packages/app-scaffold"
+  "packages/desktop"
+  "packages/server/setup"
+  "packages/server/sandbox-cli"
+  "packages/apps/chat-cards.app"
+  "packages/apps/chat-forms.app"
+  "packages/desktop/build-server"
 )
 
 # Private but version-tracked alongside the public set so the GitHub

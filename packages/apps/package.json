@@ -1,11 +1,14 @@
 {
   "name": "@roomy-ai/apps",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0-alpha.5",
   "type": "module",
   "description": "Roomy-shipped built-in apps. Synced to ~/Roomy/.apps/ on server start and mounted into every sandbox at /opt/roomy-apps/.",
   "scripts": {
     "build": "node scripts/build-apps.mjs",
     "typecheck": "node scripts/build-apps.mjs --typecheck"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
   }
 }

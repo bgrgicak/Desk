@@ -1,6 +1,9 @@
 {
   "name": "@roomy-ai/setup",
-  "version": "0.0.1",
-  "private": true,
-  "type": "module"
+  "version": "0.1.0-alpha.5",
+  "type": "module",
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  }
 }
