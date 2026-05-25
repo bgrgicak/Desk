@@ -3,36 +3,23 @@ import {
   BrowserWindow,
   ipcMain,
   Menu,
-  Tray,
 } from "electron/main";
-import { clipboard, nativeImage, shell } from "electron/common";
-import updater from "electron-updater";
-const { autoUpdater } = updater;
+import { shell } from "electron/common";
+import { createRequire } from "module";
 import * as path from "path";
 import * as fs from "fs";
-import * as os from "os";
+const require = createRequire(import.meta.url);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const { autoUpdater } = require("electron-updater") as { autoUpdater: import("electron-updater").AppUpdater };
 import { ServerManager } from "./server-manager.js";
 import { loadPrefs, savePrefs } from "./prefs.js";
 
 app.setName("Roomy");
 
 let mainWindow: BrowserWindow | null = null;
-let tray: Tray | null = null;
 let serverManager: ServerManager | null = null;
 let preferencesWindow: BrowserWindow | null = null;
 let isQuiting = false;
-
-function getLanUrl(port: number): string | null {
-  const interfaces = os.networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name] ?? []) {
-      if (iface.family === "IPv4" && !iface.internal) {
-        return `http://${iface.address}:${port}`;
-      }
-    }
-  }
-  return null;
-}
 
 function resolveIconPath(name: string): string {
   const base = app.isPackaged
@@ -41,57 +28,78 @@ function resolveIconPath(name: string): string {
   return path.join(base, name);
 }
 
-function createTray(serverUrl: string, port: number): void {
-  const iconFile = process.platform === "darwin"
-    ? "tray.png"
-    : process.platform === "win32"
-      ? "icon.ico"
-      : "icon.png";
-
-  const iconPath = resolveIconPath(iconFile);
-  const icon = fs.existsSync(iconPath)
-    ? nativeImage.createFromPath(iconPath)
-    : nativeImage.createEmpty();
-
-  tray = new Tray(icon);
-  tray.setToolTip("Roomy");
-
-  const lanUrl = getLanUrl(port);
-
-  const menu = Menu.buildFromTemplate([
+function createAppMenu(serverUrl: string): void {
+  const template = [
+    ...(process.platform === "darwin" ? [{
+      label: app.name,
+      submenu: [
+        { role: "about" as const },
+        { type: "separator" as const },
+        {
+          label: "Settings…",
+          accelerator: "CmdOrCtrl+,",
+          click: () => openPreferences(),
+        },
+        { type: "separator" as const },
+        { role: "services" as const },
+        { type: "separator" as const },
+        { role: "hide" as const },
+        { role: "hideOthers" as const },
+        { role: "unhide" as const },
+        { type: "separator" as const },
+        { role: "quit" as const },
+      ],
+    }] : [{
+      label: "File",
+      submenu: [
+        {
+          label: "Settings…",
+          accelerator: "CmdOrCtrl+,",
+          click: () => openPreferences(),
+        },
+        { type: "separator" as const },
+        { role: "quit" as const },
+      ],
+    }]),
     {
-      label: "Open Roomy",
-      click: () => {
-        if (mainWindow) {
-          mainWindow.show();
-          mainWindow.focus();
-        } else {
-          createMainWindow(serverUrl);
-        }
-      },
+      label: "Edit",
+      submenu: [
+        { role: "undo" as const },
+        { role: "redo" as const },
+        { type: "separator" as const },
+        { role: "cut" as const },
+        { role: "copy" as const },
+        { role: "paste" as const },
+        { role: "selectAll" as const },
+      ],
     },
-    { label: "Preferences…", click: () => openPreferences() },
-    { type: "separator" },
-    { label: "Open in Browser", click: () => shell.openExternal(serverUrl) },
-    ...(lanUrl ? [
-      { type: "separator" as const },
-      { label: `Network URL: ${lanUrl}`, enabled: false },
-      {
-        label: "Copy Network URL",
-        click: () => clipboard.writeText(lanUrl),
-      },
-    ] : []),
-    { type: "separator" },
     {
-      label: "Quit Roomy",
-      click: () => {
-        isQuiting = true;
-        app.quit();
-      },
+      label: "View",
+      submenu: [
+        { label: "Open in Browser", click: () => shell.openExternal(serverUrl) },
+        { type: "separator" as const },
+        { role: "reload" as const },
+        { role: "toggleDevTools" as const },
+        { type: "separator" as const },
+        { role: "togglefullscreen" as const },
+      ],
     },
-  ]);
-  tray.setContextMenu(menu);
-  tray.on("double-click", () => mainWindow?.show());
+    {
+      label: "Window",
+      submenu: [
+        { role: "minimize" as const },
+        { role: "zoom" as const },
+        ...(process.platform === "darwin" ? [
+          { type: "separator" as const },
+          { role: "front" as const },
+        ] : [
+          { role: "close" as const },
+        ]),
+      ],
+    },
+  ];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 function createMainWindow(serverUrl: string): void {
@@ -268,12 +276,8 @@ async function setupAutoUpdater(): Promise<void> {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
-  autoUpdater.on("update-available", () => {
-    tray?.setToolTip("Roomy – update downloading…");
-  });
-
   autoUpdater.on("update-downloaded", () => {
-    tray?.setToolTip("Roomy – restart to update");
+    mainWindow?.webContents.send("update-downloaded");
   });
 
   try {
@@ -297,7 +301,7 @@ app.on("before-quit", () => {
 });
 
 app.on("window-all-closed", () => {
-  // Keep alive in tray on all platforms — tray Quit is the exit path.
+  if (process.platform !== "darwin") app.quit();
 });
 
 app.on("activate", () => {
@@ -359,8 +363,7 @@ async function main(): Promise<void> {
     }
   }
 
-  const port = serverManager?.port ?? 35138;
-  createTray(serverUrl, port);
+  createAppMenu(serverUrl);
   createMainWindow(serverUrl);
 
   checkDocker().then((ok) => {
