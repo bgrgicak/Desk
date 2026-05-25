@@ -56,15 +56,15 @@ function hashStaticShellAssets(): string {
   return hash.digest('hex').slice(0, 12)
 }
 
-// In dev, everything flows through the Vite port (5173 by default, or
+// In dev, everything flows through the Vite port (5174 by default, or
 // whatever ROOMY_APP_PORT is set to — e2e uses that to pick an isolated
 // port) so VS Code Remote only needs one tunnel. Calls the app makes
 // under /api/* get stripped of that prefix and proxied to the
 // roomy-server. WebSocket calls to /ws are proxied verbatim with WS
 // upgrade support.
-const API_TARGET = process.env.ROOMY_API_URL ?? 'http://127.0.0.1:35138'
+const API_TARGET = process.env.ROOMY_API_URL ?? 'http://127.0.0.1:35139'
 const WS_TARGET = API_TARGET.replace(/^http/, 'ws')
-const APP_PORT = Number(process.env.ROOMY_APP_PORT ?? 5173)
+const APP_PORT = Number(process.env.ROOMY_APP_PORT ?? 5174)
 
 // Hosts the dev/preview servers will accept in the Host header. Comma-
 // separated list via ROOMY_ALLOWED_HOSTS, e.g. "roomy.test,roomy.local".

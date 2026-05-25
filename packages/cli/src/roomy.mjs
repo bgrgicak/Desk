@@ -12,7 +12,7 @@
  *
  *   1. Monorepo dev (default when run from the workspace checkout): spawns
  *      `tsx watch` against packages/server/api/src/main.ts and a separate
- *      Vite dev server. The SPA lives on :5173 and proxies /api/* to
+ *      Vite dev server. The SPA lives on :5174 and proxies /api/* to
  *      roomy-server. This is what `npm run dev` orchestrates.
  *
  *   2. Published install (npx @roomy-ai/cli or `npm i -g`): spawns

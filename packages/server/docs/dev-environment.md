@@ -59,9 +59,9 @@ That:
 1. Ensures `~/Roomy/` exists.
 2. Builds missing built-in app `dist/` directories, including any required
    workspace package outputs such as `@roomy-ai/ui/dist`.
-3. Starts `roomy-server` (tsx watch) on http://127.0.0.1:35138/.
-4. Starts the Vite dev server on http://127.0.0.1:5173/.
-5. Wires Vite's `/api/*` proxy to `:35138`.
+3. Starts `roomy-server` (tsx watch) on http://127.0.0.1:35139/.
+4. Starts the Vite dev server on http://127.0.0.1:5174/.
+5. Wires Vite's `/api/*` proxy to `:35139`.
 
 One Ctrl+C kills both.
 

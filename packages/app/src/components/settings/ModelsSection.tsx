@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type DragEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { motion } from 'framer-motion'
 import { toast } from 'sonner'
 import {
@@ -356,11 +356,6 @@ function modelsForProvider(modelIndex: Map<string, ModelRef[]>, provider: string
   return modelIndex.get(provider) ?? []
 }
 
-function defaultModelForProvider(modelIndex: Map<string, ModelRef[]>, provider: string): string {
-  return modelsForProvider(modelIndex, provider)[0]?.id
-    ?? DEFAULT_MODEL_BY_PROVIDER[provider]
-    ?? (provider ? `${provider}/` : '')
-}
 
 function providerOptionsWithCurrent(provider: string): ModelProviderOption[] {
   if (!provider || modelProviderOption(provider)) return MODEL_PROVIDER_OPTIONS
@@ -578,7 +573,7 @@ function ModelDropdown({
     ? models.filter(m => (m.label ?? m.id).toLowerCase().includes(q) || m.id.toLowerCase().includes(q))
     : models
   const selectedModel = models.find(m => m.id === selected)
-  const selectedLabel = loading ? undefined : (selectedModel?.label ?? selected)
+  const selectedLabel = loading ? undefined : (selectedModel ? (selectedModel.label ?? selected) : undefined)
   return (
     <div className="rounded-md border overflow-hidden">
       <button
@@ -589,7 +584,7 @@ function ModelDropdown({
         aria-expanded={open}
       >
         <span className={cn('truncate', (!selectedLabel || loading) && 'text-muted-foreground')}>
-          {loading ? 'Loading models…' : (selectedLabel || placeholder || 'Select a model')}
+          {loading ? 'Loading models…' : (selectedLabel || placeholder || 'Loading models…')}
         </span>
         <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
       </button>
@@ -604,7 +599,7 @@ function ModelDropdown({
               className="h-9 rounded-none border-0 border-b pl-8 text-sm focus-visible:ring-0 focus-visible:ring-offset-0"
             />
           </div>
-          <div className="max-h-56 overflow-y-auto overscroll-contain">
+          <div>
             {filtered.length === 0 ? (
               <p className="px-3 py-3 text-center text-xs text-muted-foreground">No models found.</p>
             ) : (
@@ -656,12 +651,13 @@ function ModelDetail({
   const initialProvider = existing
     ? modelProviderFromModelId(existing.model)
     : (flatModels[0]?.provider ?? MODEL_PROVIDER_OPTIONS[0].provider)
-  const initialModel = existing?.model ?? defaultModelForProvider(modelIndex, initialProvider)
+  const initialModel = existing?.model ?? ''
 
   const [name, setName] = useState(existing?.name ?? (agents.length === 0 ? 'Default' : ''))
   const [model, setModel] = useState(initialModel)
   const [provider, setProvider] = useState(initialProvider)
   const [credentialSecret, setCredentialSecret] = useState('')
+  const userSetModel = useRef(false)
   // The picker is inline (not a popover) because the form is rendered
   // inside small constrained surfaces (signup card, account modal); a
   // floating popover got clipped by their overflow containers.
@@ -689,15 +685,14 @@ function ModelDetail({
       seen.add(m.id)
       merged.push(m)
     }
-    // Make sure the currently selected model is always selectable once the
-    // catalog has loaded (e.g. brand-new provider key, or the default
-    // placeholder model for a provider with no live listing). Skip while
-    // loading so the dropdown shows nothing until real data arrives.
-    if (!modelsLoading && model && !seen.has(model)) {
+    // For existing agents, always keep their current model selectable even if
+    // the catalog doesn't include it. For new agents, don't inject a hardcoded
+    // placeholder — wait for the real catalog to arrive.
+    if (existing && model && !seen.has(model)) {
       merged.unshift({ provider, id: model, label: model })
     }
     return merged
-  }, [modelIndex, modelsLoading, previewByProvider, provider, model])
+  }, [modelIndex, previewByProvider, provider, model, existing])
   const connectionEnvKey = modelProviderConnectionEnvKey(provider)
   const connectionKind = modelProviderConnectionKind(provider)
   const connectionDefinition = connectionKind ? managedConnectionDefinitionForKind(connectionKind) : undefined
@@ -726,8 +721,9 @@ function ModelDetail({
     && !localSourceUnavailable
 
   const selectProvider = (next: string) => {
+    userSetModel.current = false
     setProvider(next)
-    setModel(defaultModelForProvider(modelIndex, next))
+    setModel('')
     setCredentialSecret('')
   }
 
@@ -750,6 +746,27 @@ function ModelDetail({
       // empty and let the user proceed with the placeholder default.
     }
   }
+
+  // Auto-select the first available model for new agents once catalog or
+  // preview results arrive. Never overrides a user-made choice.
+  useEffect(() => {
+    if (existing || userSetModel.current) return
+    const available = [
+      ...modelsForProvider(modelIndex, provider),
+      ...(previewByProvider[provider] ?? []),
+    ]
+    if (available.length > 0 && !model) {
+      setModel(available[0].id)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelIndex, previewByProvider, provider])
+
+  useEffect(() => {
+    if (!connectionEnvKey) return
+    const timer = setTimeout(() => { void runPreview(provider, credentialSecret) }, 600)
+    return () => clearTimeout(timer)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [credentialSecret, provider, connectionEnvKey])
 
   const handleSave = () => {
     if (!canSave) return
@@ -836,13 +853,13 @@ function ModelDetail({
             <ModelDropdown
               models={providerModels}
               selected={model}
-              placeholder={providerOption?.placeholder ?? `${provider}/model-name`}
+              placeholder="Select a model"
               open={modelPickerOpen}
               onOpenChange={setModelPickerOpen}
               query={modelQuery}
               onQueryChange={setModelQuery}
-              onSelect={(id) => setModel(id)}
-              loading={modelsLoading}
+              onSelect={(id) => { userSetModel.current = true; setModel(id) }}
+              loading={modelsLoading || previewingModels}
             />
           </Field>
         )}
