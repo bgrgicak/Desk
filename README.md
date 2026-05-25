@@ -158,7 +158,7 @@ Maintainers only. Releases are cut with a single interactive script from a Linux
 
 ```sh
 git checkout trunk && git pull
-./scripts/publish-release.sh
+npm run release
 ```
 
 The script walks you through it interactively:

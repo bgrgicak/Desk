@@ -6,7 +6,7 @@
 # Flow:
 #   1. Pre-flight checks (Node 23, clean tree, on trunk, gh + npm + docker logged in).
 #   2. Pick a new version (next alpha, next minor+alpha.0, or custom).
-#   3. Bump every PUBLIC workspace + @roomy-ai/desktop's package.json to that version.
+#   3. Bump every PUBLIC workspace's package.json to that version.
 #   4. Install + build + npm pack smoke test.
 #   5. Final confirm — last chance to bail.
 #   6. git commit "chore(release): vX".
@@ -57,10 +57,6 @@ PUBLIC_WORKSPACES=(
   "packages/apps/chat-forms.app"
   "packages/desktop/build-server"
 )
-
-# Private but version-tracked alongside the public set so the GitHub
-# Release created by electron-builder lines up with the npm version.
-DESKTOP_PKG_DIR="packages/desktop"
 
 # ---------- helpers ----------
 
@@ -204,14 +200,25 @@ fi
 command -v docker >/dev/null 2>&1 || die "docker is not installed."
 docker info >/dev/null 2>&1 || die "Docker daemon not reachable. Start docker first."
 say "Checking Docker Hub authentication..."
-# `docker info` lists the active registry username when logged in.
+# docker info shows Username when credentials are stored in config.json.
+# On macOS Docker Desktop, creds go into the OS keychain, so docker info
+# never shows a Username — fall back to the credential helper.
+_docker_user_from_helper() {
+  command -v docker-credential-osxkeychain >/dev/null 2>&1 || return 0
+  printf 'https://index.docker.io/v1/\n' \
+    | docker-credential-osxkeychain get 2>/dev/null \
+    | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{process.stdout.write(JSON.parse(d).Username||'')}catch(e){}})" 2>/dev/null \
+    || true
+}
 docker_user="$(docker info 2>/dev/null | awk -F': ' '/^[[:space:]]*Username:/ {print $2; exit}')"
+[ -n "$docker_user" ] || docker_user="$(_docker_user_from_helper)"
 if [ -z "$docker_user" ]; then
   warn "Not logged in to Docker Hub."
   echo "Running \`docker login\` — enter your Docker Hub credentials..."
-  docker login
-  docker_user="$(docker info 2>/dev/null | awk -F': ' '/^[[:space:]]*Username:/ {print $2; exit}')"
-  [ -n "$docker_user" ] || die "docker login failed."
+  docker login || die "docker login failed."
+  docker_user="$(_docker_user_from_helper)"
+  # If the helper still can't retrieve it the login still succeeded (exit 0 above).
+  [ -n "$docker_user" ] || docker_user="authenticated"
 fi
 ok "Docker logged in as: $docker_user"
 
@@ -225,7 +232,7 @@ DOCKER_REPO="${ROOMY_DOCKER_REPO:-$(ask "Docker Hub repository (namespace/repo)"
 if [ "$DOCKER_REPO" != "bgrgicak/roomy-ai" ]; then
   warn "Repo $DOCKER_REPO doesn't match the hardcoded default in"
   warn "packages/cli/src/roomy.mjs (ROOMY_SANDBOX_IMAGE=bgrgicak/roomy-ai:alpha)."
-  warn "Update that hardcode too, or `npx @roomy-ai/cli` users will pull the wrong image."
+  warn 'Update that hardcode too, or `npx @roomy-ai/cli` users will pull the wrong image.'
   confirm "Continue?" || die "Aborted."
 fi
 ok "Will push image as: ${c_bold}${DOCKER_REPO}${c_reset}"
@@ -282,7 +289,7 @@ TAG="v$NEW_VERSION"
 if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
   die "Tag $TAG already exists locally."
 fi
-if git ls-remote --tags origin "refs/tags/$TAG" 2>/dev/null | grep -q "$TAG"; then
+if git ls-remote --tags origin "refs/tags/$TAG" 2>/dev/null | grep -qF "$TAG"; then
   die "Tag $TAG already exists on origin."
 fi
 
@@ -291,8 +298,8 @@ hr
 
 # ---------- step 2: bump versions ----------
 
-say "Bumping versions + pinning inter-package deps in ${#PUBLIC_WORKSPACES[@]} public workspaces + desktop..."
-for ws in "${PUBLIC_WORKSPACES[@]}" "$DESKTOP_PKG_DIR"; do
+say "Bumping versions + pinning inter-package deps in ${#PUBLIC_WORKSPACES[@]} public workspaces..."
+for ws in "${PUBLIC_WORKSPACES[@]}"; do
   pkg="$ws/package.json"
   [ -f "$pkg" ] || die "Missing $pkg"
   pkg_set_version "$pkg" "$NEW_VERSION"
@@ -300,6 +307,7 @@ for ws in "${PUBLIC_WORKSPACES[@]}" "$DESKTOP_PKG_DIR"; do
   printf "  %s → %s\n" "$(pkg_get "$pkg" name)" "$NEW_VERSION"
 done
 ok "Versions bumped + @roomy-ai/* deps pinned to $NEW_VERSION."
+
 hr
 
 # ---------- step 3: build + smoke test ----------
@@ -353,7 +361,11 @@ hr
 # ---------- step 5: commit ----------
 
 say "Committing version bump..."
-git add packages/*/package.json packages/server/*/package.json package-lock.json
+_bump_add_args=()
+for ws in "${PUBLIC_WORKSPACES[@]}"; do
+  _bump_add_args+=("$ws/package.json")
+done
+git add "${_bump_add_args[@]}" package-lock.json
 git commit -m "chore(release): $TAG"
 ok "Committed."
 
@@ -429,9 +441,9 @@ echo "  • Pushed Docker image:"
 echo "      https://hub.docker.com/r/${DOCKER_REPO}/tags"
 echo "      ${IMAGE_VERSION_TAG}"
 echo "      ${IMAGE_ALPHA_TAG}"
-echo "  • Pushed git tag $TAG (https://github.com/bgrgicak/Desk/releases/tag/$TAG)"
+echo "  • Pushed git tag $TAG (https://github.com/bgrgicak/Roomy/releases/tag/$TAG)"
 echo "  • Desktop workflow (macOS DMG):"
-echo "      https://github.com/bgrgicak/Desk/actions/workflows/desktop-release.yml"
+echo "      https://github.com/bgrgicak/Roomy/actions/workflows/desktop-release.yml"
 echo
 
 if confirm "Stream the desktop release workflow run here?"; then
