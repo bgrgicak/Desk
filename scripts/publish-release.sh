@@ -55,7 +55,6 @@ PUBLIC_WORKSPACES=(
   "packages/server/sandbox-cli"
   "packages/apps/chat-cards.app"
   "packages/apps/chat-forms.app"
-  "packages/desktop/build-server"
 )
 
 # ---------- helpers ----------
