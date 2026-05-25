@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 import fs from 'fs'
+import crypto from 'crypto'
 
 // Read the app's version once at config time so it can be inlined into
 // both the React bundle (via `define`) and the service worker (via the
@@ -26,10 +27,33 @@ function injectServiceWorkerVersion() {
       const swPath = path.resolve(__dirname, 'dist/sw.js')
       if (!fs.existsSync(swPath)) return
       const original = fs.readFileSync(swPath, 'utf8')
-      const updated = original.replace(/__APP_VERSION__/g, APP_VERSION)
+      const staticAssetRevision = hashStaticShellAssets()
+      const updated = original
+        .replace(/__APP_VERSION__/g, APP_VERSION)
+        .replace(/__STATIC_ASSET_REVISION__/g, staticAssetRevision)
       if (updated !== original) fs.writeFileSync(swPath, updated)
     },
   }
+}
+
+function hashStaticShellAssets(): string {
+  const files = [
+    'index.html',
+    'manifest.webmanifest',
+    'favicon.svg',
+    'icon-192.png',
+    'icon-512.png',
+    'icon-maskable-512.png',
+  ]
+  const hash = crypto.createHash('sha256')
+  for (const file of files) {
+    const filePath = path.resolve(__dirname, 'dist', file)
+    hash.update(file)
+    hash.update('\0')
+    hash.update(fs.readFileSync(filePath))
+    hash.update('\0')
+  }
+  return hash.digest('hex').slice(0, 12)
 }
 
 // In dev, everything flows through the Vite port (5173 by default, or

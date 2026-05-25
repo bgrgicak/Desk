@@ -560,12 +560,12 @@ function ModelsList({
   )
 }
 
-function InlineModelPicker({
-  models, selected, providerLabel, open, onOpenChange, query, onQueryChange, onSelect,
+function ModelDropdown({
+  models, selected, placeholder, open, onOpenChange, query, onQueryChange, onSelect,
 }: {
   models: ModelRef[]
   selected: string
-  providerLabel: string
+  placeholder?: string
   open: boolean
   onOpenChange: (next: boolean) => void
   query: string
@@ -576,18 +576,20 @@ function InlineModelPicker({
   const filtered = q
     ? models.filter(m => (m.label ?? m.id).toLowerCase().includes(q) || m.id.toLowerCase().includes(q))
     : models
+  const selectedModel = models.find(m => m.id === selected)
+  const selectedLabel = selectedModel?.label ?? selected
   return (
-    <div className="mt-2 rounded-md border overflow-hidden">
+    <div className="rounded-md border overflow-hidden">
       <button
         type="button"
         onClick={() => onOpenChange(!open)}
-        className="flex w-full items-center justify-between px-3 py-2 text-xs text-muted-foreground hover:bg-muted/40"
+        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-muted/40"
         aria-expanded={open}
       >
-        <span>
-          {models.length} available {providerLabel} {models.length === 1 ? 'model' : 'models'}
+        <span className={cn('truncate', !selectedLabel && 'text-muted-foreground')}>
+          {selectedLabel || placeholder || 'Select a model'}
         </span>
-        <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', open && 'rotate-180')} />
+        <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
       </button>
       {open && (
         <div className="border-t">
@@ -610,7 +612,10 @@ function InlineModelPicker({
                   <button
                     key={m.id}
                     type="button"
-                    onClick={() => onSelect(m.id)}
+                    onClick={() => {
+                      onSelect(m.id)
+                      onOpenChange(false)
+                    }}
                     className={cn(
                       'flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-muted/50',
                       isSelected && 'bg-muted/70',
@@ -650,14 +655,14 @@ function ModelDetail({
     : (flatModels[0]?.provider ?? MODEL_PROVIDER_OPTIONS[0].provider)
   const initialModel = existing?.model ?? defaultModelForProvider(modelIndex, initialProvider)
 
-  const [name, setName] = useState(existing?.name ?? '')
+  const [name, setName] = useState(existing?.name ?? (agents.length === 0 ? 'Default' : ''))
   const [model, setModel] = useState(initialModel)
   const [provider, setProvider] = useState(initialProvider)
   const [credentialSecret, setCredentialSecret] = useState('')
   // The picker is inline (not a popover) because the form is rendered
   // inside small constrained surfaces (signup card, account modal); a
   // floating popover got clipped by their overflow containers.
-  const [modelPickerOpen, setModelPickerOpen] = useState(true)
+  const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [modelQuery, setModelQuery] = useState('')
   const [deleteOpen, setDeleteOpen] = useState(false)
   // Cache preview results per-provider for the lifetime of this form so
@@ -674,16 +679,21 @@ function ModelDetail({
   const providerModels = useMemo<ModelRef[]>(() => {
     const fetched = modelsForProvider(modelIndex, provider)
     const previewed = previewByProvider[provider] ?? []
-    if (previewed.length === 0) return fetched
-    const seen = new Set(fetched.map(m => m.id))
-    const merged = [...fetched]
-    for (const m of previewed) {
+    const seen = new Set<string>()
+    const merged: ModelRef[] = []
+    for (const m of [...fetched, ...previewed]) {
       if (seen.has(m.id)) continue
       seen.add(m.id)
       merged.push(m)
     }
+    // Make sure the currently selected model is always selectable, even if
+    // the catalog hasn't been fetched yet (e.g. brand-new provider key, or
+    // the default placeholder model for a provider with no live listing).
+    if (model && !seen.has(model)) {
+      merged.unshift({ provider, id: model, label: model })
+    }
     return merged
-  }, [modelIndex, previewByProvider, provider])
+  }, [modelIndex, previewByProvider, provider, model])
   const connectionEnvKey = modelProviderConnectionEnvKey(provider)
   const connectionKind = modelProviderConnectionKind(provider)
   const connectionDefinition = connectionKind ? managedConnectionDefinitionForKind(connectionKind) : undefined
@@ -789,13 +799,6 @@ function ModelDetail({
             )}
             <Field
               label={connectionDefinition?.secretLabel ?? 'API key'}
-              help={
-                focus.mode === 'edit'
-                  ? 'Leave blank to keep the shared key.'
-                  : hasSavedCredential
-                    ? 'Leave blank to reuse the shared key.'
-                    : undefined
-              }
             >
               <Input
                 type="password"
@@ -823,27 +826,19 @@ function ModelDetail({
 
         {credentialReady && (
           <Field
-            label="Model ID"
+            label="Model"
             help={previewingModels ? 'Fetching available models…' : undefined}
           >
-            <Input
-              value={model}
-              onChange={e => setModel(e.target.value)}
+            <ModelDropdown
+              models={providerModels}
+              selected={model}
               placeholder={providerOption?.placeholder ?? `${provider}/model-name`}
-              className="w-full"
+              open={modelPickerOpen}
+              onOpenChange={setModelPickerOpen}
+              query={modelQuery}
+              onQueryChange={setModelQuery}
+              onSelect={(id) => setModel(id)}
             />
-            {providerModels.length > 0 && (
-              <InlineModelPicker
-                models={providerModels}
-                selected={model}
-                providerLabel={providerLabel(provider)}
-                open={modelPickerOpen}
-                onOpenChange={setModelPickerOpen}
-                query={modelQuery}
-                onQueryChange={setModelQuery}
-                onSelect={(id) => setModel(id)}
-              />
-            )}
           </Field>
         )}
       </div>

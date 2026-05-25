@@ -7,7 +7,7 @@ lives under `~/Roomy/`.
 
 ## Prerequisites
 
-- Node.js 22.x (pinned by [.nvmrc](../../.nvmrc) + `engines`).
+- Node.js 23.x (pinned by [.nvmrc](../../.nvmrc) + `engines`).
   Use nvm/fnm/mise/asdf so the pin picks up automatically.
 - A container runtime. One of:
   - **Docker** — rootful (`/var/run/docker.sock`) or rootless
@@ -57,9 +57,11 @@ npm run dev
 That:
 
 1. Ensures `~/Roomy/` exists.
-2. Starts `roomy-server` (tsx watch) on http://127.0.0.1:35138/.
-3. Starts the Vite dev server on http://127.0.0.1:5173/.
-4. Wires Vite's `/api/*` proxy to `:35138`.
+2. Builds missing built-in app `dist/` directories, including any required
+   workspace package outputs such as `@roomy-ai/ui/dist`.
+3. Starts `roomy-server` (tsx watch) on http://127.0.0.1:35138/.
+4. Starts the Vite dev server on http://127.0.0.1:5173/.
+5. Wires Vite's `/api/*` proxy to `:35138`.
 
 One Ctrl+C kills both.
 

@@ -22,6 +22,16 @@ function readSwVersion(): string {
   return match[1];
 }
 
+function readSwStaticAssetRevision(): string {
+  const match = readSw().match(/const STATIC_ASSET_REVISION = '([^']+)'/);
+  if (!match) throw new Error(`Could not find STATIC_ASSET_REVISION constant in ${SW_PATH}`);
+  return match[1];
+}
+
+function swCacheName(version: string): string {
+  return `roomy-app-${version}-${readSwStaticAssetRevision()}`;
+}
+
 function rewriteSwVersion(newVersion: string): void {
   const replaced = readSw().replace(
     /const VERSION = '[^']+'/,
@@ -36,10 +46,12 @@ test.describe.serial("PWA update flow", () => {
   // would leak into other specs that share dist/.
   let originalSw: string;
   let originalVersion: string;
+  let originalCacheName: string;
 
   test.beforeAll(() => {
     originalSw = readSw();
     originalVersion = readSwVersion();
+    originalCacheName = swCacheName(originalVersion);
   });
 
   test.afterAll(() => {
@@ -67,7 +79,7 @@ test.describe.serial("PWA update flow", () => {
     expect(state.waiting).toBeNull();
     const appCaches = state.caches.filter((k) => k.startsWith("roomy-app-"));
     expect(appCaches).toHaveLength(1);
-    expect(appCaches[0]).toBe(`roomy-app-${originalVersion}`);
+    expect(appCaches[0]).toBe(originalCacheName);
 
     // The prompt MUST NOT appear on a cold install — that's how we
     // distinguish "this is your first visit" from "an update arrived
@@ -98,6 +110,7 @@ test.describe.serial("PWA update flow", () => {
     // Simulate a deploy by flipping the VERSION constant in dist/sw.js.
     const newVersion = `${originalVersion}-test-${Date.now()}`;
     rewriteSwVersion(newVersion);
+    const newCacheName = swCacheName(newVersion);
 
     // Force the browser to refetch /sw.js. With different bytes it
     // installs as a new SW and parks in "waiting" — our setup never
@@ -121,7 +134,7 @@ test.describe.serial("PWA update flow", () => {
     });
     expect(beforeApply.waiting).toContain("/sw.js");
     expect(beforeApply.caches.sort()).toEqual(
-      [`roomy-app-${originalVersion}`, `roomy-app-${newVersion}`].sort(),
+      [originalCacheName, newCacheName].sort(),
     );
 
     // Clicking Reload posts SKIP_WAITING → activate → controllerchange,
@@ -152,7 +165,7 @@ test.describe.serial("PWA update flow", () => {
       { timeout: 8000, message: "waiting for new SW to activate and old cache to be dropped" },
     ).toEqual({
       waiting: null,
-      caches: [`roomy-app-${newVersion}`],
+      caches: [newCacheName],
     });
   });
 });

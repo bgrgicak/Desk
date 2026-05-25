@@ -12,11 +12,17 @@ test("manifest is served with the manifest MIME and valid shape", async ({ baseU
   expect(res.headers.get("content-type") ?? "").toMatch(/manifest\+json|application\/json/);
   const manifest = (await res.json()) as {
     name?: string;
+    short_name?: string;
+    description?: string;
     start_url?: string;
     display?: string;
+    theme_color?: string;
     icons?: Array<{ sizes?: string; type?: string }>;
   };
-  expect(manifest.name).toBeTruthy();
+  expect(manifest.name).toBe("Roomy");
+  expect(manifest.short_name).toBe("Roomy");
+  expect(manifest.description).toBe("Roomy — your AI workspace");
+  expect(manifest.theme_color).toBe("#ac5edc");
   expect(manifest.start_url).toBe("/");
   expect(manifest.display).toBe("standalone");
   // Chrome installability needs at least one PNG icon ≥192px.
@@ -45,5 +51,7 @@ test("index.html links the manifest and theme color", async ({ baseURL }) => {
   const html = await res.text();
   expect(html).toContain('rel="manifest"');
   expect(html).toContain('href="/manifest.webmanifest"');
-  expect(html).toContain('name="theme-color"');
+  expect(html).toContain('rel="icon"');
+  expect(html).toContain('href="/favicon.svg"');
+  expect(html).toContain('name="theme-color" content="#ac5edc"');
 });

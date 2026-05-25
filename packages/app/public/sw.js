@@ -26,7 +26,11 @@
 // in vite.config.ts; in unbuilt copies it stays as the literal placeholder
 // (the SW only runs from a production build, so that's fine).
 const VERSION = '__APP_VERSION__';
-const CACHE_NAME = `roomy-app-${VERSION}`;
+// STATIC_ASSET_REVISION is a build-time hash of the app shell files below.
+// It makes icon/manifest/favicon-only releases produce a new SW byte stream
+// and a fresh cache even when package.json#version has not changed.
+const STATIC_ASSET_REVISION = '__STATIC_ASSET_REVISION__';
+const CACHE_NAME = `roomy-app-${VERSION}-${STATIC_ASSET_REVISION}`;
 const SHELL_URLS = [
   '/',
   '/index.html',
