@@ -40,4 +40,30 @@ describe("buildServerEnvConfig", () => {
     expect(env.ROOMY_APP_DIST).toBe(OPTS.appDist);
     expect(env.ROOMY_SECRET_KEY).toBe(OPTS.secretKey);
   });
+
+  it("includes /usr/local/bin and /opt/homebrew/bin in PATH for Docker Desktop discovery", () => {
+    const savedPath = process.env.PATH;
+    process.env.PATH = "/usr/bin:/bin";
+    try {
+      const env = buildServerEnvConfig(OPTS);
+      const parts = (env.PATH ?? "").split(":");
+      expect(parts).toContain("/usr/local/bin");
+      expect(parts).toContain("/opt/homebrew/bin");
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
+  it("does not duplicate PATH entries already present", () => {
+    const savedPath = process.env.PATH;
+    process.env.PATH = "/usr/local/bin:/usr/bin:/bin";
+    try {
+      const env = buildServerEnvConfig(OPTS);
+      const parts = (env.PATH ?? "").split(":");
+      const count = parts.filter((p) => p === "/usr/local/bin").length;
+      expect(count).toBe(1);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
 });

@@ -8,6 +8,27 @@
 export const DEFAULT_SANDBOX_IMAGE = "bgrgicak/roomy-ai:latest";
 
 /**
+ * On macOS, apps launched from the Dock/Finder receive a minimal PATH
+ * (/usr/bin:/bin:/usr/sbin:/sbin) that omits Homebrew and Docker Desktop
+ * install locations. Prepend the common Docker/container-runtime paths so
+ * the server process can find `docker` regardless of how the app was opened.
+ */
+function augmentPath(env: NodeJS.ProcessEnv): string {
+  const base = env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin";
+  const extras = [
+    "/usr/local/bin",          // Homebrew Intel / Docker Desktop symlink
+    "/opt/homebrew/bin",       // Homebrew Apple Silicon
+    "/Applications/Docker.app/Contents/Resources/bin",
+    "/usr/local/bin/docker",   // fallback explicit dir
+  ];
+  const parts = base.split(":");
+  for (const dir of extras) {
+    if (!parts.includes(dir)) parts.unshift(dir);
+  }
+  return parts.join(":");
+}
+
+/**
  * Builds the env object passed to the roomy-server utility process.
  * All Electron/FS side effects (resolving appDist, reading the secret key)
  * are pre-resolved by the caller; this function is pure.
@@ -20,6 +41,7 @@ export function buildServerEnvConfig(opts: {
 }): NodeJS.ProcessEnv {
   return {
     ...process.env,
+    PATH: augmentPath(process.env),
     ROOMY_SECRET_KEY: opts.secretKey,
     ROOMY_HOME: opts.roomyHome,
     PORT: String(opts.port),
