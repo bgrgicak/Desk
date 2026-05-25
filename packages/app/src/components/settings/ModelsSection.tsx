@@ -561,7 +561,7 @@ function ModelsList({
 }
 
 function ModelDropdown({
-  models, selected, placeholder, open, onOpenChange, query, onQueryChange, onSelect,
+  models, selected, placeholder, open, onOpenChange, query, onQueryChange, onSelect, loading,
 }: {
   models: ModelRef[]
   selected: string
@@ -571,23 +571,25 @@ function ModelDropdown({
   query: string
   onQueryChange: (next: string) => void
   onSelect: (id: string) => void
+  loading?: boolean
 }) {
   const q = query.trim().toLowerCase()
   const filtered = q
     ? models.filter(m => (m.label ?? m.id).toLowerCase().includes(q) || m.id.toLowerCase().includes(q))
     : models
   const selectedModel = models.find(m => m.id === selected)
-  const selectedLabel = selectedModel?.label ?? selected
+  const selectedLabel = loading ? undefined : (selectedModel?.label ?? selected)
   return (
     <div className="rounded-md border overflow-hidden">
       <button
         type="button"
         onClick={() => onOpenChange(!open)}
-        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-muted/40"
+        disabled={loading}
+        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-muted/40 disabled:cursor-not-allowed disabled:opacity-60"
         aria-expanded={open}
       >
-        <span className={cn('truncate', !selectedLabel && 'text-muted-foreground')}>
-          {selectedLabel || placeholder || 'Select a model'}
+        <span className={cn('truncate', (!selectedLabel || loading) && 'text-muted-foreground')}>
+          {loading ? 'Loading models…' : (selectedLabel || placeholder || 'Select a model')}
         </span>
         <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
       </button>
@@ -635,10 +637,11 @@ function ModelDropdown({
 }
 
 function ModelDetail({
-  agents, modelIndex, localSources, providerKeys, focus, busy, onSave, onCancel, onDelete,
+  agents, modelIndex, modelsLoading, localSources, providerKeys, focus, busy, onSave, onCancel, onDelete,
 }: {
   agents: ServerAgent[]
   modelIndex: Map<string, ModelRef[]>
+  modelsLoading: boolean
   localSources: Record<string, LocalSourceState>
   providerKeys: Record<string, string | null>
   focus: Exclude<ModelsFocus, null>
@@ -686,14 +689,15 @@ function ModelDetail({
       seen.add(m.id)
       merged.push(m)
     }
-    // Make sure the currently selected model is always selectable, even if
-    // the catalog hasn't been fetched yet (e.g. brand-new provider key, or
-    // the default placeholder model for a provider with no live listing).
-    if (model && !seen.has(model)) {
+    // Make sure the currently selected model is always selectable once the
+    // catalog has loaded (e.g. brand-new provider key, or the default
+    // placeholder model for a provider with no live listing). Skip while
+    // loading so the dropdown shows nothing until real data arrives.
+    if (!modelsLoading && model && !seen.has(model)) {
       merged.unshift({ provider, id: model, label: model })
     }
     return merged
-  }, [modelIndex, previewByProvider, provider, model])
+  }, [modelIndex, modelsLoading, previewByProvider, provider, model])
   const connectionEnvKey = modelProviderConnectionEnvKey(provider)
   const connectionKind = modelProviderConnectionKind(provider)
   const connectionDefinition = connectionKind ? managedConnectionDefinitionForKind(connectionKind) : undefined
@@ -838,6 +842,7 @@ function ModelDetail({
               query={modelQuery}
               onQueryChange={setModelQuery}
               onSelect={(id) => setModel(id)}
+              loading={modelsLoading}
             />
           </Field>
         )}
@@ -901,7 +906,7 @@ interface ModelsSectionProps {
 export function ModelsSection({ focus, onChangeFocus }: ModelsSectionProps) {
   const dispatch = useAppDispatch()
   const { data: serverAgents } = useGetAgentsQuery()
-  const { data: models } = useGetModelsQuery()
+  const { data: models, isLoading: modelsLoading } = useGetModelsQuery()
   const { data: localSourcesData } = useGetLocalSourcesQuery()
   const { data: providerKeys } = useGetProviderKeysQuery()
   const [createAgent, { isLoading: creatingAgent }] = useCreateAgentMutation()
@@ -1010,6 +1015,7 @@ export function ModelsSection({ focus, onChangeFocus }: ModelsSectionProps) {
       <ModelDetail
         agents={agents}
         modelIndex={modelIndex}
+        modelsLoading={modelsLoading}
         localSources={localSources}
         providerKeys={providerKeys ?? {}}
         focus={focus}

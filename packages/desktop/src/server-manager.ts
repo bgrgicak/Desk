@@ -3,6 +3,7 @@ import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 import * as crypto from "crypto";
+import { buildServerEnvConfig } from "./server-env.js";
 
 const PORT = parseInt(process.env.PORT ?? "35138", 10);
 const HEALTH_URL = `http://127.0.0.1:${PORT}/health`;
@@ -46,14 +47,12 @@ function ensureSecretKey(roomyDir: string): string {
 
 function buildServerEnv(roomyHome: string): NodeJS.ProcessEnv {
   const secretKey = ensureSecretKey(roomyHome);
-  return {
-    ...process.env,
-    ROOMY_SECRET_KEY: secretKey,
-    ROOMY_HOME: roomyHome,
-    PORT: String(PORT),
-    ROOMY_SERVE_APP: "1",
-    ROOMY_APP_DIST: resolveAppDist(),
-  };
+  return buildServerEnvConfig({
+    roomyHome,
+    secretKey,
+    appDist: resolveAppDist(),
+    port: PORT,
+  });
 }
 
 async function pollHealth(timeoutMs = 30_000): Promise<void> {

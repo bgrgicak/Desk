@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Starts the full dev stack on the host:
-#   - roomy-server in tsx-watch mode on http://127.0.0.1:${PORT:-35138}/
-#   - app Vite dev server on http://127.0.0.1:${ROOMY_APP_PORT:-5173}/
+#   - roomy-server in tsx-watch mode on http://127.0.0.1:${PORT:-35139}/
+#   - app Vite dev server on http://127.0.0.1:${ROOMY_APP_PORT:-5174}/
+#
+# Dev uses ports 35139 (API) and 5174 (app) by default so a published
+# production install (35138 / 5173) can run alongside the dev server.
 #
 # No VM, no systemd, no port forwards. One Ctrl+C kills both via the
 # process-group trap below.
@@ -68,7 +71,7 @@ if [ -z "${ROOMY_SKIP_SANDBOX_BUILD:-}" ]; then
 fi
 
 # 4. Kill stale processes holding our ports from a previous run.
-for port in 5173 35138; do
+for port in 5174 35139; do
   if lsof -ti ":${port}" >/dev/null 2>&1; then
     echo "==> Port ${port} in use — killing stale process…"
     lsof -ti ":${port}" | xargs kill -9 2>/dev/null || true
@@ -87,7 +90,7 @@ done
   [ -f "$ENV_FILE" ] && . "$ENV_FILE"
   set +a
   export NODE_OPTIONS="${NODE_OPTIONS:-} --conditions=@roomy-ai/dev --no-warnings"
-  export PORT="${PORT:-35138}"
+  export PORT="${PORT:-35139}"
   export ROOMY_HOME="${ROOMY_HOME:-$ROOMY_HOME_DEFAULT}"
 
   MAX_SERVER_RESTARTS=3
@@ -112,13 +115,14 @@ SERVER_PID=$!
 (
   cd "$REPO_ROOT"
   export NODE_OPTIONS="${NODE_OPTIONS:-} --conditions=@roomy-ai/dev --no-warnings"
-  export ROOMY_API_URL="${ROOMY_API_URL:-http://127.0.0.1:35138}"
+  export ROOMY_API_URL="${ROOMY_API_URL:-http://127.0.0.1:35139}"
+  export ROOMY_APP_PORT="${ROOMY_APP_PORT:-5174}"
   exec npm -w @roomy-ai/app run dev
 ) &
 VITE_PID=$!
 
-SERVER_PORT="${PORT:-35138}"
-APP_PORT="${ROOMY_APP_PORT:-5173}"
+SERVER_PORT="${PORT:-35139}"
+APP_PORT="${ROOMY_APP_PORT:-5174}"
 
 cleanup() {
   if kill -0 "$VITE_PID" 2>/dev/null; then

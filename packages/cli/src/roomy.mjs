@@ -150,28 +150,15 @@ async function cmdStart() {
 }
 
 async function cmdStartDev({ monorepoRoot, home }) {
-  const env = {
-    ROOMY_HOME: home,
-    PORT: String(PORT),
-    ROOMY_APP_PORT: String(APP_PORT),
-    ROOMY_API_URL: `http://127.0.0.1:${PORT}`,
-    NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --conditions @roomy-ai/dev`.trim(),
-  };
-
-  log(`roomy-server → http://127.0.0.1:${PORT}/`);
-  log(`vite app    → http://127.0.0.1:${APP_PORT}/`);
-
-  const server = spawnInherit(
-    "npx",
-    ["tsx", "watch", "packages/server/api/src/main.ts"],
-    { env, cwd: monorepoRoot },
+  const devSh = path.resolve(
+    monorepoRoot,
+    "packages/server/setup/scripts/dev.sh",
   );
-  const vite = spawnInherit(
-    "npm",
-    ["-w", "@roomy-ai/app", "run", "dev"],
-    { env, cwd: monorepoRoot },
-  );
-  attachStopHandlers(server, vite);
+  const proc = spawnInherit("bash", [devSh], {
+    env: { ROOMY_HOME: home },
+    cwd: monorepoRoot,
+  });
+  attachStopHandlers(proc);
 }
 
 async function cmdStartPublished({ home }) {
