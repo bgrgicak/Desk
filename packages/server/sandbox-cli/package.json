@@ -1,6 +1,6 @@
 {
   "name": "@roomy-ai/sandbox-cli",
-  "version": "0.1.0-alpha.6",
+  "version": "0.1.1",
   "type": "module",
   "bin": {
     "roomy-agent": "dist/roomy.js"
@@ -19,6 +19,6 @@
   },
   "publishConfig": {
     "access": "public",
-    "tag": "alpha"
+    "tag": "latest"
   }
 }

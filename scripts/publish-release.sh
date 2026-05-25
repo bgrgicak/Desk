@@ -244,32 +244,32 @@ CLI_PKG="packages/cli/package.json"
 current="$(pkg_get "$CLI_PKG" version)"
 say "Current version (from $CLI_PKG): ${c_bold}$current${c_reset}"
 
-# Suggest next alpha (bump trailing .N), and next minor + alpha.0.
-next_alpha="$(node -e "
+# Suggest next patch, next minor, and next major.
+next_patch="$(node -e "
   const v='$current';
-  const m=v.match(/^(\d+)\.(\d+)\.(\d+)-alpha\.(\d+)\$/);
+  const m=v.match(/^(\d+)\.(\d+)\.(\d+)/);
   if(!m){ process.exit(0); }
-  const [_, M, m_, p, n] = m;
-  process.stdout.write(\`\${M}.\${m_}.\${p}-alpha.\${Number(n)+1}\`);
+  const [_, M, m_, p] = m;
+  process.stdout.write(\`\${M}.\${m_}.\${Number(p)+1}\`);
 ")"
 next_minor="$(node -e "
   const v='$current';
   const m=v.match(/^(\d+)\.(\d+)\.(\d+)/);
   if(!m){ process.exit(0); }
   const [_, M, m_] = m;
-  process.stdout.write(\`\${M}.\${Number(m_)+1}.0-alpha.0\`);
+  process.stdout.write(\`\${M}.\${Number(m_)+1}.0\`);
 ")"
 
 echo
 echo "Pick a version:"
-[ -n "$next_alpha" ] && echo "  1) next alpha   → $next_alpha"
+[ -n "$next_patch" ] && echo "  1) next patch   → $next_patch"
 [ -n "$next_minor" ] && echo "  2) bump minor   → $next_minor"
 echo "  3) custom"
 echo
 
 choice="$(ask "Choice" "1")"
 case "$choice" in
-  1) NEW_VERSION="$next_alpha" ;;
+  1) NEW_VERSION="$next_patch" ;;
   2) NEW_VERSION="$next_minor" ;;
   3) NEW_VERSION="$(ask "Enter version (no leading v)")" ;;
   *) die "Invalid choice." ;;
@@ -341,14 +341,14 @@ hr
 
 echo "About to:"
 echo "  1. git commit  →  chore(release): $TAG"
-echo "  2. npm publish →  $NEW_VERSION (dist-tag: alpha)"
+echo "  2. npm publish →  $NEW_VERSION (dist-tag: latest)"
 echo "     packages:"
 for ws in "${PUBLIC_WORKSPACES[@]}"; do
   echo "       - $(pkg_get "$ws/package.json" name)"
 done
 echo "  3. docker build + push:"
 echo "       ${DOCKER_REPO}:${NEW_VERSION}"
-echo "       ${DOCKER_REPO}:alpha"
+echo "       ${DOCKER_REPO}:latest"
 echo "  4. git tag $TAG and push trunk + $TAG to origin"
 echo "     → triggers .github/workflows/desktop-release.yml on a macos-latest"
 echo "       runner, which builds + uploads the macOS DMG to the GH Release."
@@ -378,8 +378,8 @@ say "Publishing to npm..."
 # PUBLIC_WORKSPACES avoids that entirely.
 #
 # --access public for the scoped @roomy-ai/* packages.
-# publishConfig.tag=alpha in each package.json controls the dist-tag,
-# so `npm install @roomy-ai/cli` resolves to "alpha" until we cut a stable.
+# publishConfig.tag=latest in each package.json controls the dist-tag,
+# so `npm install @roomy-ai/cli` resolves to the latest stable release.
 publish_args=()
 for ws in "${PUBLIC_WORKSPACES[@]}"; do
   publish_args+=("-w" "$ws")
@@ -394,27 +394,27 @@ ok "npm publish complete."
 # ---------- step 7: docker build + push ----------
 
 IMAGE_VERSION_TAG="${DOCKER_REPO}:${NEW_VERSION}"
-IMAGE_ALPHA_TAG="${DOCKER_REPO}:alpha"
+IMAGE_LATEST_TAG="${DOCKER_REPO}:latest"
 
 say "Building sandbox Docker image (this can take a few minutes)..."
-# Build once with both tags so the alpha pointer and the pinned version
+# Build once with both tags so the latest pointer and the pinned version
 # share the same image ID — no duplicate work for the second push.
 if ! docker build \
     -f packages/server/runtime/Dockerfile.sandbox \
     -t "$IMAGE_VERSION_TAG" \
-    -t "$IMAGE_ALPHA_TAG" \
+    -t "$IMAGE_LATEST_TAG" \
     .; then
   warn "docker build failed. npm packages are already out. Fix the build and re-run:"
   warn "    docker build -f packages/server/runtime/Dockerfile.sandbox \\"
-  warn "      -t $IMAGE_VERSION_TAG -t $IMAGE_ALPHA_TAG ."
-  warn "    docker push $IMAGE_VERSION_TAG && docker push $IMAGE_ALPHA_TAG"
+  warn "      -t $IMAGE_VERSION_TAG -t $IMAGE_LATEST_TAG ."
+  warn "    docker push $IMAGE_VERSION_TAG && docker push $IMAGE_LATEST_TAG"
   die "Docker build aborted."
 fi
 
 say "Pushing $IMAGE_VERSION_TAG..."
 docker push "$IMAGE_VERSION_TAG" || die "docker push failed for $IMAGE_VERSION_TAG."
-say "Pushing $IMAGE_ALPHA_TAG..."
-docker push "$IMAGE_ALPHA_TAG" || die "docker push failed for $IMAGE_ALPHA_TAG."
+say "Pushing $IMAGE_LATEST_TAG..."
+docker push "$IMAGE_LATEST_TAG" || die "docker push failed for $IMAGE_LATEST_TAG."
 ok "Sandbox image pushed."
 
 # ---------- step 8: tag + push ----------
@@ -431,7 +431,7 @@ ok "Pushed. The desktop release workflow has been triggered by the tag push."
 
 hr
 echo "What just happened:"
-echo "  • Published to npm (dist-tag alpha):"
+echo "  • Published to npm (dist-tag latest):"
 for ws in "${PUBLIC_WORKSPACES[@]}"; do
   name="$(pkg_get "$ws/package.json" name)"
   echo "    https://www.npmjs.com/package/$name/v/$NEW_VERSION"
@@ -439,7 +439,7 @@ done
 echo "  • Pushed Docker image:"
 echo "      https://hub.docker.com/r/${DOCKER_REPO}/tags"
 echo "      ${IMAGE_VERSION_TAG}"
-echo "      ${IMAGE_ALPHA_TAG}"
+echo "      ${IMAGE_LATEST_TAG}"
 echo "  • Pushed git tag $TAG (https://github.com/bgrgicak/Roomy/releases/tag/$TAG)"
 echo "  • Desktop workflow (macOS DMG):"
 echo "      https://github.com/bgrgicak/Roomy/actions/workflows/desktop-release.yml"

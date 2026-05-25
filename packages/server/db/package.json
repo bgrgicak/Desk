@@ -1,6 +1,6 @@
 {
   "name": "@roomy-ai/db",
-  "version": "0.1.0-alpha.6",
+  "version": "0.1.1",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
@@ -21,7 +21,7 @@
   ],
   "publishConfig": {
     "access": "public",
-    "tag": "alpha"
+    "tag": "latest"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -34,7 +34,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@roomy-ai/shared": "0.1.0-alpha.6",
+    "@roomy-ai/shared": "0.1.1",
     "hash-wasm": "^4.11.0"
   },
   "devDependencies": {

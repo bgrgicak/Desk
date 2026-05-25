@@ -202,7 +202,7 @@ async function cmdStartPublished({ home }) {
     // useless for `npx @roomy-ai/cli` users — they have no local image
     // to fall back on. Pulls from Docker Hub on first sandbox start.
     // Set ROOMY_SANDBOX_IMAGE to override (e.g. point at your own fork).
-    ROOMY_SANDBOX_IMAGE: process.env.ROOMY_SANDBOX_IMAGE ?? "bgrgicak/roomy-ai:alpha",
+    ROOMY_SANDBOX_IMAGE: process.env.ROOMY_SANDBOX_IMAGE ?? "bgrgicak/roomy-ai:latest",
   };
 
   log(`roomy-server → http://127.0.0.1:${PORT}/  (serves API + SPA)`);
@@ -478,10 +478,10 @@ async function cmdUninstall(args) {
  *   1. `npm install -g @roomy-ai/cli@<tag>` — replaces the CLI and every
  *      bundled @roomy-ai/* dep (api, app, runtime, …) on disk. The running
  *      process keeps its loaded modules; new code only takes effect after
- *      restart. Tag defaults to `alpha` to match publishConfig.tag, override
+ *      restart. Tag defaults to `latest` to match publishConfig.tag, override
  *      with --tag=<dist-tag-or-version>.
  *   2. `docker pull <sandbox image>` — the runtime pulls per-sandbox on
- *      first start, but the `:alpha` tag is mutable; pulling now avoids a
+ *      first start, but the `:latest` tag is mutable; pulling now avoids a
  *      cold-start delay the next time a sandbox boots.
  *   3. Restart the OS service if one is installed (launchd/systemd/Task
  *      Scheduler). If not, tell the user to restart whatever is running
@@ -502,7 +502,7 @@ async function cmdUpdate(args) {
   const skipDocker = args.includes("--skip-docker");
   const skipRestart = args.includes("--skip-restart");
   const tagArg = args.find((a) => a.startsWith("--tag="));
-  const tag = tagArg ? tagArg.slice("--tag=".length) : "alpha";
+  const tag = tagArg ? tagArg.slice("--tag=".length) : "latest";
 
   log(`Updating @roomy-ai/cli to ${tag}…`);
   const npmResult = spawnSync(
@@ -520,7 +520,7 @@ async function cmdUpdate(args) {
   if (skipDocker) {
     log("Skipping docker pull (--skip-docker).");
   } else {
-    const image = process.env.ROOMY_SANDBOX_IMAGE ?? "bgrgicak/roomy-ai:alpha";
+    const image = process.env.ROOMY_SANDBOX_IMAGE ?? "bgrgicak/roomy-ai:latest";
     log(`Pulling sandbox image ${image}…`);
     const dockerResult = spawnSync("docker", ["pull", image], { stdio: "inherit" });
     if (dockerResult.status !== 0) {
@@ -599,7 +599,7 @@ async function main() {
         "  service start|stop|restart|status  control the installed system service\n" +
         "  update [--tag=<tag>]                pull the latest @roomy-ai/cli + sandbox image\n" +
         "         [--skip-docker]              and restart the service.\n" +
-        "         [--skip-restart]             --tag defaults to `alpha`.\n" +
+        "         [--skip-restart]             --tag defaults to `latest`.\n" +
         "  uninstall [--remove-roomy-files]    remove the service + roomy/* docker images;\n" +
         "                                     pass --remove-roomy-files to also delete ~/Roomy\n" +
         "  version                            print version\n",

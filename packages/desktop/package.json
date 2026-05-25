@@ -1,6 +1,6 @@
 {
   "name": "@roomy-ai/desktop",
-  "version": "0.1.0-alpha.6",
+  "version": "0.1.1",
   "type": "module",
   "description": "Roomy desktop application (Electron)",
   "author": "Agent Roomy",
@@ -32,6 +32,6 @@
   },
   "publishConfig": {
     "access": "public",
-    "tag": "alpha"
+    "tag": "latest"
   }
 }
