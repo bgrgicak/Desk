@@ -28,6 +28,7 @@ import * as os from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { ensureColima, findColima, roomyBinDir, nerdctlWrapperPath } from "./colima.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = path.resolve(__dirname, "..");
@@ -119,18 +120,15 @@ function spawnInherit(cmd, args, { env, cwd }) {
 }
 
 /**
- * Prepend the common Docker/container-runtime install locations to PATH.
- * Under launchd (macOS) and systemd (Linux) the inherited PATH is minimal
- * (/usr/bin:/bin:/usr/sbin:/sbin) and omits Homebrew and Docker Desktop.
- * Without this the server's `detectEngine()` call can't find the `docker`
- * binary, and every sandbox start fails with ContainerRuntimeUnavailableError.
+ * Prepend common tool locations to PATH so the server finds `colima` and
+ * the nerdctl wrapper under launchd/systemd's minimal inherited PATH.
  */
-export function augmentPathForDocker(currentPath) {
+export function augmentPath(currentPath) {
   const base = currentPath ?? "/usr/bin:/bin:/usr/sbin:/sbin";
   const extras = [
     "/usr/local/bin",
     "/opt/homebrew/bin",
-    "/Applications/Docker.app/Contents/Resources/bin",
+    "/home/linuxbrew/.linuxbrew/bin",
   ];
   const parts = base.split(":");
   for (const dir of extras) {
@@ -166,6 +164,12 @@ async function cmdStart() {
 
   if (monorepoRoot) {
     return cmdStartDev({ monorepoRoot, home });
+  }
+  // macOS has no container runtime by default — auto-install Colima with
+  // containerd and create ~/Roomy/bin/nerdctl wrapper.
+  // Linux uses Docker natively; engine.ts auto-detects Docker Desktop's socket.
+  if (process.platform === "darwin") {
+    await ensureColima(home);
   }
   return cmdStartPublished({ home });
 }
@@ -211,9 +215,9 @@ async function cmdStartPublished({ home }) {
     // to fall back on. Pulls from Docker Hub on first sandbox start.
     // Set ROOMY_SANDBOX_IMAGE to override (e.g. point at your own fork).
     ROOMY_SANDBOX_IMAGE: process.env.ROOMY_SANDBOX_IMAGE ?? "bgrgicak/roomy-ai:latest",
-    // Ensure Docker Desktop / Homebrew locations are in PATH even when
-    // launched from launchd/systemd which provide a minimal daemon PATH.
-    PATH: augmentPathForDocker(process.env.PATH),
+    // Prepend ~/Roomy/bin (nerdctl wrapper + colima binary) and common
+    // tool locations so the server finds them under launchd/systemd PATH.
+    PATH: `${roomyBinDir(home)}:${augmentPath(process.env.PATH)}`,
   };
 
   log(`roomy-server → http://127.0.0.1:${PORT}/  (serves API + SPA)`);
@@ -280,7 +284,6 @@ ExecStart=${nodeBin} ${roomyBin} start
 Restart=on-failure
 RestartSec=10
 Environment=ROOMY_HOME=${home}
-Environment=XDG_RUNTIME_DIR=/run/user/%U
 
 [Install]
 WantedBy=default.target
@@ -416,32 +419,22 @@ function isServiceInstalled() {
 }
 
 /**
- * Remove every `roomy/*` container image. Best-effort: a missing docker
- * CLI, a stopped daemon, or simply no Roomy images all exit silently.
- *
- * Also tries nerdctl on Linux for parity with the runtime's engine
- * autodetect. Either one being absent is fine — we just want the user
- * to land at zero Roomy images after `roomy uninstall`, whichever runtime
- * built them.
+ * Remove every `roomy/*` container image via the nerdctl wrapper.
+ * Best-effort: a stopped Colima or missing wrapper exits silently.
  */
 function removeRoomyImages() {
-  const tools = ["docker", "nerdctl"];
+  const home = process.env.ROOMY_HOME ?? path.join(os.homedir(), "Roomy");
+  const wrapper = nerdctlWrapperPath(home);
+  const nerdctl = fs.existsSync(wrapper) ? wrapper : (findColima(home) ? "nerdctl" : null);
+  if (!nerdctl) return 0;
+
+  const list = spawnSync(nerdctl, ["images", "--format", "{{.Repository}}:{{.Tag}}"], { encoding: "utf-8" });
+  if (list.status !== 0) return 0;
+
   let removed = 0;
-  for (const tool of tools) {
-    const list = spawnSync(
-      tool,
-      ["images", "--format", "{{.Repository}}:{{.Tag}}"],
-      { encoding: "utf-8" },
-    );
-    if (list.status !== 0) continue; // tool missing or daemon down
-    const tags = list.stdout
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.startsWith("roomy/"));
-    for (const tag of tags) {
-      const { status } = spawnSync(tool, ["rmi", "-f", tag], { stdio: "inherit" });
-      if (status === 0) removed += 1;
-    }
+  for (const tag of list.stdout.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("roomy/"))) {
+    const { status } = spawnSync(nerdctl, ["rmi", "-f", tag], { stdio: "inherit" });
+    if (status === 0) removed += 1;
   }
   return removed;
 }
@@ -532,15 +525,22 @@ async function cmdUpdate(args) {
   if (skipDocker) {
     log("Skipping docker pull (--skip-docker).");
   } else {
+    const home = process.env.ROOMY_HOME ?? path.join(os.homedir(), "Roomy");
     const image = process.env.ROOMY_SANDBOX_IMAGE ?? "bgrgicak/roomy-ai:latest";
+    // On macOS we use the nerdctl wrapper (Colima/containerd); fall back to
+    // docker on Linux or if the wrapper isn't installed yet.
+    const wrapper = nerdctlWrapperPath(home);
+    const pullCmd = (process.platform === "darwin" && fs.existsSync(wrapper))
+      ? wrapper
+      : "docker";
     log(`Pulling sandbox image ${image}…`);
-    const dockerResult = spawnSync("docker", ["pull", image], { stdio: "inherit" });
+    const dockerResult = spawnSync(pullCmd, ["pull", image], { stdio: "inherit" });
     if (dockerResult.status !== 0) {
       // Don't fail the whole update — the runtime will retry the pull on
-      // the next sandbox boot. Common cases: docker daemon not running,
-      // docker not installed on this host yet, transient registry hiccup.
+      // the next sandbox boot. Common cases: runtime not running, not installed
+      // yet, transient registry hiccup.
       process.stderr.write(
-        "roomy update: docker pull failed (continuing). " +
+        "roomy update: image pull failed (continuing). " +
         "The runtime will retry on the next sandbox start.\n",
       );
     }

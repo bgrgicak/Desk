@@ -19,13 +19,14 @@
  *
  * Detection order (`detectEngine()`):
  *   1. `ROOMY_CONTAINER_ENGINE=docker|nerdctl` env override
- *   2. `docker info` returns 0 → docker
- *   3. `nerdctl info` (with `XDG_RUNTIME_DIR` populated) returns 0 → nerdctl
+ *   2. `nerdctl info` returns 0 → nerdctl  (macOS: ~/Roomy/bin/nerdctl wraps Colima)
+ *   3. `docker info` returns 0 → docker   (Linux: auto-detects Docker Desktop socket)
  *   4. throw with a message naming both binaries
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { PassThrough, type Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -320,13 +321,23 @@ export interface Engine {
 }
 
 /** Process env for the chosen binary. */
-function engineEnv(_name: EngineName): NodeJS.ProcessEnv {
-  // Both docker (rootless / Docker Desktop on Linux) and nerdctl use
-  // $XDG_RUNTIME_DIR/<binary>.sock when /var/run/docker.sock doesn't exist.
-  // Systemd user services often don't inherit XDG_RUNTIME_DIR, so default it.
-  if (!process.env.XDG_RUNTIME_DIR) {
+function engineEnv(name: EngineName): NodeJS.ProcessEnv {
+  if (name === "nerdctl") {
+    // nerdctl needs XDG_RUNTIME_DIR to find rootless containerd's socket.
+    // Default to /run/user/<uid> if the parent process didn't set it.
+    if (!process.env.XDG_RUNTIME_DIR) {
+      const uid = (process.getuid?.() ?? 1000).toString();
+      return { ...process.env, XDG_RUNTIME_DIR: `/run/user/${uid}` };
+    }
+  }
+  if (name === "docker" && process.platform === "linux" && !process.env.DOCKER_HOST) {
+    // Docker Desktop on Linux uses /run/user/<uid>/docker.sock instead of
+    // /var/run/docker.sock. Auto-detect it when the standard path is absent.
     const uid = (process.getuid?.() ?? 1000).toString();
-    return { ...process.env, XDG_RUNTIME_DIR: `/run/user/${uid}` };
+    const desktopSocket = `/run/user/${uid}/docker.sock`;
+    if (!existsSync("/var/run/docker.sock") && existsSync(desktopSocket)) {
+      return { ...process.env, DOCKER_HOST: `unix://${desktopSocket}` };
+    }
   }
   return process.env;
 }
@@ -904,9 +915,7 @@ export async function detectEngine(): Promise<Engine> {
   if (_engine) return _engine;
 
   const override = process.env.ROOMY_CONTAINER_ENGINE as EngineName | undefined;
-  const order: EngineName[] = override
-    ? [override]
-    : ["docker", "nerdctl"];
+  const order: EngineName[] = override ? [override] : ["nerdctl", "docker"];
 
   const errors: string[] = [];
   for (const candidate of order) {
@@ -917,8 +926,8 @@ export async function detectEngine(): Promise<Engine> {
     errors.push(`${candidate} info failed`);
   }
   throw new ContainerRuntimeUnavailableError(
-    `No container runtime available. Tried: ${errors.join(", ")}. ` +
-      `Install docker or nerdctl, or set ROOMY_CONTAINER_ENGINE.`,
+    `No container runtime available (tried: ${errors.join(", ")}). ` +
+      `Run \`roomy start\` to auto-install Colima, or install Docker.`,
   );
 }
 
