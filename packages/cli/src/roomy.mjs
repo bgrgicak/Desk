@@ -535,15 +535,16 @@ async function cmdUpdate(args) {
   serviceControl("restart");
 }
 
-async function cmdService(action) {
+async function cmdService(action, extraArgs = []) {
   if (!action) {
-    process.stderr.write("Usage: roomy service install|uninstall|start|stop|restart|status\n");
+    process.stderr.write("Usage: roomy service install|uninstall|start|stop|restart|status|update\n");
     process.exit(2);
   }
   if (action === "install") return installService();
   if (action === "uninstall") return uninstallService();
+  if (action === "update") return cmdUpdate(extraArgs);
   if (action === "start" || action === "stop" || action === "restart" || action === "status") return serviceControl(action);
-  process.stderr.write(`Unknown service action: ${action}\nUsage: roomy service install|uninstall|start|stop|restart|status\n`);
+  process.stderr.write(`Unknown service action: ${action}\nUsage: roomy service install|uninstall|start|stop|restart|status|update\n`);
   process.exit(2);
 }
 
@@ -568,7 +569,7 @@ async function main() {
   switch (sub) {
     case "start": return cmdStart();
     case "init": return cmdInit();
-    case "service": return cmdService(process.argv[3]);
+    case "service": return cmdService(process.argv[3], process.argv.slice(4));
     case "update": return cmdUpdate(process.argv.slice(3));
     case "uninstall": return cmdUninstall(process.argv.slice(3));
     case "version":
@@ -584,6 +585,7 @@ async function main() {
         "  init                               create ~/Roomy without starting\n" +
         "  service install|uninstall          register/unregister Roomy as a system service\n" +
         "  service start|stop|restart|status  control the installed system service\n" +
+        "  service update [--tag=<tag>]        update to latest version and restart the service\n" +
         "  update [--tag=<tag>]                pull the latest @roomy-ai/cli + sandbox image\n" +
         "         [--skip-docker]              and restart the service.\n" +
         "         [--skip-restart]             --tag defaults to `latest`.\n" +

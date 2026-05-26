@@ -3,7 +3,11 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { detectMonorepo, ensureRoomyHome, resolvePublishedApiEntry, resolveAppDist } from "../src/roomy.mjs";
+
+const ROOMY_BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src/roomy.mjs");
 
 describe("detectMonorepo", () => {
   let tmpRoot;
@@ -105,5 +109,33 @@ describe("resolvePublishedApiEntry / resolveAppDist", () => {
       expect(path.isAbsolute(result)).toBe(true);
       expect(fs.existsSync(path.join(result, "index.html"))).toBe(true);
     }
+  });
+});
+
+describe("roomy service update", () => {
+  it("routes to the same update logic as roomy update (monorepo guard fires)", () => {
+    // Both `roomy update` and `roomy service update` should refuse when run
+    // inside the monorepo checkout, exiting with code 2.
+    const direct = spawnSync(process.execPath, [ROOMY_BIN, "update"], {
+      encoding: "utf-8",
+    });
+    const viaService = spawnSync(process.execPath, [ROOMY_BIN, "service", "update"], {
+      encoding: "utf-8",
+    });
+    expect(direct.status).toBe(2);
+    expect(viaService.status).toBe(2);
+    expect(viaService.stderr).toContain("use `git pull");
+  });
+
+  it("passes --tag and --skip-restart flags through from service update", () => {
+    // Still hits the monorepo guard first (exit 2), but with a different
+    // message — confirms args forwarding doesn't crash before the guard.
+    const result = spawnSync(
+      process.execPath,
+      [ROOMY_BIN, "service", "update", "--tag=beta", "--skip-restart"],
+      { encoding: "utf-8" },
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("use `git pull");
   });
 });
