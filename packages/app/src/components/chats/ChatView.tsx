@@ -167,7 +167,9 @@ export function ChatView({
   // When the surface opts out of the right panel (e.g. Ask AI), force
   // the layout to treat the panel as closed so insets, gutters, and the
   // top-bar toggle all collapse to the no-panel state.
-  const panelOpen = (hideRightPanel || chat.id === NEW_CHAT_ID) ? false : panelOpenRaw
+  // Ask AI new-thread stub (chatNav provided) keeps the panel closed; room-view
+  // new-chat stubs allow the panel so users can access staged files.
+  const panelOpen = (hideRightPanel || (chat.id === NEW_CHAT_ID && chatNav !== undefined)) ? false : panelOpenRaw
   const isSmallViewport = useIsSmallScreen()
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined)
   // Tools goal selected by a suggestion-pill click in the empty
@@ -483,7 +485,7 @@ export function ChatView({
           onDeleteChat={(id) => onDeleteChat?.(id)}
           panelOpen={panelOpen}
           onTogglePanel={() => setPanelOpenFromUser(!panelOpen)}
-          showPanelToggle={!isPreviewOpen && !hideRightPanel && !isNewChat}
+          showPanelToggle={!isPreviewOpen && !hideRightPanel && !(isNewChat && chatNav !== undefined)}
           showKebab={!hideKebab && !isNewChat}
           task={backingTask}
           taskActions={taskActions}
