@@ -28,6 +28,7 @@ import {
   useSidebar,
 } from '@roomy-ai/ui'
 import { SIDEBAR_ROW_STATE_CLASS, SidebarAccountMenu } from './sidebarShared'
+import { RoomyIcon } from '@/components/home/RoomyIcon'
 import { useGlobalPalette } from '@/components/global-palette/GlobalPaletteProvider'
 import { ChatMenuItems } from '@/components/chats/ChatMenuItems'
 import { RowKebab } from '@/components/shared/RowKebab'
@@ -496,13 +497,16 @@ export function RoomSidebar({
   return (
     <Sidebar className="bg-transparent border-r-0 pl-4 pr-0 pt-0 pb-6">
       <SidebarHeader className="bg-transparent p-0">
-        <SidebarTrigger className="absolute right-2 top-2 z-20 h-8 w-8 rounded-md md:hidden" />
+        <div className="md:hidden flex items-center justify-between px-2 pt-2 pb-1">
+          <RoomyIcon className="h-4 w-auto" aria-hidden />
+          <SidebarTrigger className="h-8 w-8 rounded-md" />
+        </div>
 
         {/* ── Top-level workspace nav: Tasks / Library / Settings.
             Sits above Pinned so the most-used workspace destinations
             are reachable without scrolling past Pinned + Chats.
             Search lives down by the profile dropdown (footer). ── */}
-        <SidebarMenu className="pt-6 pb-1">
+        <SidebarMenu className="pt-2 md:pt-6 pb-1">
           <SidebarMenuItem>
             <MobileDismissSidebarMenuButton
               asChild

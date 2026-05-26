@@ -5,6 +5,7 @@ import { useLibraryItemChat } from '@/hooks/use-library-item-chat'
 import { usePrefs } from '@/hooks/use-prefs'
 import type { ContextItem } from '@/data/ui-types'
 import { toast } from 'sonner'
+import { AGENT_NAME } from '@/lib/constants'
 
 // Mirrors `CHAT_COLUMN_CLASS` in ChatView so this file-chat pane
 // centres its messages/composer on the same `max-w-4xl` axis as the
@@ -37,7 +38,7 @@ export function FileChatPanel({ item, workspaceId }: FileChatPanelProps) {
   const chat = useLibraryItemChat(workspaceId || undefined, item.id)
   const chatId = chat?.chatId ?? null
   const sendMessage = chat?.sendMessage
-  const agentName = chat?.agentModel ?? 'Claude Sonnet 4'
+  const agentName = AGENT_NAME
 
   const handleSend = useCallback(async (msg: string) => {
     if (!msg.trim() || !sendMessage || isSending) return
@@ -52,6 +53,7 @@ export function FileChatPanel({ item, workspaceId }: FileChatPanelProps) {
   }, [sendMessage, isSending])
 
   const draftKey = `library:${item.id}`
+  const hideAttachmentPaths = [item.id]
 
   return (
     // No entrance animation here — the parent panel container slides
@@ -69,6 +71,7 @@ export function FileChatPanel({ item, workspaceId }: FileChatPanelProps) {
         statusClassName={CHAT_COLUMN_CLASS}
         agentHeaderClassName={CHAT_COLUMN_CLASS}
         emptySlot={null}
+        hideAttachmentPaths={hideAttachmentPaths}
         footerSlot={
           <div className="shrink-0 min-w-0 max-w-full overflow-hidden">
             <div className="w-full min-w-0 px-6 pt-2 pb-6">

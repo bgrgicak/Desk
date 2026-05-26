@@ -11,12 +11,12 @@ import { usePrefs } from '@/hooks/use-prefs'
 import type { ChatMessage as ChatMessageType, Artifact, ArtifactUpdate, ContextItem } from '@/data/ui-types'
 import { getRelativeTime } from '@/data/ui-types'
 import { toast } from 'sonner'
+import { AGENT_NAME } from '@/lib/constants'
 
 type PanelTab = 'chat' | 'details'
 
 interface ConversationPanelProps {
   initialMessages: ChatMessageType[]
-  agentModel?: string
   onCollapse?: () => void
   collapsed?: boolean
   artifact?: Artifact
@@ -30,7 +30,6 @@ interface ConversationPanelProps {
 }
 
 export function ConversationPanel({
-  agentModel = 'Claude Sonnet 4',
   onCollapse,
   collapsed = false,
   artifact,
@@ -60,7 +59,7 @@ export function ConversationPanel({
   const activeChat = workspaceId && item ? libChat : workspaceId && artifact ? artChat : null
   const chatId = activeChat?.chatId ?? null
   const sendMessage = activeChat?.sendMessage
-  const displayAgentModel = activeChat?.agentModel ?? agentModel
+  const displayAgentModel = AGENT_NAME
 
   const handleSend = useCallback(async (msg: string) => {
     if (!msg.trim() || !sendMessage || isSending) return

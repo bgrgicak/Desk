@@ -13,6 +13,8 @@ import type { AgentEvent, AgentLogEntry, AttachmentRef, ServerMessage } from '@/
 
 /** Distance from the top (px) at which we trigger loading older messages. */
 const SCROLL_TOP_THRESHOLD = 120
+/** How far from the bottom (px) still counts as "at the bottom" for auto-scroll. */
+const SCROLL_BOTTOM_THRESHOLD = 150
 
 // Consecutive same-role messages whose timestamps fall within this
 // window are treated as a single group: only the group's last message
@@ -404,6 +406,10 @@ export interface ChatThreadProps {
    *  Should be a stable reference (module-level constant or memoized) to avoid
    *  unnecessary message-list recomputations. */
   filterMessage?: (m: ServerMessage) => boolean
+  /** Attachment paths to suppress from rendered chips. Forwarded to each
+   *  MessageBubble — use when the file is already shown in the surrounding
+   *  UI (e.g. the library file-detail view). */
+  hideAttachmentPaths?: string[]
 }
 
 export function ChatThread({
@@ -414,7 +420,7 @@ export function ChatThread({
   developerMode = false,
   isSending = false,
   highlightMessageId,
-  innerClassName = 'space-y-6 p-4',
+  innerClassName = 'space-y-6 p-4 pb-12',
   messageClassName,
   statusClassName,
   agentHeaderClassName,
@@ -426,6 +432,7 @@ export function ChatThread({
   lastAssistantSlot,
   showNewBadge = false,
   filterMessage,
+  hideAttachmentPaths,
 }: ChatThreadProps) {
   // ── Scrollback state ─────────────────────────────────────────────────
   const [beforeCursor, setBeforeCursor] = useState<string | undefined>(undefined)
@@ -484,8 +491,11 @@ export function ChatThread({
     }
     return cb
   }
-  /** Tracks whether we should auto-scroll to bottom (user is at the bottom). */
+  /** Tracks whether the user is at (or near) the bottom so new messages auto-scroll. */
   const isAtBottomRef = useRef(true)
+  /** Stores the last highlightMessageId that was successfully scrolled to, so we
+   *  only fire scrollIntoView once per unique ID instead of on every re-render. */
+  const highlightScrolledRef = useRef<string | null>(null)
   /** When loading older messages, stores the scroll-height before prepend so
    *  we can restore the scroll position after the DOM updates. */
   const scrollAnchorRef = useRef<{ scrollHeight: number; scrollTop: number; firstMessageId: string | null } | null>(null)
@@ -612,11 +622,16 @@ export function ChatThread({
     const el = scrollRef.current
     if (!el) return
 
-    // Handle highlighted message scrolling.
-    if (highlightMessageId) {
+    // Handle highlighted message scrolling — only once per unique ID.
+    // Without the `highlightScrolledRef` guard this fired on every re-render
+    // (new message, typing state change, etc.) while the `?message=` URL param
+    // remained set, causing repeated scrollIntoView jumps.
+    if (highlightMessageId && highlightScrolledRef.current !== highlightMessageId) {
       const msgEl = messageRefs.current.get(highlightMessageId)
       if (msgEl) {
         msgEl.scrollIntoView({ block: 'center' })
+        highlightScrolledRef.current = highlightMessageId
+        prevMessageCountRef.current = messages.length
         return
       }
     }
@@ -638,38 +653,67 @@ export function ChatThread({
       }
       // New message appended at the bottom while anchor was set — the anchor is
       // stale (it was captured for a prepend that didn't happen yet or happened
-      // differently). Clear it so it doesn't suppress auto-scroll indefinitely.
+      // differently). Clear it so the next legitimate prepend can use a fresh anchor.
       scrollAnchorRef.current = null
     }
 
     prevMessageCountRef.current = messages.length
 
-    // Auto-scroll to bottom when at/near the bottom — but only if
-    // there's actually a thread of messages. When the chat is empty
-    // (new-chat first paint), the scroll-to-bottom pushes the
-    // empty-state H2 ("What would you like to create?") above the
-    // viewport on short screens; messages.length === 0 means there's
-    // nothing to follow, so the scroll is purely harmful.
-    if (isAtBottomRef.current && messages.length > 0) {
+    // Scroll to bottom when:
+    // - user is near the bottom (within SCROLL_BOTTOM_THRESHOLD), so streaming
+    //   replies follow naturally without interrupting intentional upward scrolling, or
+    // - user just sent a message (isSending), so they always land at the bottom
+    //   to see the reply arrive.
+    if (messages.length > 0 && (isAtBottomRef.current || isSending)) {
       el.scrollTop = el.scrollHeight
     }
-  }, [messages, isTyping, failedAgentTurn, highlightMessageId])
+  }, [messages, highlightMessageId, isSending])
 
   // On initial load, scroll to bottom.
   const hasInitialScrolled = useRef(false)
+  // Reset the flag when chatId or developerMode changes. Done at render time
+  // (not in useEffect) so it resets before effects run, preventing the useEffect
+  // reset from firing on mount and undoing the initial scroll that already fired.
+  const prevScrollKeyRef = useRef(`${chatId}:${String(developerMode)}`)
+  const scrollKey = `${chatId}:${String(developerMode)}`
+  if (prevScrollKeyRef.current !== scrollKey) {
+    prevScrollKeyRef.current = scrollKey
+    hasInitialScrolled.current = false
+  }
   useEffect(() => {
     if (!isInitialLoading && messages.length > 0 && !hasInitialScrolled.current) {
       hasInitialScrolled.current = true
       if (scrollRef.current) {
         scrollRef.current.scrollTop = scrollRef.current.scrollHeight
       }
+      // Re-scroll after CSS transitions on the inner container (e.g. transition-[padding])
+      // have settled. padding-top + padding-bottom can add up to ~96px to scrollHeight
+      // after the initial scroll fires, and ResizeObserver won't catch padding-only changes
+      // since it reports contentBoxSize (excludes padding).
+      setTimeout(() => {
+        if (scrollRef.current && isAtBottomRef.current) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+        }
+      }, 350)
     }
   }, [isInitialLoading, messages.length])
 
-  // Reset initial scroll flag when the chat or backing message view changes.
+  // Re-scroll to bottom whenever the scroll container or its content resizes.
+  // Covers two cases: footer growing (reduces clientHeight) and content growing
+  // (increases scrollHeight). Both shift distanceFromBottom without triggering
+  // the message-list effect above.
   useEffect(() => {
-    hasInitialScrolled.current = false
-  }, [chatId, developerMode])
+    const el = scrollRef.current
+    if (!el) return
+    const observer = new ResizeObserver(() => {
+      if (isAtBottomRef.current) {
+        el.scrollTop = el.scrollHeight
+      }
+    })
+    observer.observe(el)
+    if (el.firstElementChild) observer.observe(el.firstElementChild)
+    return () => observer.disconnect()
+  }, [])
 
   // ── Load older messages on scroll-to-top ─────────────────────────────
   const loadOlderMessages = useCallback(() => {
@@ -689,8 +733,8 @@ export function ChatThread({
     const el = scrollRef.current
     if (!el) return
 
-    // Track whether we're at the bottom (within 40px tolerance).
-    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+    // Track whether we're near the bottom (within threshold).
+    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_BOTTOM_THRESHOLD
 
     // Load older messages when scrolled near the top.
     if (el.scrollTop < SCROLL_TOP_THRESHOLD) {
@@ -806,6 +850,7 @@ export function ChatThread({
                   agentHeaderClassName={agentHeaderClassName}
                   hideAgentHeader={msg.content.type === 'artifactRef'}
                   developerMode={developerMode}
+                  hideAttachmentPaths={hideAttachmentPaths}
                 />
               </div>
               {lastAssistantSlot && msg.id === lastAssistantId && (

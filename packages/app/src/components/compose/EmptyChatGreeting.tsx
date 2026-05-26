@@ -4,7 +4,6 @@ import { useAvatarUrl } from '@/hooks/use-avatar'
 import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'
 import { initialsOf } from '@/lib/initials'
 import { roomColor } from '@/components/rooms/roomColor'
-import { RoomyLogo } from '@/components/home/RoomyLogo'
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 
 interface EmptyChatGreetingProps {
@@ -47,10 +46,8 @@ export function EmptyChatGreeting({ workspace, hideAvatars, className }: EmptyCh
       {!hideAvatars && (
         <div className="flex items-center -space-x-2">
           <UserAvatar src={userAvatarUrl} name={name} />
-          {workspace ? (
+          {workspace && (
             <WorkspaceAvatar workspace={workspace} iconUrl={workspaceIcon} />
-          ) : (
-            <RoomyAvatar />
           )}
         </div>
       )}
@@ -120,18 +117,3 @@ function WorkspaceAvatar({
   )
 }
 
-function RoomyAvatar() {
-  // Pulled straight from the Figma — the stylised 𝒹 glyph on a
-  // pink-to-mint gradient circle (`RoomyLogo` is a 32×32 SVG). The
-  // outer `<span>` ring matches the user-avatar ring so the two
-  // circles read as a true overlap.
-  return (
-    <span
-      aria-label="Roomy"
-      title="Roomy"
-      className="block h-8 w-8 shrink-0 rounded-full ring-2 ring-background select-none"
-    >
-      <RoomyLogo className="h-full w-full text-foreground" />
-    </span>
-  )
-}

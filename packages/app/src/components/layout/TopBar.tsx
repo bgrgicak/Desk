@@ -15,7 +15,7 @@ import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 // `ChatView` so it can be centred on the chat column directly rather than
 // on the viewport.
 
-const TopBarActionsTargetContext = createContext<HTMLElement | null>(null)
+export const TopBarActionsTargetContext = createContext<HTMLElement | null>(null)
 // Second portal target: actions that belong to the *content* pane
 // (the file preview), positioned at that pane's right edge via the
 // `--topbar-content-actions-right` CSS var (a view sets it to the
@@ -216,6 +216,7 @@ export function TopBar({ workspace, trailing, className, hideBreadcrumb = false,
     </TopBarActionsTargetContext.Provider>
   )
 }
+
 
 export function TopBarActions({ children }: { children: ReactNode }) {
   const target = useContext(TopBarActionsTargetContext)

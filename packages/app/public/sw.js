@@ -16,11 +16,10 @@
 //     the SW can't proxy a WS upgrade anyway.
 //
 // Update flow:
-//   On install we precache the shell but DO NOT call self.skipWaiting().
-//   That keeps the new SW in the "waiting" state while the old one keeps
-//   serving the live tab. The app surfaces a toast with a Reload action;
-//   accepting it posts {type:'SKIP_WAITING'} to this worker, we activate,
-//   clients.claim() takes over, and the page reloads on controllerchange.
+//   On install we precache the shell and call self.skipWaiting() so the
+//   new SW activates immediately. service-worker.ts detects the resulting
+//   controllerchange event and reloads the page, giving users the new
+//   build without any manual "Reload" prompt.
 //
 // VERSION is substituted at build time by the inject-sw-version plugin
 // in vite.config.ts; in unbuilt copies it stays as the literal placeholder
@@ -43,16 +42,16 @@ const SHELL_URLS = [
 
 self.addEventListener('install', (event) => {
   // Precache the shell so a cold offline reload still resolves the SPA
-  // boot. We deliberately do not skipWaiting — the page will prompt the
-  // user and post SKIP_WAITING when they accept.
+  // boot. skipWaiting() activates the new SW immediately so users never
+  // run old code just because they ignored an update prompt.
   event.waitUntil(
-    caches
-      .open(CACHE_NAME)
-      .then((cache) => cache.addAll(SHELL_URLS))
-      .catch(() => {
-        // Precache failure shouldn't block install; the fetch handler
-        // will lazily populate the cache as requests come in.
-      }),
+    Promise.all([
+      caches
+        .open(CACHE_NAME)
+        .then((cache) => cache.addAll(SHELL_URLS))
+        .catch(() => {}),
+      self.skipWaiting(),
+    ]),
   );
 });
 
