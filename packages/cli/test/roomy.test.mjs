@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { detectMonorepo, ensureRoomyHome, resolvePublishedApiEntry, resolveAppDist } from "../src/roomy.mjs";
+import { detectMonorepo, ensureRoomyHome, resolvePublishedApiEntry, resolveAppDist, augmentPathForDocker } from "../src/roomy.mjs";
 
 const ROOMY_BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src/roomy.mjs");
 
@@ -109,6 +109,43 @@ describe("resolvePublishedApiEntry / resolveAppDist", () => {
       expect(path.isAbsolute(result)).toBe(true);
       expect(fs.existsSync(path.join(result, "index.html"))).toBe(true);
     }
+  });
+});
+
+describe("augmentPathForDocker", () => {
+  it("prepends Docker Desktop / Homebrew paths when missing", () => {
+    const result = augmentPathForDocker("/usr/bin:/bin:/usr/sbin:/sbin");
+    const parts = result.split(":");
+    expect(parts).toContain("/usr/local/bin");
+    expect(parts).toContain("/opt/homebrew/bin");
+    expect(parts).toContain("/Applications/Docker.app/Contents/Resources/bin");
+    // Original entries must still be present
+    expect(parts).toContain("/usr/bin");
+    expect(parts).toContain("/bin");
+  });
+
+  it("does not duplicate entries already present", () => {
+    const result = augmentPathForDocker("/usr/local/bin:/usr/bin:/bin");
+    const parts = result.split(":");
+    expect(parts.filter((p) => p === "/usr/local/bin").length).toBe(1);
+  });
+
+  it("treats undefined the same as the minimal launchd PATH", () => {
+    const result = augmentPathForDocker(undefined);
+    const parts = result.split(":");
+    expect(parts).toContain("/usr/local/bin");
+    expect(parts).toContain("/opt/homebrew/bin");
+    // Base fallback entries should be present
+    expect(parts).toContain("/usr/bin");
+    expect(parts).toContain("/bin");
+  });
+
+  it("preserves extras already in PATH without duplication", () => {
+    const input = "/opt/homebrew/bin:/usr/bin:/bin";
+    const result = augmentPathForDocker(input);
+    const parts = result.split(":");
+    expect(parts.filter((p) => p === "/opt/homebrew/bin").length).toBe(1);
+    expect(parts).toContain("/usr/local/bin");
   });
 });
 

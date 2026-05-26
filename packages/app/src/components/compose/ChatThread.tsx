@@ -488,7 +488,10 @@ export function ChatThread({
   const isAtBottomRef = useRef(true)
   /** When loading older messages, stores the scroll-height before prepend so
    *  we can restore the scroll position after the DOM updates. */
-  const scrollAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null)
+  const scrollAnchorRef = useRef<{ scrollHeight: number; scrollTop: number; firstMessageId: string | null } | null>(null)
+  /** Tracks the current first message ID so loadOlderMessages can capture it
+   *  without adding `messages` to its dependency array. */
+  const firstMessageIdRef = useRef<string | null>(null)
 
   const allItems = activeData?.items ?? []
   const prevCursor = activeData?.prevCursor
@@ -557,6 +560,10 @@ export function ChatThread({
     [activeData, developerMode, filterMessage, failedAgentTurn],
   )
 
+  // Keep firstMessageIdRef current so loadOlderMessages can read it without
+  // adding `messages` to its dependency array.
+  firstMessageIdRef.current = messages[0]?.id ?? null
+
   const lastAssistantId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === 'agent') return messages[i].id
@@ -614,15 +621,25 @@ export function ChatThread({
       }
     }
 
-    // If older messages were prepended (count grew AND we captured a scroll
-    // anchor), restore scroll position so the user's viewport doesn't jump.
+    // If older messages were prepended (count grew AND first message ID changed),
+    // restore scroll position so the user's viewport doesn't jump.
+    // Guard: only trigger when messages[0] changed — a WS-appended message at the
+    // bottom also increases count but leaves messages[0] the same. Without this
+    // guard, a simultaneous WS append while scrollAnchorRef is set (prevTop ≈ 0)
+    // would set scrollTop ≈ 0, randomly scrolling the user to the top.
     if (scrollAnchorRef.current && messages.length > prevMessageCountRef.current) {
-      const { scrollHeight: prevHeight, scrollTop: prevTop } = scrollAnchorRef.current
-      const newHeight = el.scrollHeight
-      el.scrollTop = prevTop + (newHeight - prevHeight)
+      if (messages[0]?.id !== scrollAnchorRef.current.firstMessageId) {
+        const { scrollHeight: prevHeight, scrollTop: prevTop } = scrollAnchorRef.current
+        const newHeight = el.scrollHeight
+        el.scrollTop = prevTop + (newHeight - prevHeight)
+        scrollAnchorRef.current = null
+        prevMessageCountRef.current = messages.length
+        return
+      }
+      // New message appended at the bottom while anchor was set — the anchor is
+      // stale (it was captured for a prepend that didn't happen yet or happened
+      // differently). Clear it so it doesn't suppress auto-scroll indefinitely.
       scrollAnchorRef.current = null
-      prevMessageCountRef.current = messages.length
-      return
     }
 
     prevMessageCountRef.current = messages.length
@@ -662,6 +679,7 @@ export function ChatThread({
       scrollAnchorRef.current = {
         scrollHeight: scrollRef.current.scrollHeight,
         scrollTop: scrollRef.current.scrollTop,
+        firstMessageId: firstMessageIdRef.current,
       }
     }
     setBeforeCursor(prevCursor)

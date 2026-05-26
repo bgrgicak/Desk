@@ -118,6 +118,27 @@ function spawnInherit(cmd, args, { env, cwd }) {
   });
 }
 
+/**
+ * Prepend the common Docker/container-runtime install locations to PATH.
+ * Under launchd (macOS) and systemd (Linux) the inherited PATH is minimal
+ * (/usr/bin:/bin:/usr/sbin:/sbin) and omits Homebrew and Docker Desktop.
+ * Without this the server's `detectEngine()` call can't find the `docker`
+ * binary, and every sandbox start fails with ContainerRuntimeUnavailableError.
+ */
+export function augmentPathForDocker(currentPath) {
+  const base = currentPath ?? "/usr/bin:/bin:/usr/sbin:/sbin";
+  const extras = [
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    "/Applications/Docker.app/Contents/Resources/bin",
+  ];
+  const parts = base.split(":");
+  for (const dir of extras) {
+    if (!parts.includes(dir)) parts.unshift(dir);
+  }
+  return parts.join(":");
+}
+
 function attachStopHandlers(...children) {
   const stop = () => {
     for (const child of children) child.kill("SIGTERM");
@@ -190,6 +211,9 @@ async function cmdStartPublished({ home }) {
     // to fall back on. Pulls from Docker Hub on first sandbox start.
     // Set ROOMY_SANDBOX_IMAGE to override (e.g. point at your own fork).
     ROOMY_SANDBOX_IMAGE: process.env.ROOMY_SANDBOX_IMAGE ?? "bgrgicak/roomy-ai:latest",
+    // Ensure Docker Desktop / Homebrew locations are in PATH even when
+    // launched from launchd/systemd which provide a minimal daemon PATH.
+    PATH: augmentPathForDocker(process.env.PATH),
   };
 
   log(`roomy-server → http://127.0.0.1:${PORT}/  (serves API + SPA)`);
