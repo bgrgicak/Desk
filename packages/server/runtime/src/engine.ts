@@ -320,14 +320,13 @@ export interface Engine {
 }
 
 /** Process env for the chosen binary. */
-function engineEnv(name: EngineName): NodeJS.ProcessEnv {
-  if (name === "nerdctl") {
-    // nerdctl needs XDG_RUNTIME_DIR to find rootless containerd's socket.
-    // Default to /run/user/<uid> if the parent process didn't set it.
-    if (!process.env.XDG_RUNTIME_DIR) {
-      const uid = (process.getuid?.() ?? 1000).toString();
-      return { ...process.env, XDG_RUNTIME_DIR: `/run/user/${uid}` };
-    }
+function engineEnv(_name: EngineName): NodeJS.ProcessEnv {
+  // Both docker (rootless / Docker Desktop on Linux) and nerdctl use
+  // $XDG_RUNTIME_DIR/<binary>.sock when /var/run/docker.sock doesn't exist.
+  // Systemd user services often don't inherit XDG_RUNTIME_DIR, so default it.
+  if (!process.env.XDG_RUNTIME_DIR) {
+    const uid = (process.getuid?.() ?? 1000).toString();
+    return { ...process.env, XDG_RUNTIME_DIR: `/run/user/${uid}` };
   }
   return process.env;
 }

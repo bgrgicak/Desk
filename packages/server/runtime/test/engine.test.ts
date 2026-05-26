@@ -180,10 +180,9 @@ async function binaryWorks(name: EngineName): Promise<boolean> {
       name,
       ["info", "--format", "{{.ID}}"],
       {
-        env:
-          name === "nerdctl"
-            ? { ...process.env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 1000}` }
-            : process.env,
+        env: process.env.XDG_RUNTIME_DIR
+          ? process.env
+          : { ...process.env, XDG_RUNTIME_DIR: `/run/user/${process.getuid?.() ?? 1000}` },
         stdio: "ignore",
         timeout: 3000,
         killSignal: "SIGKILL",

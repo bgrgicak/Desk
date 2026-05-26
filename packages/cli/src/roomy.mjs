@@ -280,6 +280,7 @@ ExecStart=${nodeBin} ${roomyBin} start
 Restart=on-failure
 RestartSec=10
 Environment=ROOMY_HOME=${home}
+Environment=XDG_RUNTIME_DIR=/run/user/%U
 
 [Install]
 WantedBy=default.target
