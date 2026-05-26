@@ -8,7 +8,7 @@ import { createHub, createWorkspace } from "./workspaces.js";
 import { enforcePasswordPolicy } from "../auth/passwordPolicy.js";
 const log = withModule("api/routes/auth");
 
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export async function handleLogin(
   pool: Pool,
@@ -18,37 +18,6 @@ export async function handleLogin(
   if (!user) throw new UnauthorizedError("Invalid credentials");
 
   const token = await issueSession(pool, user.id);
-  return { token };
-}
-
-/**
- * Auto-login for the local Roomy owner. This is intentionally not tied to
- * Vite/dev mode: production desktop/static-server builds need the same
- * no-friction boot path as `npm run dev`.
- *
- * Set ROOMY_AUTO_LOGIN=off to force the manual LoginScreen instead.
- */
-export async function handleAutoLogin(
-  pool: Pool,
-): Promise<{ token: string }> {
-  if ((process.env.ROOMY_AUTO_LOGIN ?? "on").toLowerCase() === "off") {
-    throw new UnauthorizedError("Auto-login is disabled");
-  }
-
-  const preferredUsername = process.env.ROOMY_SEED_USERNAME ?? "roomy";
-  const preferred = await queries.users.findByUsername(pool, preferredUsername);
-  let userId = preferred?.id;
-
-  if (!userId) {
-    const { rows } = await pool.query<{ id: string }>(
-      "SELECT id FROM users ORDER BY created_at ASC LIMIT 1",
-    );
-    userId = rows[0]?.id;
-  }
-
-  if (!userId) throw new UnauthorizedError("No user is available for auto-login");
-
-  const token = await issueSession(pool, userId);
   return { token };
 }
 

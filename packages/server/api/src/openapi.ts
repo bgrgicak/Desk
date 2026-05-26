@@ -151,16 +151,6 @@ export function generateOpenApiSpec(): OpenApiSpec {
           },
         },
       },
-      "/auth/auto-login": {
-        post: {
-          summary: "Auto-login as the local Roomy owner",
-          security: [],
-          responses: {
-            "200": { description: "Session token", content: { "application/json": { schema: { type: "object", properties: { token: { type: "string" } } } } } },
-            "401": { description: "Auto-login disabled or no user available" },
-          },
-        },
-      },
       "/auth/logout": {
         post: { summary: "Log out", responses: { "200": { description: "OK" } } },
       },

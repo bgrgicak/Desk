@@ -29,7 +29,7 @@ export async function recordClientTimezone(
  * every URL).
  */
 const PUBLIC_EXACT = new Set(["/", "/auth/signup-status"]);
-const PUBLIC_PREFIXES = ["/auth/login", "/auth/auto-login", "/auth/signup", "/openapi.json"];
+const PUBLIC_PREFIXES = ["/auth/login", "/auth/signup", "/openapi.json"];
 
 // Routes under /internal/* use their own loopback + shared-secret auth
 // (see auth/internal.ts). The user-session middleware skips them so the

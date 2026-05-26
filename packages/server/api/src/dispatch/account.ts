@@ -8,13 +8,12 @@ import * as workspaceRoutes from "../routes/workspaces.js";
 import { parseBody, sendJson } from "../http/io.js";
 import { denyOverLimit } from "../http/rate-limit-response.js";
 import { getClientIp } from "../auth/rateLimit.js";
-import { isLoopbackAddress } from "../http/security-headers.js";
 import type { DispatchContext } from "./context.js";
 
 /**
  * Dispatcher for the user-account surface:
  *
- *   /auth/{login, auto-login, signup, signup-status, logout}
+ *   /auth/{login, signup, signup-status, logout}
  *   /me, /me/password, /me/providers(/meta|/local), /me/connections,
  *     /me/key-access-log
  *   /vault/{status, setup, unlock, lock}
@@ -43,25 +42,6 @@ export async function dispatchAccount(
     if (denyOverLimit(res, "auth.login", getClientIp(req))) return true;
     const body = await parseBody(req) as { email: string; password: string };
     const result = await authRoutes.handleLogin(pool, body);
-    sendJson(res, 200, result);
-    return true;
-  }
-  if (path === "/auth/auto-login" && method === "POST") {
-    // Auto-login mints a bearer for the seed user without credentials,
-    // so the call must originate from loopback. A request that reaches
-    // the API from a remote address either means the operator put
-    // roomy-server on a public interface deliberately or a reverse-proxy
-    // forwarded it — both should fall back to the manual LoginScreen
-    // rather than minting a free token. ROOMY_TRUST_PROXY=1 disables
-    // the loopback check so an operator who really wants public auto-
-    // login can opt in explicitly.
-    const remote = req.socket?.remoteAddress ?? "";
-    if (!isLoopbackAddress(remote) && process.env.ROOMY_TRUST_PROXY !== "1") {
-      sendJson(res, 403, { code: "FORBIDDEN", message: "Auto-login restricted to loopback" });
-      return true;
-    }
-    if (denyOverLimit(res, "auth.autoLogin", getClientIp(req))) return true;
-    const result = await authRoutes.handleAutoLogin(pool);
     sendJson(res, 200, result);
     return true;
   }

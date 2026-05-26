@@ -101,11 +101,9 @@ const LOOPBACK_ORIGIN_PATTERN =
   /^https?:\/\/(localhost|127(?:\.\d{1,3}){3}|\[::1\]|\[::ffff:127(?:\.\d{1,3}){3}\])(:\d+)?$/;
 
 /**
- * True when `addr` is a loopback IP. Shared by the WS Origin check
- * (matches against the host part of an origin URL) and the
- * /auth/auto-login dispatcher (matches against req.socket.remoteAddress
- * directly). Covers 127.0.0.0/8 and the two IPv6 loopback shapes Node
- * emits as `req.socket.remoteAddress`.
+ * True when `addr` is a loopback IP. Used by the WS Origin check
+ * (matches against the host part of an origin URL). Covers 127.0.0.0/8
+ * and the two IPv6 loopback shapes Node emits as `req.socket.remoteAddress`.
  *
  * Tight octet match (0–255 only) so the helper can't accidentally
  * accept a malformed string like "127.999.999.999" if it ever gets
