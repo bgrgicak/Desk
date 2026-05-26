@@ -419,21 +419,27 @@ function isServiceInstalled() {
 }
 
 /**
- * Remove every `roomy/*` container image via the nerdctl wrapper.
- * Best-effort: a stopped Colima or missing wrapper exits silently.
+ * Remove every `roomy/*` container image. Best-effort: a stopped runtime
+ * or missing binary exits silently.
+ *
+ * macOS uses the nerdctl wrapper (Colima/containerd); Linux uses Docker.
  */
 function removeRoomyImages() {
   const home = process.env.ROOMY_HOME ?? path.join(os.homedir(), "Roomy");
   const wrapper = nerdctlWrapperPath(home);
-  const nerdctl = fs.existsSync(wrapper) ? wrapper : (findColima(home) ? "nerdctl" : null);
-  if (!nerdctl) return 0;
+  // macOS: prefer the nerdctl wrapper, fall back to bare nerdctl if colima is
+  // on PATH. Linux: Docker is the native runtime.
+  const tool = fs.existsSync(wrapper)
+    ? wrapper
+    : (process.platform === "darwin" ? (findColima(home) ? "nerdctl" : null) : "docker");
+  if (!tool) return 0;
 
-  const list = spawnSync(nerdctl, ["images", "--format", "{{.Repository}}:{{.Tag}}"], { encoding: "utf-8" });
+  const list = spawnSync(tool, ["images", "--format", "{{.Repository}}:{{.Tag}}"], { encoding: "utf-8" });
   if (list.status !== 0) return 0;
 
   let removed = 0;
   for (const tag of list.stdout.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("roomy/"))) {
-    const { status } = spawnSync(nerdctl, ["rmi", "-f", tag], { stdio: "inherit" });
+    const { status } = spawnSync(tool, ["rmi", "-f", tag], { stdio: "inherit" });
     if (status === 0) removed += 1;
   }
   return removed;
