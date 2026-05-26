@@ -209,8 +209,7 @@ describe("hub workspace boot pass", () => {
 });
 
 describe("GET /workspaces", () => {
-  it("hides the hub workspace from the list", async () => {
-    // Sanity check: the hub exists in the DB before we hit the API.
+  it("includes the hub workspace in the list", async () => {
     const hubRow = await queries.workspaces.findHubByUser(pool, userId);
     expect(hubRow).not.toBeNull();
 
@@ -222,11 +221,12 @@ describe("GET /workspaces", () => {
     const list = await request("GET", "/workspaces", token);
     expect(list.status).toBe(200);
     const items = list.body as Array<{ id: string; kind: string; path: string }>;
-    expect(items.length).toBeGreaterThanOrEqual(1);
-    for (const w of items) {
-      expect(w.kind).toBe("project");
-      expect(w.id).not.toBe(hubRow!.id);
-    }
+    expect(items.length).toBeGreaterThanOrEqual(2);
+    const hubItem = items.find(w => w.id === hubRow!.id);
+    expect(hubItem).toBeDefined();
+    expect(hubItem!.kind).toBe("hub");
+    const projectItems = items.filter(w => w.kind === "project");
+    expect(projectItems.length).toBeGreaterThanOrEqual(1);
   });
 });
 

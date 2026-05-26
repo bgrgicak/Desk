@@ -1233,12 +1233,11 @@ describe.skipIf(!REAL_STACK_E2E_ENABLED || !REAL_E2E_SANDBOX_AVAILABLE)(
     });
     expect(msgRes.status).toBe(201);
 
-    // Wait until the runtime writes the agent file. Pi reads
-    // <cwd>/AGENTS.md from cwd up through parent directories, so the
-    // driver now writes a single AGENTS.md at the workspace root. The
-    // rendered body contains the user-memory fragment we're asserting
-    // on.
-    const agentFile = path.join(realHome, workspaceSlug, "AGENTS.md");
+    // Wait until the runtime writes the system prompt file. Pi reads
+    // <cwd>/.pi/SYSTEM.md as a project-level system prompt that replaces
+    // its default. The rendered body contains the user-memory fragment
+    // we're asserting on.
+    const agentFile = path.join(realHome, workspaceSlug, ".pi", "SYSTEM.md");
     let body = "";
     for (let i = 0; i < 60; i++) {
       await new Promise((r) => setTimeout(r, 1000));
