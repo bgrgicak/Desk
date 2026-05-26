@@ -1,6 +1,6 @@
 {
   "name": "@roomy-ai/api",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
@@ -34,11 +34,11 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@roomy-ai/db": "0.1.9",
-    "@roomy-ai/runtime": "0.1.9",
-    "@roomy-ai/scheduler": "0.1.9",
-    "@roomy-ai/shared": "0.1.9",
-    "@roomy-ai/storage": "0.1.9",
+    "@roomy-ai/db": "0.1.10",
+    "@roomy-ai/runtime": "0.1.10",
+    "@roomy-ai/scheduler": "0.1.10",
+    "@roomy-ai/shared": "0.1.10",
+    "@roomy-ai/storage": "0.1.10",
     "@noble/hashes": "^1.8.0",
     "@types/busboy": "^1.5.4",
     "@types/ws": "^8.5.14",
