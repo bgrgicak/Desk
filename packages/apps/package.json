@@ -1,6 +1,6 @@
 {
   "name": "@roomy-ai/apps",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "type": "module",
   "description": "Roomy-shipped built-in apps. Synced to ~/Roomy/.apps/ on server start and mounted into every sandbox at /opt/roomy-apps/.",
   "scripts": {
