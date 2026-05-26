@@ -1,6 +1,6 @@
 {
   "name": "@roomy-ai/cli",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "license": "MIT",
   "description": "Host CLI for the Roomy personal AI assistant. `npx @roomy-ai/cli` boots the full stack on http://127.0.0.1:35138/.",
   "type": "module",
@@ -25,13 +25,13 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@roomy-ai/api": "0.1.7",
-    "@roomy-ai/app": "0.1.7",
-    "@roomy-ai/db": "0.1.7",
-    "@roomy-ai/runtime": "0.1.7",
-    "@roomy-ai/scheduler": "0.1.7",
-    "@roomy-ai/shared": "0.1.7",
-    "@roomy-ai/storage": "0.1.7",
+    "@roomy-ai/api": "0.1.8",
+    "@roomy-ai/app": "0.1.8",
+    "@roomy-ai/db": "0.1.8",
+    "@roomy-ai/runtime": "0.1.8",
+    "@roomy-ai/scheduler": "0.1.8",
+    "@roomy-ai/shared": "0.1.8",
+    "@roomy-ai/storage": "0.1.8",
     "tsx": "^4.19.2"
   }
 }

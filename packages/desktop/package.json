@@ -1,6 +1,6 @@
 {
   "name": "@roomy-ai/desktop",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "type": "module",
   "description": "Roomy desktop application (Electron)",
   "author": "Agent Roomy",
