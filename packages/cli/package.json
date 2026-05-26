@@ -9,7 +9,7 @@
   },
   "files": [
     "dist",
-    "src/roomy.mjs",
+    "src",
     "package.json",
     "README.md"
   ],

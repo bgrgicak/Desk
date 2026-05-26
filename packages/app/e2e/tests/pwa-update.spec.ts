@@ -91,15 +91,15 @@ test.describe.serial("PWA update flow", () => {
     ).toBeHidden({ timeout: 1500 });
   });
 
-  test("an updated SW shows a versioned toast and applying it activates the new worker", async ({ page, baseURL }) => {
+  test("an updated SW activates immediately and the page reloads automatically", async ({ page, baseURL }) => {
     // Cold visit → install the baseline SW.
     await page.goto(baseURL!);
     await page.evaluate(async () => {
       await navigator.serviceWorker.ready;
       // Wait until this page is actually under SW control. clients.claim()
       // in activate races the navigation; without this the .update() below
-      // may install a new SW with no controller present, so promptForUpdate
-      // skips (controller-gate) and the test would hang on the toast.
+      // may install a new SW with no controller present, so the
+      // controllerchange reload is skipped and the test would time out.
       if (!navigator.serviceWorker.controller) {
         await new Promise<void>((resolve) => {
           navigator.serviceWorker.addEventListener("controllerchange", () => resolve(), { once: true });
@@ -112,36 +112,25 @@ test.describe.serial("PWA update flow", () => {
     rewriteSwVersion(newVersion);
     const newCacheName = swCacheName(newVersion);
 
-    // Force the browser to refetch /sw.js. With different bytes it
-    // installs as a new SW and parks in "waiting" — our setup never
-    // calls skipWaiting() on install.
+    // Force the browser to refetch /sw.js. The new SW calls skipWaiting()
+    // during install, so it activates immediately (no "waiting" phase).
+    // service-worker.ts's controllerchange handler then reloads the page.
+    const reloadPromise = page.waitForNavigation({ timeout: 10_000 });
     await page.evaluate(async () => {
       const reg = await navigator.serviceWorker.ready;
-      await reg.update();
+      // Don't await — the page reload triggered by controllerchange will
+      // destroy the execution context before reg.update() resolves.
+      void reg.update();
     });
+    await reloadPromise;
 
-    await expect(page.getByText("A new version of Roomy is available")).toBeVisible({ timeout: 5000 });
+    // The update is silent — no "A new version of Roomy is available" toast.
     await expect(
-      page.getByText(`Reload to update from ${originalVersion} to ${newVersion}.`),
-    ).toBeVisible();
+      page.getByText("A new version of Roomy is available"),
+    ).toBeHidden({ timeout: 2000 });
 
-    const beforeApply = await page.evaluate(async () => {
-      const reg = await navigator.serviceWorker.ready;
-      return {
-        waiting: reg.waiting?.scriptURL ?? null,
-        caches: await caches.keys(),
-      };
-    });
-    expect(beforeApply.waiting).toContain("/sw.js");
-    expect(beforeApply.caches.sort()).toEqual(
-      [originalCacheName, newCacheName].sort(),
-    );
-
-    // Clicking Reload posts SKIP_WAITING → activate → controllerchange,
-    // and the page reloads itself. The new SW drops the old cache during
-    // activate, so afterwards only `roomy-app-${newVersion}` remains.
-    await page.getByRole("button", { name: "Reload" }).click();
-
+    // After the automatic reload the new SW is active with no worker waiting,
+    // and the old cache has been dropped by the activate handler.
     await expect.poll(
       async () => {
         try {
@@ -153,9 +142,6 @@ test.describe.serial("PWA update flow", () => {
             };
           });
         } catch (err) {
-          // Clicking Reload intentionally triggers a page reload via
-          // controllerchange. If Playwright evaluates during that navigation,
-          // retry the poll instead of failing the whole spec.
           if (String((err as Error)?.message ?? err).includes("Execution context was destroyed")) {
             return { waiting: "navigation-in-progress", caches: [] };
           }

@@ -318,6 +318,9 @@ hr
 say "Installing dependencies + refreshing lockfile..."
 npm install
 
+say "Cleaning previous build artifacts..."
+find . -name dist -type d -not -path '*/node_modules/*' -exec rm -rf '{}' + 2>/dev/null || true
+
 say "Building all packages..."
 npm run build:packages
 
