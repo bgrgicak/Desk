@@ -21,11 +21,10 @@ function rowToWorkspace(row: Record<string, unknown>): Workspace {
 }
 
 /**
- * Sort order for `listByUser`: hub first (one per user, the home base),
- * then projects by created_at. Used by `GET /workspaces` so the client
- * can identify the hub by index/`kind` on the first item.
+ * Sort order for `listByUser`: project workspaces first by created_at,
+ * hub workspace last. Clients identify the hub by `kind`, not by index.
  */
-const LIST_SORT = `ORDER BY (kind = 'hub') DESC, created_at`;
+const LIST_SORT = `ORDER BY (kind = 'hub') ASC, created_at`;
 
 export async function list(db: Pool): Promise<Workspace[]> {
   const { rows } = await db.query(`SELECT * FROM workspaces ${LIST_SORT}`);
