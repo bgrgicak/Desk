@@ -415,7 +415,7 @@ describe("writeWorkspaceMcpConfig", () => {
 });
 
 describe("writeAgentFile", () => {
-  it("writes AGENTS.md at the workspace root (pi's auto-discovered location)", async () => {
+  it("writes .pi/SYSTEM.md at the workspace root (replaces pi's default system prompt)", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-agentfile-"));
     try {
       await ensureLayout(home);
@@ -426,13 +426,18 @@ describe("writeAgentFile", () => {
         model: "anthropic/claude-haiku-4-5",
         userName: "Roomy",
       });
-      const target = path.join(workspaceRootPath(home, "ws"), "AGENTS.md");
+      // Pi reads .pi/SYSTEM.md as a project-level system prompt that replaces
+      // its default — same role as opencode's mode:primary custom agent file.
+      const target = path.join(workspaceRootPath(home, "ws"), ".pi", "SYSTEM.md");
       const body = await fs.readFile(target, "utf-8");
       expect(body).toContain("# Helper");
       expect(body).toContain("You are Helper, call me Roomy.");
       // No pi-specific frontmatter leaks into the file.
       expect(body).not.toContain("model:");
       expect(body).not.toContain("permission:");
+      // AGENTS.md is left untouched for user customization.
+      const agentsMd = path.join(workspaceRootPath(home, "ws"), "AGENTS.md");
+      await expect(fs.access(agentsMd)).rejects.toThrow();
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }

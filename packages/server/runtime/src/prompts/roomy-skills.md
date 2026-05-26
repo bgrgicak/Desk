@@ -202,7 +202,15 @@ ships these as built-in fragments, each at
 - `number` — numeric. `--param question="..."` (optional `--param min=1 --param max=99`).
 - `date` — calendar date. `--param question="..."`.
 - `rating` — 1..N star rating. `--param question="..."` (optional `--param max=5`).
-- `multi-step` — wizard combining several steps in one turn. `--param steps='[{"type":"...","question":"..."}, ...]'`. Use this when you would otherwise attach three or more single-question fragments in a row.
+- `multi-step` — wizard combining several steps in one turn. Use this when you would otherwise attach three or more single-question fragments in a row. **Always pass `steps` via a heredoc** so apostrophes in question text don't break the shell quoting:
+  ```sh
+  _STEPS=$(cat << 'STEPS_JSON'
+  [{"type":"short-text","question":"What's your name?"},{"type":"number","question":"How many seats?"}]
+  STEPS_JSON
+  )
+  roomy-agent chat attach-artifact /opt/roomy-apps/chat-forms.app/dist/fragments/multi-step --param "steps=$_STEPS"
+  ```
+  Never use `--param steps='[...]'` with single quotes — an apostrophe inside a question (e.g. "What's") will terminate the quoted string and truncate the JSON.
 
 For one question, attach one single-question fragment, let the user answer
 (their reply comes back as a normal chat message), then continue. For three
