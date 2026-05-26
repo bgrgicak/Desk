@@ -22,6 +22,19 @@ const pendingProgressLogByMessageId = new Map<string, AgentLogEntry[]>();
 const MAX_PENDING_ENTRIES_PER_MESSAGE = 500;
 const MAX_PENDING_MESSAGES = 100;
 
+/**
+ * Buffer for `message.appended` events that arrived while the
+ * `getChatMessages` cache for that chatId was still pending (initial
+ * fetch in flight). `updateQueryData` is a no-op when the cache has no
+ * data yet, so these messages would otherwise be silently lost if the
+ * server's GET response was generated before the message row was
+ * committed (a genuine race between the initial page-load fetch and the
+ * POST /messages round-trip). Drained in the `getChatMessages.matchFulfilled`
+ * handler, which deduplicates against whatever the server returned.
+ */
+const pendingAppendedByChat = new Map<string, ServerMessage[]>();
+const MAX_PENDING_APPENDED_MESSAGES = 500;
+
 function rememberPendingProgress(messageId: string, entries: AgentLogEntry[]): void {
   if (entries.length === 0) return;
   const existing = pendingProgressLogByMessageId.get(messageId) ?? [];
@@ -743,6 +756,34 @@ export const wsMiddleware: Middleware = (storeApi) => {
         storeApi.dispatch as (a: unknown) => unknown,
         storeApi.getState as () => unknown,
       );
+      // Drain any message.appended events that raced the initial cache
+      // load (arrived while the cache was pending, making updateQueryData
+      // a no-op). Only on the initial load — pagination fulfillments
+      // (before/cursor set) don't need this because the initial cache is
+      // already populated.
+      const args = action.meta.arg.originalArgs as
+        | { chatId?: string; before?: string; cursor?: string; full?: boolean }
+        | undefined;
+      const chatId = args?.chatId;
+      if (chatId && !args?.before && !args?.cursor) {
+        const buffered = pendingAppendedByChat.get(chatId);
+        if (buffered?.length) {
+          pendingAppendedByChat.delete(chatId);
+          const d = storeApi.dispatch as (a: unknown) => unknown;
+          for (const raw of buffered) {
+            const m = mergeProgressLog(raw);
+            const tl = compactTimelineMessage(m);
+            d(api.util.updateQueryData("getChatMessages", { chatId: m.chatId, full: false }, (draft) => {
+              if (draft.items.some((x) => x.id === m.id)) return;
+              if (tl) draft.items.push(mergeProgressLog(tl));
+            }));
+            d(api.util.updateQueryData("getChatMessages", { chatId: m.chatId, full: true }, (draft) => {
+              if (draft.items.some((x) => x.id === m.id)) return;
+              draft.items.push(m);
+            }));
+          }
+        }
+      }
     }
     return result;
   };
@@ -895,6 +936,24 @@ export function applyEventToCache(
       // leaks out on the next refetch. markChatReadQuietly fires a raw
       // PATCH that clears unread on the server without triggering RTK
       // Query tag invalidation, avoiding the flash entirely.
+      if (event.type === "message.appended" && getState) {
+        // If the getChatMessages cache for this chatId had no data when
+        // the updateQueryData calls ran above, those were no-ops. Buffer
+        // the raw message so the matchFulfilled handler below can inject
+        // it once the cache is populated (deduping against whatever the
+        // server returned in the initial fetch).
+        const s = (getState() as Record<string, unknown>)[api.reducerPath] as
+          | { queries?: Record<string, { data?: ListMessagesResponse }> }
+          | undefined;
+        const hasCache =
+          s?.queries?.[`${msg.chatId}:timeline`]?.data !== undefined ||
+          s?.queries?.[`${msg.chatId}:full`]?.data !== undefined;
+        if (!hasCache) {
+          const arr = pendingAppendedByChat.get(msg.chatId) ?? [];
+          if (arr.length < MAX_PENDING_APPENDED_MESSAGES) arr.push(rawMsg);
+          pendingAppendedByChat.set(msg.chatId, arr);
+        }
+      }
       if (event.type === "message.appended") {
         const isInternal = isInternalChatMessage(msg);
         if (!isInternal) {

@@ -155,12 +155,9 @@ export async function startRoomyServer(
     ROOMY_FAKE_DRIVER_STEP_DELAY_MS: "500",
     // Poll every 2 s so scheduler e2e tests don't have to wait a full minute.
     ROOMY_SCHEDULER_POLL_INTERVAL_MS: "2000",
-    // The current app UI bounces to `workspaces[0]` and expects the seeded
-    // "Roomy" project workspace to live there. The hub workspace would sort
-    // first if auto-created, breaking every test that selects the default
-    // workspace. UI affordances for the hub are out of scope for this
-    // change set — opt out at boot until the UI catches up.
-    ROOMY_HUB_AUTO_CREATE: "off",
+    // Hub workspaces are filtered from GET /workspaces, so enabling
+    // auto-create does not affect workspaces[0] seen by other tests.
+    // Required for the /me/ask-ai-chat endpoint (used by Ask AI e2e tests).
     ROOMY_FAKE_DRIVER_LOG_PROVIDER_KEYS: "1",
     // The e2e suite logs in for every spec, which makes the per-IP
     // auth.login rate-limit (10/min by default) fire and 429 later
