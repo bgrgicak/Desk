@@ -5,7 +5,12 @@
  * in plain Node without needing a mock of `electron/main`.
  */
 
-export const DEFAULT_SANDBOX_IMAGE = "bgrgicak/roomy-ai:latest";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+const pkg = require("../package.json") as { version?: string };
+
+export const DEFAULT_SANDBOX_IMAGE = `bgrgicak/roomy-ai:${pkg.version ?? "latest"}`;
 
 /**
  * On macOS, apps launched from the Dock/Finder receive a minimal PATH
@@ -50,8 +55,8 @@ export function buildServerEnvConfig(opts: {
     // Mirror what the CLI does in published mode. The default "roomy/sandbox:v1"
     // only exists in a monorepo dev checkout (built locally); distributed
     // desktop users have no such image and Docker cannot pull it from any
-    // registry — causing every chat turn to fail with "Agent run failed before
-    // it could complete." Point at the registry-published image instead.
+    // registry. Use the package-version registry tag so a mutable `latest`
+    // manifest cannot drift away from the installed runtime.
     ROOMY_SANDBOX_IMAGE: process.env.ROOMY_SANDBOX_IMAGE ?? DEFAULT_SANDBOX_IMAGE,
   };
 }

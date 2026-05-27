@@ -5,7 +5,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { detectMonorepo, ensureRoomyHome, resolvePublishedApiEntry, resolveAppDist, augmentPath } from "../src/roomy.mjs";
+import {
+  augmentPath,
+  defaultSandboxImage,
+  detectMonorepo,
+  ensureRoomyHome,
+  packageVersion,
+  resolveAppDist,
+  resolvePublishedApiEntry,
+} from "../src/roomy.mjs";
 
 const ROOMY_BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src/roomy.mjs");
 
@@ -108,6 +116,22 @@ describe("resolvePublishedApiEntry / resolveAppDist", () => {
     if (result !== null) {
       expect(path.isAbsolute(result)).toBe(true);
       expect(fs.existsSync(path.join(result, "index.html"))).toBe(true);
+    }
+  });
+});
+
+describe("defaultSandboxImage", () => {
+  it("uses the package version tag instead of mutable latest", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "roomy-cli-image-"));
+    try {
+      await fsp.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "@roomy-ai/cli", version: "1.2.3" }),
+      );
+      expect(packageVersion(root)).toBe("1.2.3");
+      expect(defaultSandboxImage(root)).toBe("bgrgicak/roomy-ai:1.2.3");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 });

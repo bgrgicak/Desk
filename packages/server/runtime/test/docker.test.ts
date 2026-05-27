@@ -267,6 +267,23 @@ describe("waitForEntrypointReady", () => {
     expect(calls).toBe(1);
   });
 
+  it("bails immediately when Docker says the container is not running", async () => {
+    let calls = 0;
+    const engine = engineWithExec(() => {
+      calls++;
+      return {
+        code: 1,
+        stderr: "Error response from daemon: container 4118b44d870701f0 is not running",
+      };
+    });
+    const start = Date.now();
+    await expect(waitForEntrypointReady(engine, "4118b44d", 60_000)).rejects.toThrow(
+      /no longer present/i,
+    );
+    expect(Date.now() - start).toBeLessThan(2_000);
+    expect(calls).toBe(1);
+  });
+
   it("keeps polling on non-container-gone errors until ready", async () => {
     let calls = 0;
     const engine = engineWithExec(() => {

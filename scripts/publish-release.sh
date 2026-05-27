@@ -10,9 +10,9 @@
 #   4. Install + build + npm pack smoke test.
 #   5. Final confirm — last chance to bail.
 #   6. git commit "chore(release): vX".
-#   7. npm publish --workspaces --access public  (uses local npm login; publishConfig.tag=alpha).
-#   8. Build + push the sandbox Docker image to Docker Hub at
-#      <repo>:<version> + <repo>:alpha (uses `docker login`).
+#   7. npm publish --workspaces --access public  (uses local npm login; publishConfig.tag=latest).
+#   8. Build + push the multi-platform sandbox Docker image to Docker Hub at
+#      <repo>:<version> + <repo>:latest (uses `docker login`).
 #   9. git tag vX, push branch + tag. The tag push triggers
 #      .github/workflows/desktop-release.yml, which builds the macOS DMG
 #      on a macos-latest runner and uploads it to the GH Release.
@@ -198,6 +198,7 @@ fi
 # Docker — installed, daemon up, logged in to Docker Hub.
 command -v docker >/dev/null 2>&1 || die "docker is not installed."
 docker info >/dev/null 2>&1 || die "Docker daemon not reachable. Start docker first."
+docker buildx version >/dev/null 2>&1 || die "docker buildx is required for multi-platform sandbox image publishing."
 say "Checking Docker Hub authentication..."
 # docker info shows Username when credentials are stored in config.json.
 # On macOS Docker Desktop, creds go into the OS keychain, so docker info
@@ -222,19 +223,21 @@ fi
 ok "Docker logged in as: $docker_user"
 
 # Full Docker Hub repository (namespace/repo, without tag). Default is
-# `bgrgicak/roomy-ai` to match the hardcoded ROOMY_SANDBOX_IMAGE in
+# `bgrgicak/roomy-ai` to match the default image repository in
 # @roomy-ai/cli's cmdStartPublished. Override via ROOMY_DOCKER_REPO if
-# you publish elsewhere — but then update that CLI hardcode too or
+# you publish elsewhere — but then update that CLI default too or
 # `npx @roomy-ai/cli` users will pull the wrong image.
 DOCKER_REPO="${ROOMY_DOCKER_REPO:-$(ask "Docker Hub repository (namespace/repo)" "bgrgicak/roomy-ai")}"
 [ -n "$DOCKER_REPO" ] || die "No Docker repo given."
 if [ "$DOCKER_REPO" != "bgrgicak/roomy-ai" ]; then
-  warn "Repo $DOCKER_REPO doesn't match the hardcoded default in"
-  warn "packages/cli/src/roomy.mjs (ROOMY_SANDBOX_IMAGE=bgrgicak/roomy-ai:alpha)."
-  warn 'Update that hardcode too, or `npx @roomy-ai/cli` users will pull the wrong image.'
+  warn "Repo $DOCKER_REPO doesn't match the default image repository in"
+  warn "packages/cli/src/roomy.mjs and packages/desktop/src/server-env.ts."
+  warn 'Update those defaults too, or published users will pull the wrong image.'
   confirm "Continue?" || die "Aborted."
 fi
 ok "Will push image as: ${c_bold}${DOCKER_REPO}${c_reset}"
+DOCKER_PLATFORMS="${ROOMY_DOCKER_PLATFORMS:-linux/amd64,linux/arm64}"
+ok "Sandbox image platforms: ${DOCKER_PLATFORMS}"
 
 hr
 
@@ -352,6 +355,7 @@ done
 echo "  3. docker build + push:"
 echo "       ${DOCKER_REPO}:${NEW_VERSION}"
 echo "       ${DOCKER_REPO}:latest"
+echo "       platforms: ${DOCKER_PLATFORMS}"
 echo "  4. git tag $TAG and push trunk + $TAG to origin"
 echo "     → triggers .github/workflows/desktop-release.yml on a macos-latest"
 echo "       runner, which builds + uploads the macOS DMG to the GH Release."
@@ -399,25 +403,24 @@ ok "npm publish complete."
 IMAGE_VERSION_TAG="${DOCKER_REPO}:${NEW_VERSION}"
 IMAGE_LATEST_TAG="${DOCKER_REPO}:latest"
 
-say "Building sandbox Docker image (this can take a few minutes)..."
-# Build once with both tags so the latest pointer and the pinned version
-# share the same image ID — no duplicate work for the second push.
-if ! docker build \
+say "Building and pushing sandbox Docker image for ${DOCKER_PLATFORMS} (this can take a few minutes)..."
+# Build once with both tags and push a multi-platform manifest. Published
+# installs run on both Apple Silicon and linux/amd64; a single-platform
+# push leaves the other host architecture with `exec format error` before
+# the sandbox entrypoint can run.
+if ! docker buildx build \
+    --platform "$DOCKER_PLATFORMS" \
+    --push \
     -f packages/server/runtime/Dockerfile.sandbox \
     -t "$IMAGE_VERSION_TAG" \
     -t "$IMAGE_LATEST_TAG" \
     .; then
   warn "docker build failed. npm packages are already out. Fix the build and re-run:"
-  warn "    docker build -f packages/server/runtime/Dockerfile.sandbox \\"
+  warn "    docker buildx build --platform $DOCKER_PLATFORMS --push \\"
+  warn "      -f packages/server/runtime/Dockerfile.sandbox \\"
   warn "      -t $IMAGE_VERSION_TAG -t $IMAGE_LATEST_TAG ."
-  warn "    docker push $IMAGE_VERSION_TAG && docker push $IMAGE_LATEST_TAG"
   die "Docker build aborted."
 fi
-
-say "Pushing $IMAGE_VERSION_TAG..."
-docker push "$IMAGE_VERSION_TAG" || die "docker push failed for $IMAGE_VERSION_TAG."
-say "Pushing $IMAGE_LATEST_TAG..."
-docker push "$IMAGE_LATEST_TAG" || die "docker push failed for $IMAGE_LATEST_TAG."
 ok "Sandbox image pushed."
 
 # ---------- step 8: tag + push ----------

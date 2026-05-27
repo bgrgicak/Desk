@@ -97,6 +97,19 @@ export function resolveAppDist() {
   }
 }
 
+export function packageVersion(pkgRoot = PKG_ROOT) {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(pkgRoot, "package.json"), "utf-8"));
+    return typeof pkg.version === "string" && pkg.version.length > 0 ? pkg.version : "latest";
+  } catch {
+    return "latest";
+  }
+}
+
+export function defaultSandboxImage(pkgRoot = PKG_ROOT) {
+  return `bgrgicak/roomy-ai:${packageVersion(pkgRoot)}`;
+}
+
 /**
  * Resolves the Roomy data root and ensures it exists. Mirrors the storage
  * layer's `resolveRoomyHome`: an explicit `ROOMY_HOME` env var is treated as
@@ -213,8 +226,10 @@ async function cmdStartPublished({ home }) {
     // monorepo dev checkout (where `npm run dev` builds it locally) but
     // useless for `npx @roomy-ai/cli` users — they have no local image
     // to fall back on. Pulls from Docker Hub on first sandbox start.
+    // Use the package-version tag so a mutable `latest` manifest cannot
+    // drift away from the CLI/runtime code the user installed.
     // Set ROOMY_SANDBOX_IMAGE to override (e.g. point at your own fork).
-    ROOMY_SANDBOX_IMAGE: process.env.ROOMY_SANDBOX_IMAGE ?? "bgrgicak/roomy-ai:latest",
+    ROOMY_SANDBOX_IMAGE: process.env.ROOMY_SANDBOX_IMAGE ?? defaultSandboxImage(),
     // Prepend ~/Roomy/bin (nerdctl wrapper + colima binary) and common
     // tool locations so the server finds them under launchd/systemd PATH.
     PATH: `${roomyBinDir(home)}:${augmentPath(process.env.PATH)}`,
@@ -532,7 +547,7 @@ async function cmdUpdate(args) {
     log("Skipping docker pull (--skip-docker).");
   } else {
     const home = process.env.ROOMY_HOME ?? path.join(os.homedir(), "Roomy");
-    const image = process.env.ROOMY_SANDBOX_IMAGE ?? "bgrgicak/roomy-ai:latest";
+    const image = process.env.ROOMY_SANDBOX_IMAGE ?? defaultSandboxImage();
     // On macOS we use the nerdctl wrapper (Colima/containerd); fall back to
     // docker on Linux or if the wrapper isn't installed yet.
     const wrapper = nerdctlWrapperPath(home);

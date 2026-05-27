@@ -527,7 +527,10 @@ export async function waitForEntrypointReady(
     // single-shot re-acquire-and-retry path (see driver.ts:329-359) can
     // rebuild the sandbox in seconds rather than freezing the chat for
     // five minutes. The string we throw must match `isContainerGoneError`.
-    if (/no such (container|object)/i.test(lastStderr)) {
+    if (
+      /no such (container|object)/i.test(lastStderr) ||
+      /container .* (not found|is not running)/i.test(lastStderr)
+    ) {
       throw new Error(
         `Sandbox entrypoint check: container ${containerId} is no longer present: ${lastStderr.trim()}`,
       );
@@ -938,4 +941,3 @@ export async function pruneDriftedContainers(drift: SandboxBindDrift[]): Promise
     // Engine not reachable.
   }
 }
-
