@@ -404,22 +404,53 @@ IMAGE_VERSION_TAG="${DOCKER_REPO}:${NEW_VERSION}"
 IMAGE_LATEST_TAG="${DOCKER_REPO}:latest"
 
 say "Building and pushing sandbox Docker image for ${DOCKER_PLATFORMS} (this can take a few minutes)..."
-# Build once with both tags and push a multi-platform manifest. Published
-# installs run on both Apple Silicon and linux/amd64; a single-platform
-# push leaves the other host architecture with `exec format error` before
-# the sandbox entrypoint can run.
-if ! docker buildx build \
-    --platform "$DOCKER_PLATFORMS" \
-    --push \
-    -f packages/server/runtime/Dockerfile.sandbox \
+# Build each platform separately, then assemble the public multi-platform
+# tags. A single `docker buildx build --platform a,b --push` runs the
+# platform builds concurrently; on Apple Silicon/Colima the emulated amd64
+# Playwright install has been observed to segfault under that load. Serial
+# per-platform pushes keep the released tags multi-arch without overlapping
+# the expensive browser dependency installation layers.
+IFS=',' read -r -a _docker_platforms <<< "$DOCKER_PLATFORMS"
+_manifest_sources=()
+for platform in "${_docker_platforms[@]}"; do
+  platform="${platform#"${platform%%[![:space:]]*}"}"
+  platform="${platform%"${platform##*[![:space:]]}"}"
+  [ -n "$platform" ] || continue
+  platform_suffix="${platform#linux/}"
+  platform_suffix="${platform_suffix//\//-}"
+  platform_tag="${DOCKER_REPO}:${NEW_VERSION}-${platform_suffix}"
+  say "Building and pushing sandbox Docker image for ${platform} as ${platform_tag}..."
+  if ! docker buildx build \
+      --platform "$platform" \
+      --push \
+      -f packages/server/runtime/Dockerfile.sandbox \
+      -t "$platform_tag" \
+      .; then
+    warn "docker build failed. npm packages are already out. Fix the build and re-run:"
+    warn "    docker buildx build --platform $platform --push \\"
+    warn "      -f packages/server/runtime/Dockerfile.sandbox \\"
+    warn "      -t $platform_tag ."
+    die "Docker build aborted."
+  fi
+  _manifest_sources+=("$platform_tag")
+done
+
+if [ "${#_manifest_sources[@]}" -eq 0 ]; then
+  die "No Docker platforms were configured."
+fi
+
+say "Publishing multi-platform manifests for ${IMAGE_VERSION_TAG} and ${IMAGE_LATEST_TAG}..."
+if ! docker buildx imagetools create \
     -t "$IMAGE_VERSION_TAG" \
     -t "$IMAGE_LATEST_TAG" \
-    .; then
-  warn "docker build failed. npm packages are already out. Fix the build and re-run:"
-  warn "    docker buildx build --platform $DOCKER_PLATFORMS --push \\"
-  warn "      -f packages/server/runtime/Dockerfile.sandbox \\"
-  warn "      -t $IMAGE_VERSION_TAG -t $IMAGE_LATEST_TAG ."
-  die "Docker build aborted."
+    "${_manifest_sources[@]}"; then
+  warn "docker manifest creation failed. Per-platform images were pushed:"
+  for source in "${_manifest_sources[@]}"; do
+    warn "    $source"
+  done
+  warn "Re-run:"
+  warn "    docker buildx imagetools create -t $IMAGE_VERSION_TAG -t $IMAGE_LATEST_TAG ${_manifest_sources[*]}"
+  die "Docker manifest creation aborted."
 fi
 ok "Sandbox image pushed."
 
