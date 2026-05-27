@@ -125,7 +125,7 @@ describe('app bridge', () => {
       new Response(JSON.stringify({ id: 'msg_1' }), { status: 200 })
     ))
     vi.stubGlobal('fetch', fetchMock)
-    vi.stubGlobal('sessionStorage', {
+    vi.stubGlobal('localStorage', {
       getItem: () => 'fake-session-token',
       setItem: () => undefined,
       removeItem: () => undefined,
@@ -152,7 +152,7 @@ describe('app bridge', () => {
   })
 
   it('rejects chat.sendMessage from library scope without a chatId', async () => {
-    vi.stubGlobal('sessionStorage', {
+    vi.stubGlobal('localStorage', {
       getItem: () => 'fake-session-token',
       setItem: () => undefined,
       removeItem: () => undefined,

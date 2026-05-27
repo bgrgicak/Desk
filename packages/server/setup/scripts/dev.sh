@@ -6,6 +6,12 @@
 # Dev uses ports 35139 (API) and 5174 (app) by default so a published
 # production install (35138 / 5173) can run alongside the dev server.
 #
+# Dev also pins ROOMY_HOME to ~/Roomy-dev (separate from prod's ~/Roomy)
+# so the two run against different SQLite DBs, vaults, and workspace
+# directories. Sandbox container names key off workspace IDs from the
+# DB, so a separate DB is what keeps "roomy-sandbox-<id>" from clashing
+# between the dev and prod processes.
+#
 # No VM, no systemd, no port forwards. One Ctrl+C kills both via the
 # process-group trap below.
 set -uo pipefail
@@ -39,9 +45,13 @@ fi
 
 ENV_FILE="${REPO_ROOT}/.env"
 
-# 3. Ensure ~/Roomy/ exists. roomy-server's main.ts mkdirs the rest of the
-#    layout (.database, workspaces, .trash, .tmp, backups) on boot.
-ROOMY_HOME_DEFAULT="${HOME}/Roomy"
+# 3. Ensure ~/Roomy-dev/ exists. roomy-server's main.ts mkdirs the rest of
+#    the layout (.database, workspaces, .trash, .tmp, backups) on boot.
+#    Dev uses a separate data root from prod's ~/Roomy so the two can run
+#    side-by-side without sharing a SQLite DB, vault, or sandbox container
+#    names (which key off workspace IDs from the DB). Override with
+#    ROOMY_HOME=... to share data with prod or pin a custom location.
+ROOMY_HOME_DEFAULT="${HOME}/Roomy-dev"
 mkdir -p "${ROOMY_HOME_DEFAULT}"
 
 # 3a. Build any built-in app that is missing its dist/. Source-mode dev reads

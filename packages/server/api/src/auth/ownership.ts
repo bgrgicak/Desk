@@ -16,12 +16,12 @@ export async function requireOwnedWorkspace(
   userId: string,
 ): Promise<Workspace> {
   const ws = await queries.workspaces.findById(pool, workspaceId);
-  // The hub workspace is still hidden from `listWorkspaces` so it never
-  // appears in the user-facing sidebar, but it IS reachable by id through
-  // every regular endpoint — that's what lets the Ask AI chat ride the
-  // same code paths as any other chat (chats, agents, pins, library all
-  // resolve against `chat.workspaceId` without 404'ing). Rename/delete
-  // remain blocked by separate `kind === "hub"` guards in
+  // The hub workspace is included in `listWorkspaces` so clients can look up
+  // its metadata (path, name) when rendering hub-based chats and threads.
+  // It IS reachable by id through every regular endpoint — that's what lets
+  // the Ask AI chat ride the same code paths as any other chat. Clients that
+  // want only project workspaces filter by `kind !== "hub"` themselves.
+  // Rename/delete remain blocked by separate `kind === "hub"` guards in
   // routes/workspaces.ts.
   if (!ws || ws.userId !== userId) {
     throw new NotFoundError(`Workspace not found: ${workspaceId}`);

@@ -57,11 +57,11 @@ async function waitForHealth(url: string, timeoutMs = 60_000): Promise<void> {
 
 async function killListenersOnPort(port: number): Promise<void> {
   // Best-effort: kill anything still holding the port from a prior run.
+  // Use lsof (macOS + Linux) with fuser as a fallback (Linux-only).
   await new Promise<void>((resolve) => {
     const proc = spawn("bash", [
       "-c",
-      // fuser is widely available; ss fallback is noisy but harmless.
-      `fuser -k ${port}/tcp 2>/dev/null || true`,
+      `lsof -ti tcp:${port} 2>/dev/null | xargs kill -9 2>/dev/null || fuser -k ${port}/tcp 2>/dev/null || true`,
     ]);
     proc.on("exit", () => resolve());
     setTimeout(() => resolve(), 2000);

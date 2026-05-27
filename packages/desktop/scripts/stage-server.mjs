@@ -35,6 +35,10 @@ async function main() {
   await fsp.rm(OUT, { recursive: true, force: true });
   await fsp.mkdir(OUT, { recursive: true });
 
+  const desktopPkg = JSON.parse(
+    await fsp.readFile(path.join(DESKTOP_ROOT, "package.json"), "utf-8")
+  );
+
   // Collect every non-workspace dep across the server packages first so we
   // can drive a single npm install for the transitive tree.
   const collectedDeps = {};
@@ -56,8 +60,8 @@ async function main() {
     JSON.stringify(
       {
         name: "@roomy-ai/server-bundle",
-        version: "0.1.0-alpha.5",
-        publishConfig: { access: "public", tag: "alpha" },
+        version: desktopPkg.version,
+        publishConfig: { access: "public", tag: "latest" },
         dependencies: collectedDeps,
       },
       null,

@@ -12,6 +12,7 @@ import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'
 import { initialsOf } from '@/lib/initials'
 import { roomColor } from '@/components/rooms/roomColor'
 import { buildPath } from '@/router/nav'
+import { useChatNav } from '@/components/chats/ChatNavContext'
 
 interface MessageThreadButtonProps {
   /** The thread chat anchored at this message — `message.threadChatId`. */
@@ -44,15 +45,13 @@ export function MessageThreadButton({ threadChatId, workspaceId }: MessageThread
   const workspaceIcon = useWorkspaceIconUrl(workspaceId)
 
   const workspace = workspaces?.find(w => w.id === workspaceId)
-  // Reply count: the thread's user/agent messages minus the seed one
-  // the user typed to start it. We can't cheaply discriminate that
-  // seed here, so the stub treats every message as a reply — the
-  // count is "messages in the thread", which lines up with how Slack
-  // / Linear surfaces threads. Backend can tighten this later.
   const replyCount = messagesResp?.items?.length ?? 0
   const unread = !!threadChat?.unread
 
-  const href = buildPath(workspaceId, 'tasks', { chat: threadChatId })
+  const chatNav = useChatNav()
+  const href =
+    chatNav.buildThreadHref(threadChatId) ??
+    buildPath(workspaceId, 'tasks', { chat: threadChatId })
 
   return (
     <Link

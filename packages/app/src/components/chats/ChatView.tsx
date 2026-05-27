@@ -11,7 +11,8 @@ import { ThreadParentChip } from '@/components/chats/ThreadParentChip'
 import { useTaskForChat } from '@/components/tasks/useTaskForChat'
 import { useTaskActions } from '@/components/tasks/useTaskActions'
 import { buildPath } from '@/router/nav'
-import { closeArtifact, selectPreviewArtifact, selectPreviewSplitRatio } from '@/store/slices/previewPanelSlice'
+import { ChatNavContext, type ChatNavContextValue } from './ChatNavContext'
+import { closeArtifact, openArtifact, selectPreviewArtifact, selectPreviewSplitRatio } from '@/store/slices/previewPanelSlice'
 import { ChatThread } from '@/components/compose/ChatThread'
 import { MessageBubble } from '@/components/compose/MessageBubble'
 import { ChatInput } from '@/components/compose/ChatInput'
@@ -30,6 +31,7 @@ import {
 } from '@/store/api'
 import { useContentAreaInsets } from '@/components/shared/splitPane'
 import { isAppArtifactFile } from '@/store/selectors/artifacts'
+import { appAttachmentToPreview } from '@/components/context/AppPreview'
 import { NEW_CHAT_ID } from '@/router/nav'
 import { useAppDispatch, useAppSelector, useAppStore } from '@/store/hooks'
 import { setPendingNewChatAgentId } from '@/store/slices/uiSlice'
@@ -104,7 +106,6 @@ interface ChatViewProps {
     pinPaths?: string[],
   ) => void
   highlightMessageId?: string
-  onAttachmentClick?: (attachment: AttachmentRef) => void
   /** Library items to show in the Files sidebar for the new-chat stub.
    * They are pinned via library-refs once the first message creates the chat. */
   initialStagedItems?: ContextItem[]
@@ -114,6 +115,14 @@ interface ChatViewProps {
    *  top-bar toggle. Used by the Home → Ask AI surface where the chat
    *  is presented as a standalone conversation without sidebar context. */
   hideRightPanel?: boolean
+  /** Hide the top-bar three-dot kebab menu. Used for hub chats (Ask AI)
+   *  where delete/rename actions don't apply. */
+  hideKebab?: boolean
+  /** Override the navigation href builders used by thread links and the
+   *  parent breadcrumb chip. When provided, this value replaces the
+   *  workspaceId-based defaults so callers (e.g. AskAiView) can keep
+   *  thread navigation on the home screen instead of routing to a room. */
+  chatNav?: ChatNavContextValue
 }
 
 /**
@@ -139,10 +148,11 @@ export function ChatView({
   onSaveArtifact,
   onFirstMessage,
   highlightMessageId,
-  onAttachmentClick,
   initialStagedItems,
   startThread,
   hideRightPanel = false,
+  hideKebab = false,
+  chatNav,
 }: ChatViewProps) {
   const focusInputRef = useRef<(() => void) | null>(null)
   const location = useLocation()
@@ -151,11 +161,15 @@ export function ChatView({
     ? (location.state as { anchorMessage?: ServerMessage } | null)?.anchorMessage ?? null
     : null
   const rightPanelOpenKey = chat.id && chat.id !== NEW_CHAT_ID ? `roomy.chat.${chat.id}.rightPanelOpen` : null
-  const [panelOpenRaw, setPanelOpen] = usePersistedState<boolean>(rightPanelOpenKey, shouldOpenChatSidebarsByDefault())
+  // Ask AI view (chatNav provided) starts with the panel closed; room chats
+  // follow the viewport-width heuristic (open on wide screens by default).
+  const [panelOpenRaw, setPanelOpen] = usePersistedState<boolean>(rightPanelOpenKey, chatNav !== undefined ? false : shouldOpenChatSidebarsByDefault())
   // When the surface opts out of the right panel (e.g. Ask AI), force
   // the layout to treat the panel as closed so insets, gutters, and the
   // top-bar toggle all collapse to the no-panel state.
-  const panelOpen = hideRightPanel ? false : panelOpenRaw
+  // Ask AI new-thread stub (chatNav provided) keeps the panel closed; room-view
+  // new-chat stubs allow the panel so users can access staged files.
+  const panelOpen = (hideRightPanel || (chat.id === NEW_CHAT_ID && chatNav !== undefined)) ? false : panelOpenRaw
   const isSmallViewport = useIsSmallScreen()
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined)
   // Tools goal selected by a suggestion-pill click in the empty
@@ -209,6 +223,24 @@ export function ChatView({
   }, [chat.workspaceId, navigate])
 
   const dispatch = useAppDispatch()
+
+  const handleAttachmentClick = useCallback((att: AttachmentRef) => {
+    if (att.kind === 'directory' && !appAttachmentToPreview(att.path)) {
+      const wsId = att.workspaceId ?? chat.workspaceId
+      if (wsId) navigate(buildPath(wsId, 'context', { item: null, folder: att.path }))
+      return
+    }
+    const previewWorkspaceId = att.workspaceId ?? chat.workspaceId
+    if (previewWorkspaceId) {
+      dispatch(openArtifact({
+        workspaceId: previewWorkspaceId,
+        path: att.path,
+        name: att.name,
+        mime: att.mime,
+        params: att.params,
+      }))
+    }
+  }, [dispatch, navigate, chat.workspaceId])
 
   // The preview panel is scoped to the chat the artifact was opened
   // from: close it on chat switch AND on unmount, so leaving the chat
@@ -415,11 +447,22 @@ export function ChatView({
   const agentName =
     agents?.find(a => a.id === chat.agentId)?.name ?? 'Agent'
 
+  const defaultChatNavValue = useMemo(() => ({
+    buildThreadHref: (chatId: string) =>
+      chat.workspaceId ? buildPath(chat.workspaceId, 'tasks', { chat: chatId }) : undefined,
+    buildNewThreadHref: (sourceChatId: string, messageId: string) =>
+      chat.workspaceId
+        ? buildPath(chat.workspaceId, 'tasks', { chat: NEW_CHAT_ID, startThread: `${sourceChatId}:${messageId}` })
+        : undefined,
+  }), [chat.workspaceId])
+  const chatNavValue = chatNav ?? defaultChatNavValue
+
   // The avatar stack is now a global overlay rendered by AppShell. This
   // view only publishes the chat-area insets (the `--content-area-*`
   // CSS vars set in the effect above) so the global overlay narrows in
   // sync when the Files/Tasks panel or the preview panel is open.
   return (
+    <ChatNavContext.Provider value={chatNavValue}>
     <div className="relative flex w-full max-w-full flex-1 min-w-0 min-h-0 overflow-hidden">
 
       {/* ── Left column: header + messages + input ──
@@ -442,7 +485,8 @@ export function ChatView({
           onDeleteChat={(id) => onDeleteChat?.(id)}
           panelOpen={panelOpen}
           onTogglePanel={() => setPanelOpenFromUser(!panelOpen)}
-          showPanelToggle={!isPreviewOpen && !hideRightPanel}
+          showPanelToggle={!isPreviewOpen && !hideRightPanel && !(isNewChat && chatNav !== undefined)}
+          showKebab={!hideKebab && !isNewChat}
           task={backingTask}
           taskActions={taskActions}
           onTaskDeleted={handleTaskDeleted}
@@ -468,11 +512,11 @@ export function ChatView({
           statusClassName={CHAT_COLUMN_CLASS}
           agentHeaderClassName={CHAT_COLUMN_CLASS}
           lastAssistantSlotClassName="w-full min-w-0"
-          onAttachmentClick={onAttachmentClick}
+          onAttachmentClick={handleAttachmentClick}
           showNewBadge={showNewBadge}
           emptySlot={
             anchorMessage ? (
-              <div className="max-w-2xl min-w-0 mx-auto">
+              <div className={CHAT_COLUMN_CLASS}>
                 <MessageBubble
                   message={anchorMessage}
                   workspaceId={anchorMessage.chatId ? chat.workspaceId : undefined}
@@ -641,7 +685,7 @@ export function ChatView({
             files={visibleChatFiles}
             onFileClick={(file) => {
               if (isAppArtifactFile(file)) {
-                onAttachmentClick?.({
+                handleAttachmentClick({
                   path: `${file.path}/roomy.app.json`,
                   name: file.label ?? file.name,
                   mime: 'application/json',
@@ -649,7 +693,7 @@ export function ChatView({
                 })
                 return
               }
-              onAttachmentClick?.({
+              handleAttachmentClick({
                 path: file.path,
                 name: file.label ?? file.name,
                 mime: file.mime,
@@ -690,5 +734,6 @@ export function ChatView({
       })()}
 
     </div>
+    </ChatNavContext.Provider>
   )
 }

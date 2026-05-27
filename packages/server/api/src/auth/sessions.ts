@@ -4,7 +4,7 @@ import { queries } from "@roomy-ai/db";
 
 const TOKEN_PREFIX = "ses_";
 const TOKEN_BYTES = 32;
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Bearer-token hash. Exported so call sites that need to look up by
  * token (handleLogout) reuse the same hashing rule instead of

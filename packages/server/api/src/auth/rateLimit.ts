@@ -164,7 +164,6 @@ export function getClientIp(req: IncomingMessage): string {
 
 defineRateLimit("auth.login", { windowMs: 60_000, max: 10 });        // 10/min/IP
 defineRateLimit("auth.signup", { windowMs: 60_000, max: 5 });        // 5/min/IP — abuse cap when ROOMY_ENABLE_SIGNUP is on
-defineRateLimit("auth.autoLogin", { windowMs: 60_000, max: 10 });    // 10/min/IP — auto-login when ROOMY_AUTO_LOGIN is on
 defineRateLimit("vault.unlock.ip", { windowMs: 60_000, max: 10 });   // 10/min/IP
 defineRateLimit("vault.unlock.user", { windowMs: 300_000, max: 20 }); // 20/5min/user
 defineRateLimit("me.password", { windowMs: 300_000, max: 10 });      // 10/5min/user

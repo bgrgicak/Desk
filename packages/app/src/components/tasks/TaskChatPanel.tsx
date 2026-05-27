@@ -6,7 +6,7 @@ import { FileDropZone, type UploadEntry } from '@/components/upload/FileDropZone
 import { usePostChatMessageMutation } from '@/store/api'
 import { usePrefs } from '@/hooks/use-prefs'
 import type { Task } from '@/data/ui-types'
-import type { AttachmentRef } from '@/store/types'
+import type { AttachmentRef, ServerMessage } from '@/store/types'
 import { toast } from 'sonner'
 
 // Same centred column as the chat view so the task thread reads
@@ -44,6 +44,14 @@ export function TaskChatPanel({ task }: TaskChatPanelProps) {
   // when present; fall back to the anchor's chat for standalone tasks
   // created from the TasksPage composer (no parent).
   const chatId = task.threadChatId ?? task.chatId ?? ''
+
+  // The task anchor message lives in chatId alongside the replies when there
+  // is no threadChatId. Filter it out so the panel only shows subtasks/replies,
+  // not the task referring to itself.
+  const filterMessage = useCallback(
+    (m: ServerMessage) => m.id !== task.id,
+    [task.id],
+  )
 
   const handleUpload = useCallback((entries: UploadEntry[]) => {
     setPendingFiles(prev => [
@@ -115,6 +123,7 @@ export function TaskChatPanel({ task }: TaskChatPanelProps) {
           skipQuery={!chatId}
           developerMode={developerMode}
           isSending={isSending}
+          filterMessage={filterMessage}
           headerSlot={chatId ? <ThreadParentChip chatId={chatId} /> : null}
           innerClassName="px-6 pt-8 pb-16 space-y-3"
           messageClassName={() => CHAT_COLUMN_CLASS}

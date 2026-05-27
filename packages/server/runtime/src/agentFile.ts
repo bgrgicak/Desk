@@ -57,8 +57,13 @@ export function renderAgentFile(input: AgentFileInput): string {
 }
 
 /**
- * Writes the AGENTS.md file to the workspace root. Idempotent —
- * overwrites existing file contents.
+ * Writes the system prompt to `.pi/SYSTEM.md` at the workspace root.
+ *
+ * Pi reads `.pi/SYSTEM.md` from cwd as a project-level system prompt that
+ * *replaces* pi's default system prompt — mirroring how opencode's custom
+ * agent file (with `mode: primary`) worked. AGENTS.md is left untouched so
+ * users can add their own project-specific instructions there; pi appends
+ * AGENTS.md after our system prompt automatically.
  *
  * The `home` argument is the ROOMY_HOME root (contains `workspaces/roomy/`).
  */
@@ -68,8 +73,9 @@ export async function writeAgentFile(
   input: AgentFileInput,
 ): Promise<void> {
   const content = renderAgentFile({ ...input, home, workspaceSlug });
-  const filePath = path.join(workspaceRootPath(home, workspaceSlug), "AGENTS.md");
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const dir = path.join(workspaceRootPath(home, workspaceSlug), ".pi");
+  const filePath = path.join(dir, "SYSTEM.md");
+  await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(filePath, content, "utf-8");
 }
 

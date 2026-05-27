@@ -2,7 +2,7 @@
  * Slice 18 — Sign-out from WorkspaceBar.
  *
  * Clicks Sign out → POST /auth/logout → token is cleared from
- * sessionStorage, the app reloads, and the LoginScreen renders.
+ * localStorage, the app reloads, and the LoginScreen renders.
  */
 import { test, expect } from "../fixtures";
 
@@ -16,11 +16,11 @@ test("sign-out clears the session and renders the LoginScreen", async ({
   await loggedInPage.getByTestId('sign-out-button').click();
 
   // After the post-logout reload the LoginScreen renders because there's
-  // no token in sessionStorage.
+  // no token in localStorage.
   await expect(loggedInPage.getByTestId('login-submit')).toBeVisible({ timeout: 10_000 });
 
   // Token must stay cleared, not just transiently.
   expect(
-    await loggedInPage.evaluate(() => sessionStorage.getItem('roomy.session.token')),
+    await loggedInPage.evaluate(() => localStorage.getItem('roomy.session.token')),
   ).toBeNull();
 });

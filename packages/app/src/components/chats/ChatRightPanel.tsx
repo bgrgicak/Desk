@@ -38,6 +38,7 @@ import {
 import { buildPath, NEW_CHAT_ID } from '@/router/nav'
 import { toUiChat } from '@/store/selectors/chats'
 import { useChatHierarchy } from '@/store/selectors/threads'
+import { useChatNav } from './ChatNavContext'
 import type { ServerFile } from '@/store/types'
 import type { Chat as UiChat, Task } from '@/data/ui-types'
 
@@ -197,9 +198,10 @@ function ThreadRow({
   thread: UiChat
   workspaceId?: string
 }) {
-  const href = workspaceId
-    ? buildPath(workspaceId, 'tasks', { chat: thread.id })
-    : undefined
+  const chatNav = useChatNav()
+  const href =
+    chatNav.buildThreadHref(thread.id) ??
+    (workspaceId ? buildPath(workspaceId, 'tasks', { chat: thread.id }) : undefined)
   const body = (
     <>
       <div className="relative shrink-0">

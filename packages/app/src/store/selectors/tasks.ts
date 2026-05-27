@@ -1,5 +1,6 @@
 import type { Task, TaskOccurrence } from "@/data/ui-types";
 import type { ServerAgent, ServerChat, ServerMessage, ServerWorkspace } from "../types";
+import { AGENT_NAME } from "@/lib/constants";
 
 export function taskMessageKindsForDeveloperMode(_developerMode: boolean): Array<"task" | "summary"> {
   return ["task"];
@@ -190,7 +191,7 @@ export function toUiTask(
     name: nameFor(m, chats, workspaces),
     title: m.title?.trim() || undefined,
     description: descriptionFor(m),
-    agentName: agent?.name ?? "Agent",
+    agentName: AGENT_NAME,
     status,
     statusText: statusTextFor(m, chat, runs),
     // The server has no `assigneeId` field — task assignment is just

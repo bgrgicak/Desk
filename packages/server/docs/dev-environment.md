@@ -2,8 +2,13 @@
 
 Roomy runs entirely on the host. No VM, no Lima, no systemd. The sandbox
 containers spawn through whichever container runtime the host has —
-Docker by default, nerdctl + containerd as a drop-in alternative. State
-lives under `~/Roomy/`.
+Docker by default, nerdctl + containerd as a drop-in alternative.
+
+State lives under `~/Roomy-dev/` for the dev script (`npm run dev`) and
+under `~/Roomy/` for a prod-style install (the published CLI, the
+desktop app). The split keeps the two SQLite DBs, vaults, and workspace
+sandbox container names from colliding when both run on the same host.
+Set `ROOMY_HOME=...` explicitly to override either default.
 
 ## Prerequisites
 
@@ -56,7 +61,7 @@ npm run dev
 
 That:
 
-1. Ensures `~/Roomy/` exists.
+1. Ensures `~/Roomy-dev/` exists (set `ROOMY_HOME` to override).
 2. Builds missing built-in app `dist/` directories, including any required
    workspace package outputs such as `@roomy-ai/ui/dist`.
 3. Starts `roomy-server` (tsx watch) on http://127.0.0.1:35139/.
@@ -103,6 +108,18 @@ workspace home and then runs `~/.roomyrc` if present. That file is the
 agent-maintained persistence recipe for setup outside the bind-mounted home;
 failures are logged to container stdout and do not block the sandbox from
 starting.
+
+## Ports
+
+| Mode | Service | Default port | Override env var |
+|------|---------|-------------|-----------------|
+| Dev | API server (`roomy-server`) | 35139 | `PORT` |
+| Dev | Vite dev server (app) | 5174 | `ROOMY_APP_PORT` |
+| Production | API server | 35138 | `PORT` |
+
+WebSocket connections share the same port as the HTTP API — there is no separate socket port. The server upgrades HTTP connections to WebSocket on the same listener.
+
+The different dev/prod API port (35139 vs 35138) lets both modes coexist on the same host without collision.
 
 ## Tests
 

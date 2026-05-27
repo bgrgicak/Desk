@@ -16,6 +16,7 @@ import { openArtifact, selectIsArtifactInPanel } from '@/store/slices/previewPan
 import { diffLines, type DiffSegment } from '@/lib/summary-diff'
 import { buildPath, NEW_CHAT_ID } from '@/router/nav'
 import { Link } from 'react-router-dom'
+import { useChatNav } from '@/components/chats/ChatNavContext'
 import { isRegularMessageVisible, isStructuredToolPayloadLine, isUserVisibleDiagnosticLine, userVisibleDiagnosticTextForEvent } from './messageVisibility'
 import { MessageThreadButton } from './MessageThreadButton'
 
@@ -59,6 +60,10 @@ interface MessageBubbleProps {
   /** The chat currently being viewed. Used to suppress the thread button on
    *  the anchor message when the user is already inside that thread. */
   currentChatId?: string
+  /** Attachment paths to suppress from the rendered chip list. Used in
+   *  contexts where the file is already prominently displayed (e.g. the
+   *  library file-detail view) so repeating it as an attachment is redundant. */
+  hideAttachmentPaths?: string[]
 }
 
 export const MessageBubble = memo(function MessageBubble({
@@ -75,11 +80,15 @@ export const MessageBubble = memo(function MessageBubble({
   hideAgentHeader = false,
   developerMode = false,
   currentChatId,
+  hideAttachmentPaths,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const modelLabel = agentName ?? 'Agent'
   const timestamp = new Date(message.createdAt)
-  const hasAttachments = !!message.attachments && message.attachments.length > 0
+  const visibleAttachments = message.attachments?.filter(
+    att => !hideAttachmentPaths?.includes(att.path),
+  ) ?? []
+  const hasAttachments = visibleAttachments.length > 0
   const showThread = isRegularMessageVisible(message) && !!workspaceId
     && message.threadChatId !== currentChatId
     // ArtifactRef messages render as inline previews (chat-forms fragments,
@@ -114,7 +123,7 @@ export const MessageBubble = memo(function MessageBubble({
       <div className="group min-w-0 max-w-full flex flex-col items-end">
         {hasAttachments && (
           <div className="flex w-full min-w-0 max-w-full flex-col items-end gap-1.5 overflow-hidden mb-1.5">
-            {message.attachments!.map(att => (
+            {visibleAttachments.map(att => (
               <AttachmentCard
                 key={att.path}
                 attachment={att}
@@ -165,7 +174,7 @@ export const MessageBubble = memo(function MessageBubble({
     <div className="group min-w-0 max-w-full">
       {hasAttachments && (
         <div className="flex w-full min-w-0 max-w-full flex-col items-start gap-1.5 overflow-hidden mb-1.5">
-          {message.attachments!.map(att => (
+          {visibleAttachments.map(att => (
             <AttachmentCard
               key={att.path}
               attachment={att}
@@ -270,14 +279,23 @@ function AgentMessageActions({
   }
 
   const hasThread = !!message.threadChatId
-  // Thread-button target: existing threads navigate; new threads carry
-  // the anchor message via router state so the destination chat can
-  // pre-render the parent context.
-  const threadTo = workspaceId
-    ? (hasThread
-        ? buildPath(workspaceId, 'tasks', { chat: message.threadChatId! })
-        : buildPath(workspaceId, 'tasks', { chat: NEW_CHAT_ID, startThread: `${message.chatId}:${message.id}` }))
-    : null
+  const chatNav = useChatNav()
+  // Thread-button target: prefer context-provided builders (e.g. home screen);
+  // fall back to workspace-scoped room paths when no override is set.
+  const threadTo = (() => {
+    if (hasThread) {
+      return (
+        chatNav.buildThreadHref(message.threadChatId!) ??
+        (workspaceId ? buildPath(workspaceId, 'tasks', { chat: message.threadChatId! }) : null)
+      )
+    }
+    return (
+      chatNav.buildNewThreadHref(message.chatId, message.id) ??
+      (workspaceId
+        ? buildPath(workspaceId, 'tasks', { chat: NEW_CHAT_ID, startThread: `${message.chatId}:${message.id}` })
+        : null)
+    )
+  })()
 
   return (
     <div
@@ -773,7 +791,7 @@ function AttachmentCard({
     return (
       <a
         href={href}
-        onClick={e => { if (plainLeftClick(e)) onClick?.() }}
+        onClick={e => { if (plainLeftClick(e) && onClick) { e.preventDefault(); onClick() } }}
         className={`${className} hover:bg-muted/40 transition-colors`}
       >
         {inner}

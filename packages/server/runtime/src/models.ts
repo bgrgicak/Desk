@@ -53,6 +53,7 @@ export class SandboxExecError extends Error {
 
 const FAKE_DRIVER_MODELS: ModelRef[] = [
   { id: "anthropic/claude-haiku-4-5", provider: "anthropic", contextWindow: 200_000, outputLimit: 64_000 },
+  { id: "openai/gpt-4o", provider: "openai", contextWindow: 128_000, outputLimit: 16_384 },
 ];
 
 export async function listModels(

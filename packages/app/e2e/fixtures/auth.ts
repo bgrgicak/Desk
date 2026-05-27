@@ -26,7 +26,7 @@ export async function fetchToken(
 }
 
 /**
- * Inject a pre-obtained token into the page's sessionStorage so the React
+ * Inject a pre-obtained token into the page's localStorage so the React
  * app's ensureSession() resumes the session instead of rendering the
  * LoginScreen.
  */
@@ -36,13 +36,13 @@ export async function seedSessionToken(
   token: string,
 ): Promise<void> {
   // Playwright runs init scripts on every frame including about:blank. We
-  // only care about the app's origin — sessionStorage accesses from other
+  // only care about the app's origin — localStorage accesses from other
   // origins are silently caught. The origin guard added earlier was buggy
   // because window.location.origin is evaluated at init-script time (so it
   // resolves to about:blank before the page navigates).
   await context.addInitScript((token) => {
     try {
-      sessionStorage.setItem("roomy.session.token", token);
+      localStorage.setItem("roomy.session.token", token);
     } catch {
       /* ignore — about:blank or storage-denied context */
     }

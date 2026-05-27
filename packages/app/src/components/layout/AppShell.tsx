@@ -345,7 +345,7 @@ export function AppShell({
   // already fetches /me at boot, so this is a no-op read here.
   const { data: me } = useGetMeQuery()
   const userAvatarUrl = useAvatarUrl(me?.id)
-  const workspaces: WorkspaceInfo[] = (serverWorkspaces ?? []).map(toWorkspaceInfo)
+  const workspaces: WorkspaceInfo[] = (serverWorkspaces ?? []).filter(w => w.kind !== 'hub').map(toWorkspaceInfo)
   const displayWorkspaces = workspaces.length > 0 ? workspaces : [LOADING_WORKSPACE]
   const activeWorkspace =
     displayWorkspaces.find(w => w.id === activeWorkspaceId) ?? displayWorkspaces[0]

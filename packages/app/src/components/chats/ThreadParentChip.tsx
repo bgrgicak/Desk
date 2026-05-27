@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { CornerUpLeft } from 'lucide-react'
 import { useGetChatQuery } from '@/store/api'
 import { buildPath } from '@/router/nav'
+import { useChatNav } from './ChatNavContext'
 
 interface ThreadParentChipProps {
   /** The thread chat currently being viewed. */
@@ -25,15 +26,18 @@ export function ThreadParentChip({ chatId }: ThreadParentChipProps) {
   const { data: parentChat } = useGetChatQuery(chat?.parentChatId ?? '', {
     skip: !chat?.parentChatId,
   })
+  const chatNav = useChatNav()
 
   const parentChatId = chat?.parentChatId
   const anchorMessageId = chat?.anchorMessageId
   if (!parentChatId || !parentChat?.workspaceId) return null
 
-  const href = buildPath(parentChat.workspaceId, 'pinned', {
-    chat: parentChatId,
-    message: anchorMessageId ?? undefined,
-  })
+  const href =
+    chatNav.buildParentHref?.(parentChatId, anchorMessageId ?? undefined, parentChat.workspaceId) ??
+    buildPath(parentChat.workspaceId, 'pinned', {
+      chat: parentChatId,
+      message: anchorMessageId ?? undefined,
+    })
   const label = parentChat.title?.trim() || 'parent chat'
 
   return (

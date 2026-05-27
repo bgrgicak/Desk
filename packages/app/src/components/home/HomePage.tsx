@@ -44,6 +44,7 @@ import {
   SidebarMenuItem,
   SidebarProvider,
   SidebarTrigger,
+  useIsMobile,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -92,7 +93,9 @@ import {
 } from '@/router/nav'
 import { buildDefaultViewPath } from '@/App'
 import { logout } from '@/auth/session'
+import { TopBarActionsTargetContext } from '@/components/layout/TopBar'
 import { RoomyWordmark } from './RoomyWordmark'
+import { RoomyIcon } from './RoomyIcon'
 import { CreateWorkspaceModal } from './CreateWorkspaceModal'
 import { HomeSettingsPopover } from './HomeSettingsPopover'
 import { AskAiView } from './AskAiView'
@@ -108,7 +111,10 @@ import {
   TASKS_SPLIT_RATIO_STORAGE_KEY_EXPORT,
   PREVIEW_MIN_CHAT_WIDTH,
   PREVIEW_MIN_PANEL_WIDTH,
+  selectIsPreviewOpen,
+  selectPreviewSplitRatio,
 } from '@/store/slices/previewPanelSlice'
+import { PreviewPanel } from '@/components/chats/PreviewPanel'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   HomeWorkspaceTasks,
@@ -399,6 +405,7 @@ export function HomePage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const selectedTaskId = searchParams.get('task')
   const { data: workspaces } = useGetWorkspacesQuery()
+  const projectWorkspaces = (workspaces ?? []).filter(w => w.kind !== 'hub')
   const { data: me } = useGetMeQuery()
   const { defaultView } = usePrefs()
   const userAvatarUrl = useAvatarUrl(me?.id)
@@ -452,6 +459,8 @@ export function HomePage() {
   const askAiHref = useMemo(() => {
     const sp = new URLSearchParams(searchParams)
     sp.set('view', 'askai')
+    sp.delete('chat')
+    sp.delete('startThread')
     return `${location.pathname}?${sp.toString()}`
   }, [searchParams, location.pathname])
   const [pendingDeleteWs, setPendingDeleteWs] = useState<ServerWorkspace | null>(null)
@@ -468,6 +477,10 @@ export function HomePage() {
   // ratio (same Redux selector + localStorage key) so the chat
   // column width feels consistent across both surfaces. The chat
   // panel + header both consume the same `chatWidth` derived here.
+  const isPreviewOpen = useSelector(selectIsPreviewOpen)
+  const previewSplitRatio = useSelector(selectPreviewSplitRatio)
+  const isMobile = useIsMobile()
+  const previewPanelWidth = `${Math.round((1 - previewSplitRatio) * 100)}vw`
   const splitRatio = useSelector(selectTasksSplitRatio)
   const chatWidth = `${Math.round((1 - splitRatio) * 100)}vw`
   const { isResizing: isChatResizing, onMouseDown: onChatResizeStart } = useSplitResize({
@@ -641,6 +654,8 @@ export function HomePage() {
   }, [visibleTaskSectionKeys, view])
 
   // ── Sidebar slide-in ──
+  // Portal target for RoomTopBarActions when in Ask AI view (no AppShell TopBar here).
+  const [topBarActionsTarget, setTopBarActionsTarget] = useState<HTMLElement | null>(null)
   const [entered, setEntered] = useState(false)
   const [leaving, setLeaving] = useState(false)
   useEffect(() => {
@@ -792,19 +807,17 @@ export function HomePage() {
   }
 
   return (
+    <TopBarActionsTargetContext.Provider value={topBarActionsTarget}>
+    <div className="relative flex w-full h-dvh overflow-hidden">
     <SidebarProvider
-      // `flex-col` (added on top of the primitive's default `flex`)
-      // lets us stack a full-width top bar above the sidebar + main
-      // row — same pattern AppShell uses for the room view, where the
-      // global TopBar sits above the per-room sidebar.
-      className="flex-col"
+      className="flex-col flex-1 min-w-0 min-h-0 max-w-full overflow-hidden"
       style={{ '--sidebar-width': '290px' } as React.CSSProperties}
     >
       <BackgroundBlobs />
 
       {/* Headless cross-room fetchers (always mounted so the Your-day
           badge + digest stay live regardless of which view is open). */}
-      {(workspaces ?? []).map(ws => (
+      {projectWorkspaces.map(ws => (
         <HomeWorkspaceTasks key={ws.id} workspace={ws} onTasks={handleTasks} />
       ))}
 
@@ -816,8 +829,12 @@ export function HomePage() {
           column owning its own top chrome. */}
       <div className="relative z-20 flex w-full shrink-0">
       <div className="relative flex flex-1 min-w-0 items-center px-6 py-4 min-h-16">
+        <div className="h-8 w-8 shrink-0 md:hidden">
+          <SidebarTrigger className="h-8 w-8 rounded-md" />
+        </div>
         <div className="flex flex-1 items-center min-w-0 pl-2">
-          <RoomyWordmark className="h-5 w-auto text-foreground" aria-hidden />
+          <RoomyIcon className="h-4 w-auto md:hidden" aria-hidden />
+          <RoomyWordmark className="hidden md:block h-5 w-auto text-foreground" aria-hidden />
           <span className="sr-only">Roomy Home</span>
         </div>
 
@@ -873,7 +890,13 @@ export function HomePage() {
                 </DropdownMenuContent>
               </DropdownMenu>
             </>
-          ) : null}
+          ) : (
+            // Ask AI view: provide a slot for ChatView's RoomTopBarActions portal
+            // (panel toggle, chat kebab). Hidden when the preview panel is open —
+            // same as AppShell where the TopBar shrinks inside SidebarProvider and
+            // the actions slot ends up within the chat column, not over the panel.
+            !isPreviewOpen && <div ref={setTopBarActionsTarget} className="flex items-center gap-1" />
+          )}
         </div>
       </div>{/* /home top bar */}
 
@@ -925,6 +948,16 @@ export function HomePage() {
           panel (right, when a task is selected). */}
       <div className="flex flex-1 min-h-0 min-w-0 w-full overflow-hidden">
 
+      <AnimatePresence initial={false}>
+        {!isPreviewOpen && (
+          <motion.div
+            key="home-sidebar"
+            initial={{ width: 0, opacity: 0, x: -24 }}
+            animate={{ width: isMobile ? 0 : 290, opacity: 1, x: 0 }}
+            exit={{ width: 0, opacity: 0, x: -24 }}
+            transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+            className="relative flex h-full min-h-0 shrink-0"
+          >
       <Sidebar className="bg-transparent border-r-0 pl-4 pr-0 pt-0 pb-6">
         <div
           className={cn(
@@ -938,9 +971,11 @@ export function HomePage() {
               (Favorites) section — same split RoomSidebar uses for
               Pinned + Chats. No wordmark in the sidebar. */}
           <SidebarHeader className="bg-transparent p-0">
-            <SidebarTrigger className="absolute right-2 top-2 z-20 h-8 w-8 rounded-md md:hidden" />
-
-            <SidebarMenu className="pt-6 pb-1">
+            <div className="md:hidden flex items-center justify-between px-2 pt-2 pb-1">
+              <RoomyIcon className="h-4 w-auto" aria-hidden />
+              <SidebarTrigger className="h-8 w-8 rounded-md" />
+            </div>
+            <SidebarMenu className="pt-2 md:pt-6 pb-1">
               <HomeNavItem
                 icon={Sun}
                 label="Your day"
@@ -976,7 +1011,7 @@ export function HomePage() {
               <SidebarGroup className="p-0">
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    {(workspaces ?? []).map(ws => (
+                    {projectWorkspaces.map(ws => (
                       <HomeRoomItem
                         key={ws.id}
                         workspace={ws}
@@ -1087,12 +1122,12 @@ export function HomePage() {
           </SidebarFooter>
         </div>
       </Sidebar>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {view === 'askai' ? (
-        // Ask AI view: AskAiView renders the regular ChatView, which
-        // brings its own Files/Tasks right panel and top-bar actions —
-        // no Home-specific side panel needed.
-        <main className="relative z-10 flex min-h-0 flex-1 flex-row overflow-hidden">
+        <main className="relative z-10 flex min-h-0 flex-1 overflow-hidden">
           <AskAiView />
         </main>
       ) : (
@@ -1172,7 +1207,7 @@ export function HomePage() {
                     <SectionEmpty
                       icon={SECTION_EMPTY_ICON[key]}
                       text={sectionEmpty[key]}
-                      workspaces={workspaces ?? []}
+                      workspaces={projectWorkspaces}
                       onCreateInRoom={createInRoom}
                     />
                   ) : (
@@ -1271,5 +1306,26 @@ export function HomePage() {
         }
       />
     </SidebarProvider>
+
+    {/* Preview panel — sibling to SidebarProvider so it spans full viewport height,
+        matching AppShell's layout where PreviewPanel is outside SidebarProvider. */}
+    <AnimatePresence initial={false}>
+      {isPreviewOpen && (
+        <motion.div
+          key="preview-panel"
+          initial={{ width: 0 }}
+          animate={{ width: previewPanelWidth }}
+          exit={{ width: 0 }}
+          transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+          className="relative shrink-0 flex flex-col"
+        >
+          <div className="flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden">
+            <PreviewPanel />
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+    </div>
+    </TopBarActionsTargetContext.Provider>
   )
 }

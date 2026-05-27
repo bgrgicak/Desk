@@ -30,6 +30,9 @@ interface RoomTopBarActionsProps {
    *  an artifact is open — so the button would be a no-op there. The
    *  kebab menu stays visible regardless. Defaults to shown. */
   showPanelToggle?: boolean
+  /** Hides the kebab (three-dot) menu entirely. Used for hub chats
+   *  (e.g. Ask AI) where delete/rename actions don't apply. */
+  showKebab?: boolean
   /** When set, the kebab renders the task action menu instead of the
    *  default chat menu. Supplied alongside `taskActions` from
    *  `useTaskActions()`. */
@@ -46,6 +49,7 @@ export function RoomTopBarActions({
   panelOpen,
   onTogglePanel,
   showPanelToggle = true,
+  showKebab = true,
   task,
   taskActions,
   onTaskDeleted,
@@ -53,7 +57,7 @@ export function RoomTopBarActions({
   const showTaskMenu = !!task && !!taskActions
   return (
     <TopBarActions>
-      {showTaskMenu ? (
+      {showKebab && (showTaskMenu ? (
         <TaskPanelActionsMenu
           task={task!}
           onMarkDone={() => void taskActions!.onMarkDone(task!)}
@@ -87,7 +91,7 @@ export function RoomTopBarActions({
             <ChatMenuItems chatId={chatId} onDelete={(id) => onDeleteChat?.(id)} />
           </DropdownMenuContent>
         </DropdownMenu>
-      )}
+      ))}
       {showPanelToggle && (
         <Button
           variant="ghost"

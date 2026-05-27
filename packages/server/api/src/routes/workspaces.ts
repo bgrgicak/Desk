@@ -20,18 +20,18 @@ const HUB_NAME = "Hub";
 const HUB_DESCRIPTION = "Your home base across all workspaces.";
 
 /**
- * The hub workspace is an internal slot — it backs cross-workspace pin
- * storage and per-user bookkeeping, but the user never navigates to it
- * or sees it in any list. We strip it here so every consumer of the
- * public list (sidebar, pickers, "first workspace" redirects) sees only
- * project workspaces. Direct access to the hub by ID is blocked
- * symmetrically in `requireOwnedWorkspace`.
+ * Lists workspaces for a user. The hub workspace is included so clients
+ * can look up its metadata (path, name) when rendering hub-based chats
+ * and threads. Clients that want only project workspaces should filter by
+ * `kind !== "hub"` themselves (e.g. workspace pickers, sidebar room lists,
+ * and the "first workspace" navigation fallback). Rename and delete remain
+ * blocked by separate `kind === "hub"` guards in this file.
  */
 export async function listWorkspaces(pool: Pool, userId?: string) {
   const rows = userId
     ? await queries.workspaces.listByUser(pool, userId)
     : await queries.workspaces.list(pool);
-  return rows.filter((w) => w.kind !== "hub");
+  return rows;
 }
 
 /**

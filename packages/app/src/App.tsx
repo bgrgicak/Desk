@@ -30,7 +30,6 @@ import { useDispatch } from 'react-redux'
 import { wsConnect } from '@/store/ws/middleware'
 import { ContextList } from '@/components/context/ContextList'
 import { ContextDetail } from '@/components/context/ContextDetail'
-import { appAttachmentToPreview } from '@/components/context/AppPreview'
 import { TasksRoute } from '@/components/tasks/TasksRoute'
 import { HomePage } from '@/components/home/HomePage'
 import { ChatView } from '@/components/chats/ChatView'
@@ -68,7 +67,6 @@ import {
   setPendingSettingsSection,
   setPendingMyAccountOpen,
 } from '@/store/slices/uiSlice'
-import { openArtifact } from '@/store/slices/previewPanelSlice'
 import { buildArtifactPrompt } from '@/lib/artifact-prompt'
 import { markChatReadQuietly } from '@/store/ws/middleware'
 import type { SendOptions } from '@/components/compose/ChatInput'
@@ -402,9 +400,11 @@ function AppInner() {
   // back to workspaces[0] before the new id lands in the cache.
   useEffect(() => {
     if (wsFetching) return
-    if (!serverWorkspaces || serverWorkspaces.length === 0) return
-    if (serverWorkspaces.some(w => w.id === activeWorkspaceId)) return
-    navigate(buildPath(serverWorkspaces[0].id, activeView), { replace: true })
+    if (!serverWorkspaces) return
+    const projectWorkspaces = serverWorkspaces.filter(w => w.kind !== 'hub')
+    if (projectWorkspaces.length === 0) return
+    if (projectWorkspaces.some(w => w.id === activeWorkspaceId)) return
+    navigate(buildPath(projectWorkspaces[0].id, activeView), { replace: true })
   }, [serverWorkspaces, wsFetching, activeWorkspaceId, activeView, navigate])
 
   // Persisted "last URL per workspace" — written on navigation so the
@@ -575,41 +575,6 @@ function AppInner() {
     dispatch(setArtifactBackLabel(backLabel ?? null))
     goTo({ artifact: artifact.id })
   }, [dispatch, goTo])
-
-  // Stable callback fed into ChatView → MessageBubble (memoized).  AppInner
-  // re-renders frequently (the profile pinned ~155 commits over an 85 s
-  // session); without useCallback every MessageBubble in the visible
-  // window would re-render alongside, defeating the memo.
-  const handleAttachmentClick = useCallback((att: AttachmentRef) => {
-    // Plain directories (not app bundles) have no inline preview — keep
-    // routing them to the Library folder view.
-    if (att.kind === 'directory' && !appAttachmentToPreview(att.path)) {
-      goTo({ wsId: att.workspaceId, view: 'context', item: null, folder: att.path })
-      return
-    }
-    // Files (and app bundles) open in the in-chat preview panel rather
-    // than navigating away to the full Library detail page. The panel
-    // is scoped to the chat the click came from (ChatView closes it on
-    // unmount). Falls back to the detail route only when there's no
-    // workspace context to mount the panel against.
-    const previewWorkspaceId = att.workspaceId ?? activeWorkspaceId
-    if (previewWorkspaceId) {
-      dispatch(openArtifact({
-        workspaceId: previewWorkspaceId,
-        path: att.path,
-        name: att.name,
-        mime: att.mime,
-        params: att.params,
-      }))
-      return
-    }
-    goTo({
-      wsId: att.workspaceId,
-      view: 'context',
-      item: att.path,
-      artifactParams: att.params ? JSON.stringify(att.params) : null,
-    })
-  }, [goTo, dispatch, activeWorkspaceId])
 
   // Promotes a chat-scoped attachment to the primary workspace library.
   // The `artifactId` is the artifact's workspace-relative path; for chat
@@ -1010,7 +975,6 @@ function AppInner() {
             savedArtifactIds={savedArtifactIds}
             onSaveArtifact={handleSaveArtifact}
             highlightMessageId={selectedMessageId ?? undefined}
-            onAttachmentClick={handleAttachmentClick}
             initialStagedItems={isNewChat ? composeStagedItemsRef.current : undefined}
           />
         )}

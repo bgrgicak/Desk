@@ -66,7 +66,9 @@ describe("listModels", () => {
     await expect(listModels("wks_test", "roomy", { provider: "anthropic" })).resolves.toEqual([
       { id: "anthropic/claude-haiku-4-5", provider: "anthropic", contextWindow: 200_000, outputLimit: 64_000 },
     ]);
-    // openai isn't seeded in the fake driver.
-    await expect(listModels("wks_test", "roomy", { provider: "openai" })).resolves.toEqual([]);
+    // openai is seeded in the fake driver so the UI model picker can select it.
+    await expect(listModels("wks_test", "roomy", { provider: "openai" })).resolves.toEqual([
+      { id: "openai/gpt-4o", provider: "openai", contextWindow: 128_000, outputLimit: 16_384 },
+    ]);
   });
 });

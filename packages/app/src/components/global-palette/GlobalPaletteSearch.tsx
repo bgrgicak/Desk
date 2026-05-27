@@ -76,7 +76,7 @@ export function GlobalPaletteSearch({
   const workspaceListMatches = useMemo(() => {
     if (!isSearching) return []
     const needle = trimmed.toLowerCase()
-    return workspaces.filter(w => w.name.toLowerCase().includes(needle))
+    return workspaces.filter(w => w.kind !== 'hub' && w.name.toLowerCase().includes(needle))
   }, [isSearching, workspaces, trimmed])
 
   const chatResults = useMemo(() => searchResults.filter(r => r.type === 'chat' || r.type === 'message'), [searchResults])

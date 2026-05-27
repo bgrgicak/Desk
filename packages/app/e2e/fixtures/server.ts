@@ -141,11 +141,6 @@ export async function startRoomyServer(
     // boots straight into "one existing user" state.
     ROOMY_DB_PATH: dbPath,
     ROOMY_HOME: home,
-    // ROOMY_SEED_USERNAME is still read by handleAutoLogin to pick which
-    // user the auto-login should prefer — keep it in lockstep with the
-    // seed call above for fixtures that flip ROOMY_AUTO_LOGIN back on.
-    ROOMY_SEED_USERNAME: username,
-    ROOMY_AUTO_LOGIN: "off",
     // Use the fake sandbox driver so task runs complete instantly without
     // needing Docker or API keys.
     ROOMY_SANDBOX_DRIVER: "fake",

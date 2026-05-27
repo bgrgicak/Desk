@@ -1,6 +1,7 @@
 import type { Artifact } from "@/data/ui-types";
 import { fileKindFrom } from "@/data/file-kind";
 import type { ServerFile } from "../types";
+import { AGENT_NAME } from "@/lib/constants";
 
 function artifactType(
   mime: string,
@@ -47,7 +48,7 @@ export function toArtifactFromFile(f: ServerFile): Artifact {
     id: f.path,
     name: f.name,
     type: artifactType(f.mime, f.name, f.isDir ?? false),
-    agentName: "Agent",
+    agentName: AGENT_NAME,
     agentModel: "",
     createdAt: created,
     updatedAt: created,
