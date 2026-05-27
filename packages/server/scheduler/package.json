@@ -1,6 +1,6 @@
 {
   "name": "@roomy-ai/scheduler",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
@@ -32,10 +32,10 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@roomy-ai/db": "0.2.1",
-    "@roomy-ai/runtime": "0.2.1",
-    "@roomy-ai/shared": "0.2.1",
-    "@roomy-ai/storage": "0.2.1",
+    "@roomy-ai/db": "0.2.2",
+    "@roomy-ai/runtime": "0.2.2",
+    "@roomy-ai/shared": "0.2.2",
+    "@roomy-ai/storage": "0.2.2",
     "croner": "^10.0.1"
   },
   "devDependencies": {
