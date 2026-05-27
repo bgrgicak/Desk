@@ -748,15 +748,18 @@ function ModelDetail({
   }
 
   // Auto-select the first available model for new agents once catalog or
-  // preview results arrive. Never overrides a user-made choice.
+  // preview results arrive. Falls back to the provider placeholder when the
+  // catalog has no models for this provider (e.g. no API key on the server),
+  // so the form is still submittable. Never overrides a user-made choice.
   useEffect(() => {
     if (existing || userSetModel.current) return
     const available = [
       ...modelsForProvider(modelIndex, provider),
       ...(previewByProvider[provider] ?? []),
     ]
-    if (available.length > 0 && !model) {
-      setModel(available[0].id)
+    if (!model) {
+      const fallback = available[0]?.id ?? DEFAULT_MODEL_BY_PROVIDER[provider] ?? ''
+      if (fallback) setModel(fallback)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelIndex, previewByProvider, provider])
