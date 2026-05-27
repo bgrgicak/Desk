@@ -207,9 +207,11 @@ export function runPi(engine: Engine, opts: PiRunOptions): PiHandle {
   }
   seedSteps.push(`exec ${piCmd}`);
   const shellScript = seedSteps.join(" && ");
+  // Intentionally NO `-i`: with `-i` docker/nerdctl keeps the
+  // in-container stdin pipe open. Pi auto-detects piped stdin and can
+  // block forever waiting for EOF, leaving chats stuck in running state.
   const dockerArgv = [
     "exec",
-    "-i",
     "--user", opts.user,
     "--workdir", opts.cwd,
     ...envArgs,

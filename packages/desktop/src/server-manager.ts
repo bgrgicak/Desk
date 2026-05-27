@@ -4,9 +4,9 @@ import * as fs from "fs";
 import * as os from "os";
 import * as crypto from "crypto";
 import { buildServerEnvConfig } from "./server-env.js";
+import { resolveServerPort, waitForServerHealth } from "./server-startup.js";
 
-const PORT = parseInt(process.env.PORT ?? "35138", 10);
-const HEALTH_URL = `http://127.0.0.1:${PORT}/health`;
+const PREFERRED_PORT = parseInt(process.env.PORT ?? "35138", 10);
 
 function resolveServerEntry(): string {
   if (app.isPackaged) {
@@ -45,33 +45,20 @@ function ensureSecretKey(roomyDir: string): string {
   return key;
 }
 
-function buildServerEnv(roomyHome: string): NodeJS.ProcessEnv {
+function buildServerEnv(roomyHome: string, port: number): NodeJS.ProcessEnv {
   const secretKey = ensureSecretKey(roomyHome);
   return buildServerEnvConfig({
     roomyHome,
     secretKey,
     appDist: resolveAppDist(),
-    port: PORT,
+    port,
   });
-}
-
-async function pollHealth(timeoutMs = 30_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(HEALTH_URL);
-      if (res.ok) return;
-    } catch {
-      // not ready yet
-    }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-  throw new Error(`Server did not become ready within ${timeoutMs / 1000}s`);
 }
 
 export class ServerManager {
   private proc: UtilityProcess | null = null;
   private readonly roomyHome: string;
+  private serverPort = PREFERRED_PORT;
 
   constructor() {
     // ROOMY_HOME is the data root itself (~/Roomy), matching what dev.sh and
@@ -80,14 +67,19 @@ export class ServerManager {
   }
 
   get port(): number {
-    return PORT;
+    return this.serverPort;
   }
 
   get url(): string {
-    return `http://127.0.0.1:${PORT}`;
+    return `http://127.0.0.1:${this.serverPort}`;
   }
 
   async start(): Promise<void> {
+    this.serverPort = await resolveServerPort(PREFERRED_PORT);
+    if (this.serverPort !== PREFERRED_PORT) {
+      console.warn(`roomy-server preferred port ${PREFERRED_PORT} is occupied; using ${this.serverPort}`);
+    }
+
     const entry = resolveServerEntry();
     if (!fs.existsSync(entry)) {
       throw new Error(
@@ -99,7 +91,7 @@ export class ServerManager {
     fs.mkdirSync(this.roomyHome, { recursive: true });
 
     this.proc = utilityProcess.fork(entry, [], {
-      env: buildServerEnv(this.roomyHome),
+      env: buildServerEnv(this.roomyHome, this.serverPort),
       stdio: "inherit",
     });
 
@@ -108,7 +100,7 @@ export class ServerManager {
       this.proc = null;
     });
 
-    await pollHealth();
+    await waitForServerHealth(`${this.url}/health`, this.proc);
   }
 
   stop(): void {

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { terminalAssistantMessage, type PiJsonEvent } from "../src/piEvents.js";
 
 const spawnedChildren: MockChildProcess[] = [];
+const spawnCalls: Array<{ command: string; args: string[] }> = [];
 
 class MockChildProcess extends EventEmitter {
   stdout = new Readable({ read() {} });
@@ -15,7 +16,8 @@ class MockChildProcess extends EventEmitter {
 }
 
 vi.mock("node:child_process", () => ({
-  spawn: vi.fn(() => {
+  spawn: vi.fn((command: string, args: string[]) => {
+    spawnCalls.push({ command, args });
     const ch = new MockChildProcess();
     spawnedChildren.push(ch);
     return ch;
@@ -30,6 +32,7 @@ const watchers: Array<{ stop(): void }> = [];
 afterEach(() => {
   for (const watcher of watchers.splice(0)) watcher.stop();
   spawnedChildren.length = 0;
+  spawnCalls.length = 0;
 });
 
 async function createSessionDir(): Promise<{ dir: string; file: string }> {
@@ -110,6 +113,35 @@ describe("watchPiSessionTerminal", () => {
 });
 
 describe("runPi done semantics", () => {
+  it("does not keep docker exec stdin open for pi", async () => {
+    const fakeEngine = {
+      name: "docker",
+      exec: vi.fn(async () => ({ wait: async () => 0 })),
+    };
+
+    const handle = runPi(fakeEngine as never, {
+      containerId: "ctr_test",
+      user: "1000:1000",
+      cwd: "/home/agent",
+      sessionId: "session_test",
+      env: {},
+      prompt: "hi",
+      onEvent: () => {},
+      onStderr: () => {},
+      translate: { sessionID: "session_test", assistantMessageId: "msg_test" },
+    });
+
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]?.args.slice(0, 2)).toEqual(["exec", "--user"]);
+    expect(spawnCalls[0]?.args).not.toContain("-i");
+
+    const child = spawnedChildren[0]!;
+    child.stdout.push(null);
+    child.stderr.push(null);
+    child.emit("exit", 0, null);
+    await expect(handle.done).resolves.toMatchObject({ exitCode: 0, aborted: false });
+  });
+
   it("resolves on pi's terminal event even when the wrapper never exits", async () => {
     // Regression for chats stuck in `state='running'` because the docker
     // exec wrapper hung past pi's actual end-of-turn (e.g. a non-exiting

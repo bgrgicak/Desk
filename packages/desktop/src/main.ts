@@ -346,9 +346,9 @@ async function main(): Promise<void> {
     }
   } else {
     serverManager = new ServerManager();
-    serverUrl = serverManager.url;
     try {
       await serverManager.start();
+      serverUrl = serverManager.url;
     } catch (err) {
       const errWin = new BrowserWindow({ width: 640, height: 320 });
       errWin.loadURL(

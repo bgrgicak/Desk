@@ -6,11 +6,11 @@
 # Flow:
 #   1. Pre-flight checks (Node 23, clean tree, on trunk, gh + npm + docker logged in).
 #   2. Pick a new version (next alpha, next minor+alpha.0, or custom).
-#   3. Bump every PUBLIC workspace's package.json to that version.
-#   4. Install + build + npm pack smoke test.
+#   3. Bump every npm-published workspace plus version-only package.json files.
+#   4. Install + build + npm pack / desktop staging smoke tests.
 #   5. Final confirm — last chance to bail.
 #   6. git commit "chore(release): vX".
-#   7. npm publish --workspaces --access public  (uses local npm login; publishConfig.tag=latest).
+#   7. npm publish configured public workspaces (uses local npm login; publishConfig.tag=latest).
 #   8. Build + push the multi-platform sandbox Docker image to Docker Hub at
 #      <repo>:<version> + <repo>:latest (uses `docker login`).
 #   9. git tag vX, push branch + tag. The tag push triggers
@@ -50,12 +50,18 @@ PUBLIC_WORKSPACES=(
   "packages/server/storage"
   "packages/apps"
   "packages/app-scaffold"
-  "packages/desktop"
   "packages/server/setup"
   "packages/server/sandbox-cli"
+)
+# Versioned packages that are not root npm workspaces. Desktop ships through
+# the GitHub DMG workflow; built-in app packages are bundled by @roomy-ai/apps.
+VERSION_ONLY_PACKAGES=(
+  "packages/desktop"
   "packages/apps/chat-cards.app"
   "packages/apps/chat-forms.app"
 )
+DESKTOP_PACKAGE="packages/desktop"
+VERSIONED_PACKAGES=("${PUBLIC_WORKSPACES[@]}" "${VERSION_ONLY_PACKAGES[@]}")
 
 # ---------- helpers ----------
 
@@ -300,8 +306,8 @@ hr
 
 # ---------- step 2: bump versions ----------
 
-say "Bumping versions + pinning inter-package deps in ${#PUBLIC_WORKSPACES[@]} public workspaces..."
-for ws in "${PUBLIC_WORKSPACES[@]}"; do
+say "Bumping versions + pinning inter-package deps in ${#VERSIONED_PACKAGES[@]} packages..."
+for ws in "${VERSIONED_PACKAGES[@]}"; do
   pkg="$ws/package.json"
   [ -f "$pkg" ] || die "Missing $pkg"
   pkg_set_version "$pkg" "$NEW_VERSION"
@@ -321,11 +327,29 @@ hr
 say "Installing dependencies + refreshing lockfile..."
 npm install
 
+say "Installing desktop dependencies + refreshing desktop lockfile..."
+(
+  cd "$DESKTOP_PACKAGE"
+  npm install --ignore-scripts --no-audit --no-fund
+)
+
 say "Cleaning previous build artifacts..."
 find . -name dist -type d -not -path '*/node_modules/*' -exec rm -rf '{}' + 2>/dev/null || true
 
 say "Building all packages..."
 npm run build:packages
+
+say "Building desktop main process..."
+(
+  cd "$DESKTOP_PACKAGE"
+  npm run build
+)
+
+say "Smoke test: staging desktop server bundle..."
+(
+  cd "$DESKTOP_PACKAGE"
+  npm run stage-server
+)
 
 say "Smoke test: npm pack --dry-run on public workspaces..."
 # Pack each public workspace one by one. Mirrors the explicit -w list
@@ -359,6 +383,7 @@ echo "       platforms: ${DOCKER_PLATFORMS}"
 echo "  4. git tag $TAG and push trunk + $TAG to origin"
 echo "     → triggers .github/workflows/desktop-release.yml on a macos-latest"
 echo "       runner, which builds + uploads the macOS DMG to the GH Release."
+echo "     desktop package version bumped: $(pkg_get "$DESKTOP_PACKAGE/package.json" name)@$NEW_VERSION"
 echo
 confirm "Proceed?" || die "Aborted. Local version bumps remain; revert with: git checkout -- packages/"
 
@@ -368,10 +393,10 @@ hr
 
 say "Committing version bump..."
 _bump_add_args=()
-for ws in "${PUBLIC_WORKSPACES[@]}"; do
+for ws in "${VERSIONED_PACKAGES[@]}"; do
   _bump_add_args+=("$ws/package.json")
 done
-git add "${_bump_add_args[@]}" package-lock.json
+git add "${_bump_add_args[@]}" package-lock.json "$DESKTOP_PACKAGE/package-lock.json"
 git commit -m "chore(release): $TAG"
 ok "Committed."
 
