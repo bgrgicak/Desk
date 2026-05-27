@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
   assertPortAvailable,
+  resolveServerTarget,
   resolveServerPort,
   waitForServerHealth,
   type StartupProcess,
@@ -49,6 +50,53 @@ describe("desktop server startup", () => {
     socket.emit("connect");
 
     await expect(promise).resolves.toBe(45678);
+    expect(randomPort).toHaveBeenCalledWith("127.0.0.1");
+  });
+
+  it("reuses an existing Roomy server when the preferred port is occupied and ready", async () => {
+    const socket = new FakeSocket();
+    const connect = vi.fn(() => socket);
+    const randomPort = vi.fn(async () => 45678);
+    const fetchFn = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ok: true, checks: { db: "ok", vault: "ok" } }),
+    }));
+    const promise = resolveServerTarget(35138, "127.0.0.1", {
+      connect,
+      randomPort,
+      fetchFn,
+    });
+    socket.emit("connect");
+
+    await expect(promise).resolves.toEqual({
+      existing: true,
+      port: 35138,
+      url: "http://127.0.0.1:35138",
+    });
+    expect(fetchFn).toHaveBeenCalledWith("http://127.0.0.1:35138/ready");
+    expect(randomPort).not.toHaveBeenCalled();
+  });
+
+  it("uses a random server port when the preferred port is occupied by a non-Roomy process", async () => {
+    const socket = new FakeSocket();
+    const connect = vi.fn(() => socket);
+    const randomPort = vi.fn(async () => 45678);
+    const fetchFn = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ok: true }),
+    }));
+    const promise = resolveServerTarget(35138, "127.0.0.1", {
+      connect,
+      randomPort,
+      fetchFn,
+    });
+    socket.emit("connect");
+
+    await expect(promise).resolves.toEqual({
+      existing: false,
+      port: 45678,
+      url: "http://127.0.0.1:45678",
+    });
     expect(randomPort).toHaveBeenCalledWith("127.0.0.1");
   });
 

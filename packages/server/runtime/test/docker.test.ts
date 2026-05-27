@@ -5,6 +5,7 @@ import {
   classifyResourceError,
   providerKeyEnv,
   providerKeyExecEnv,
+  stopRunningSandboxes,
   waitForEntrypointReady,
 } from "../src/docker.js";
 import type { Engine, ExecHandle, ExecSpec, ContainerInfo } from "../src/engine.js";
@@ -187,6 +188,96 @@ describe("providerKeyExecEnv", () => {
     expect(env).toContain("GITHUB_TOKEN=");
     expect(env).toContain("GH_TOKEN=");
     expect(env).toContain("PI_AUTH_JSON_BASE64=codex");
+  });
+});
+
+describe("stopRunningSandboxes", () => {
+  function engineWithSandboxes(opts: {
+    names: string[];
+    failStop?: string;
+    bindsByName?: Record<string, string[]>;
+  }): Engine & { stopped: string[] } {
+    const stopped: string[] = [];
+    return {
+      name: "docker",
+      inspect: async (nameOrId: string) => {
+        const name = opts.names.find((n) => n === nameOrId || `${n}-id` === nameOrId);
+        if (!name) return null;
+        return {
+          id: `${name}-id`,
+          imageId: "sha256:test",
+          user: "0:0",
+          labels: {},
+          binds: opts.bindsByName?.[name] ?? [],
+          running: true,
+        } satisfies ContainerInfo;
+      },
+      imageId: async () => null,
+      imagePull: async () => {},
+      create: async () => "",
+      start: async () => {},
+      stop: async (nameOrId: string) => {
+        if (nameOrId === opts.failStop) throw new Error("stop failed");
+        stopped.push(nameOrId);
+      },
+      update: async () => true,
+      remove: async () => {},
+      list: async ({ namePrefix }) => opts.names
+        .filter((name) => !namePrefix || name.startsWith(namePrefix))
+        .map((name) => ({ id: `${name}-id`, name })),
+      exec: async () => {
+        throw new Error("not used");
+      },
+      execDetached: async () => {},
+      port: async () => null,
+      top: async () => [],
+      isRootless: async () => false,
+      stopped,
+    };
+  }
+
+  it("stops every running Roomy sandbox returned by the engine", async () => {
+    const engine = engineWithSandboxes({
+      names: ["roomy-sandbox-wks_a", "roomy-sandbox-wks_b", "other"],
+    });
+
+    await expect(stopRunningSandboxes({ engine })).resolves.toEqual([
+      "roomy-sandbox-wks_a",
+      "roomy-sandbox-wks_b",
+    ]);
+    expect(engine.stopped).toEqual([
+      "roomy-sandbox-wks_a",
+      "roomy-sandbox-wks_b",
+    ]);
+  });
+
+  it("continues stopping other sandboxes when one stop fails", async () => {
+    const engine = engineWithSandboxes({
+      names: ["roomy-sandbox-wks_a", "roomy-sandbox-wks_b"],
+      failStop: "roomy-sandbox-wks_a",
+    });
+
+    await expect(stopRunningSandboxes({ engine })).resolves.toEqual([
+      "roomy-sandbox-wks_b",
+    ]);
+    expect(engine.stopped).toEqual(["roomy-sandbox-wks_b"]);
+  });
+
+  it("limits shutdown cleanup to sandboxes mounted under the current ROOMY_HOME", async () => {
+    const home = "/Users/tester/Roomy";
+    const otherHome = "/tmp/other-roomy";
+    const engine = engineWithSandboxes({
+      names: ["roomy-sandbox-wks_a", "roomy-sandbox-wks_b"],
+      bindsByName: {
+        "roomy-sandbox-wks_a": [`${home}/alpha:/home/agent:rw`],
+        "roomy-sandbox-wks_b": [`${otherHome}/beta:/home/agent:rw`],
+      },
+    });
+
+    await expect(stopRunningSandboxes({ engine, home })).resolves.toEqual([
+      "roomy-sandbox-wks_a",
+    ]);
+    expect(engine.stopped).toEqual(["roomy-sandbox-wks_a"]);
   });
 });
 

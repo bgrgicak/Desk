@@ -917,6 +917,65 @@ export async function stopSandbox(handle: SandboxHandle): Promise<void> {
   }
 }
 
+export async function stopRunningSandboxes(opts: {
+  engine?: Engine;
+  namePrefix?: string;
+  graceSeconds?: number;
+  home?: string;
+} = {}): Promise<string[]> {
+  const namePrefix = opts.namePrefix ?? "roomy-sandbox-";
+  const graceSeconds = opts.graceSeconds ?? 10;
+  let engine: Engine;
+  try {
+    engine = opts.engine ?? await detectEngine();
+  } catch {
+    return [];
+  }
+
+  let containers: Array<{ id: string; name: string }>;
+  try {
+    containers = await engine.list({ namePrefix, all: false });
+  } catch {
+    return [];
+  }
+
+  const targets: Array<{ id: string; name: string }> = [];
+  for (const c of containers) {
+    if (!c.name.startsWith(namePrefix)) continue;
+    if (opts.home && !(await sandboxBelongsToHome(engine, c.id, opts.home))) continue;
+    targets.push(c);
+  }
+  const stopped = await Promise.all(targets.map(async (c) => {
+    try {
+      await engine.stop(c.name, graceSeconds);
+      log.info(`stopped sandbox ${c.name}`);
+      return c.name;
+    } catch (err) {
+      log.warn({ container: c.name, err: (err as Error).message }, "failed to stop sandbox");
+      return null;
+    }
+  }));
+
+  return stopped.filter((name): name is string => name !== null);
+}
+
+async function sandboxBelongsToHome(engine: Engine, containerId: string, home: string): Promise<boolean> {
+  let info;
+  try {
+    info = await engine.inspect(containerId);
+  } catch {
+    return false;
+  }
+  if (!info) return false;
+  const expectedParent = home.replace(/\/+$/, "");
+  const workspaceBind = info.binds.find(
+    (b) => b.endsWith(":/home/agent:rw") || b.endsWith(":/home/agent"),
+  );
+  if (!workspaceBind) return false;
+  const source = workspaceBind.split(":")[0].replace(/\/+$/, "");
+  return path.dirname(source) === expectedParent;
+}
+
 /**
  * Removes containers reported by auditSandboxMounts as having stale bind
  * mounts. Safe to call at startup: drifted containers are unusable (their

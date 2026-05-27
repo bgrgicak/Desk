@@ -13,8 +13,18 @@ interface ConnectSocket {
 }
 
 type ConnectFn = (opts: { host: string; port: number }) => ConnectSocket;
-type FetchFn = (url: string) => Promise<{ ok: boolean }>;
+type FetchResponse = {
+  ok: boolean;
+  json?: () => Promise<unknown>;
+};
+type FetchFn = (url: string) => Promise<FetchResponse>;
 type RandomPortFn = (host: string) => Promise<number>;
+
+export interface ServerTarget {
+  existing: boolean;
+  port: number;
+  url: string;
+}
 
 export class PortInUseError extends Error {
   constructor(port: number) {
@@ -78,6 +88,63 @@ export async function resolveServerPort(
   } catch (err) {
     if (!(err instanceof PortInUseError)) throw err;
     return await (opts.randomPort ?? randomAvailablePort)(host);
+  }
+}
+
+function buildServerUrl(host: string, port: number): string {
+  return `http://${host}:${port}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isRoomyReadyPayload(value: unknown): boolean {
+  if (!isRecord(value) || value.ok !== true || !isRecord(value.checks)) return false;
+  return value.checks.db === "ok" && value.checks.vault === "ok";
+}
+
+export async function isExistingRoomyServerReady(
+  url: string,
+  fetchFn: FetchFn = fetch,
+): Promise<boolean> {
+  try {
+    const res = await fetchFn(`${url}/ready`);
+    if (!res.ok || !res.json) return false;
+    return isRoomyReadyPayload(await res.json());
+  } catch {
+    return false;
+  }
+}
+
+export async function resolveServerTarget(
+  preferredPort: number,
+  host = "127.0.0.1",
+  opts: { connect?: ConnectFn; randomPort?: RandomPortFn; fetchFn?: FetchFn } = {},
+): Promise<ServerTarget> {
+  try {
+    await assertPortAvailable(preferredPort, host, opts.connect);
+    return {
+      existing: false,
+      port: preferredPort,
+      url: buildServerUrl(host, preferredPort),
+    };
+  } catch (err) {
+    if (!(err instanceof PortInUseError)) throw err;
+    const preferredUrl = buildServerUrl(host, preferredPort);
+    if (await isExistingRoomyServerReady(preferredUrl, opts.fetchFn)) {
+      return {
+        existing: true,
+        port: preferredPort,
+        url: preferredUrl,
+      };
+    }
+    const port = await (opts.randomPort ?? randomAvailablePort)(host);
+    return {
+      existing: false,
+      port,
+      url: buildServerUrl(host, port),
+    };
   }
 }
 

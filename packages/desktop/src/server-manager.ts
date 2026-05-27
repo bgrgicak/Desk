@@ -4,7 +4,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as crypto from "crypto";
 import { buildServerEnvConfig } from "./server-env.js";
-import { resolveServerPort, waitForServerHealth } from "./server-startup.js";
+import { resolveServerTarget, waitForServerHealth } from "./server-startup.js";
 
 const PREFERRED_PORT = parseInt(process.env.PORT ?? "35138", 10);
 
@@ -59,6 +59,7 @@ export class ServerManager {
   private proc: UtilityProcess | null = null;
   private readonly roomyHome: string;
   private serverPort = PREFERRED_PORT;
+  private usingExistingServer = false;
 
   constructor() {
     // ROOMY_HOME is the data root itself (~/Roomy), matching what dev.sh and
@@ -75,7 +76,14 @@ export class ServerManager {
   }
 
   async start(): Promise<void> {
-    this.serverPort = await resolveServerPort(PREFERRED_PORT);
+    const target = await resolveServerTarget(PREFERRED_PORT);
+    this.serverPort = target.port;
+    this.usingExistingServer = target.existing;
+    if (target.existing) {
+      console.warn(`roomy-server preferred port ${PREFERRED_PORT} is already occupied by a ready Roomy server; reusing it`);
+      return;
+    }
+
     if (this.serverPort !== PREFERRED_PORT) {
       console.warn(`roomy-server preferred port ${PREFERRED_PORT} is occupied; using ${this.serverPort}`);
     }
@@ -108,9 +116,10 @@ export class ServerManager {
       this.proc.kill();
       this.proc = null;
     }
+    this.usingExistingServer = false;
   }
 
   isRunning(): boolean {
-    return this.proc !== null;
+    return this.proc !== null || this.usingExistingServer;
   }
 }

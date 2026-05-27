@@ -27,6 +27,7 @@ import {
   pruneDriftedContainers,
   refreshSandboxConnections,
   resolveLocalSourceEnv,
+  stopRunningSandboxes,
   writeBuiltinApps,
   writeGoalSkillFiles,
 } from "@roomy-ai/runtime";
@@ -421,6 +422,15 @@ async function main(): Promise<void> {
       process.exit(1);
     }, SHUTDOWN_GRACE_MS);
     force.unref();
+
+    try {
+      const stopped = await stopRunningSandboxes({ home: ROOMY_HOME });
+      if (stopped.length > 0) {
+        log.info(`shutdown: stopped ${stopped.length} sandbox container(s)`);
+      }
+    } catch (err) {
+      log.warn({ err }, "shutdown: sandbox stop failed");
+    }
 
     await new Promise<void>((resolve) => {
       server.close(() => resolve());

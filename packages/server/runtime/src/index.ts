@@ -1,6 +1,7 @@
 export {
   createOrReuse,
   stopSandbox,
+  stopRunningSandboxes,
   ensureImage,
   auditSandboxMounts,
   pruneDriftedContainers,
