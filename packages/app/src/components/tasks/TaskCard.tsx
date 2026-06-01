@@ -31,6 +31,18 @@ import { initialsOf } from '@/lib/initials'
 import { TaskPills, PRIORITY_LABELS } from './task-badges'
 import { describeCron } from './schedule-utils'
 import { SchedulePickerForm, type SchedulePickerValue } from './SchedulePicker'
+import { EmbeddedFragmentPreview } from '@/components/shared/EmbeddedFragmentPreview'
+import type { LatestAgentMessage } from '@/hooks/use-latest-agent-message'
+import { MarkdownContent } from '@/components/MarkdownContent'
+import {
+  ACTIVITY_CARD_ACTIVE,
+  ACTIVITY_CARD_BASE,
+  ACTIVITY_CARD_FOOTER_BASE,
+  ACTIVITY_CARD_FRAGMENT_FOOTER,
+  ACTIVITY_CARD_IDLE,
+  ACTIVITY_CARD_MARKDOWN,
+  ACTIVITY_CARD_REGULAR_FOOTER,
+} from '@/components/shared/activity-card-styles'
 
 /** Fraction (0–1) of the way from the previous run (or the task's
  *  creation) to the next scheduled run. Kept out of the component so
@@ -71,6 +83,10 @@ function NextRunRing({ value }: { value: number }) {
 
 export interface TaskCardProps {
   task: Task
+  /** Workspace context for rendering latest fragment previews on Home. */
+  workspaceId?: string
+  /** Latest supported agent output for this task's backing chat. */
+  latestPreview?: LatestAgentMessage
   /** Total messages on the backing chat — the "N replies" button. */
   repliesCount?: number
   /** Display name for the author avatar. Defaults to "You". */
@@ -104,15 +120,18 @@ export interface TaskCardProps {
 
 /**
  * The bulletin-board task row. Store-agnostic (task + callbacks only)
- * so Home can reuse it. The whole card is a router `<Link>` to the
- * task's docked-chat URL so middle-click / cmd-click opens it in a
- * new tab; the footer keeps a "N replies" button (same action) plus a
- * "Mark as done" split (Run now / Pause / Delete). A single status pill
- * sits in the header (Needs input subsumes "unread" — opening the task
- * clears both); an active card gets the chat-view item-card highlight.
+ * so Home can reuse it. Plain cards are router links to the task's
+ * docked-chat URL; fragment-preview cards leave the body interactive
+ * and keep navigation in the footer Chat action. The footer keeps a
+ * "N replies" button (same action) plus a "Mark as done" split (Run
+ * now / Pause / Delete). A single status pill sits in the header
+ * (Needs input subsumes "unread" — opening the task clears both); an
+ * active card gets the chat-view item-card highlight.
  */
 export const TaskCard = memo(function TaskCard({
   task,
+  workspaceId,
+  latestPreview,
   repliesCount = 0,
   authorName = 'You',
   authorAvatarUrl,
@@ -146,6 +165,14 @@ export const TaskCard = memo(function TaskCard({
   const isNeedsInput = task.status === 'needs_input'
   const isRunning = task.messageState === 'running'
   const isPaused = task.messageState === 'paused'
+  const textPreview = latestPreview?.kind === 'text' ? latestPreview : undefined
+  const fragmentPreview =
+    isNeedsInput && latestPreview?.kind === 'fragment'
+      ? latestPreview
+      : undefined
+  const isFragmentPreview = !!fragmentPreview
+  const displayTime = fragmentPreview?.createdAt ?? textPreview?.createdAt ?? task.startedAt
+  const bodyText = textPreview?.text ?? task.description ?? task.name
   // Humanize the raw cron (`describeCron` returns the input unchanged
   // for non-cron / free-form values, so this is safe either way).
   const scheduleText = task.schedule?.trim()
@@ -178,28 +205,50 @@ export const TaskCard = memo(function TaskCard({
     e.stopPropagation()
     fn()
   }
+  const targetIsInteractive = (target: EventTarget | null) =>
+    target instanceof Element &&
+    !!target.closest('[data-task-card-interactive="true"]')
+  const openInNewTab = () => {
+    window.open(href, '_blank', 'noopener,noreferrer')
+  }
+  const handleFragmentCardClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (targetIsInteractive(e.target)) return
+    if (e.button !== 0) return
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+      openInNewTab()
+      return
+    }
+    onSelect()
+  }
+  const handleFragmentCardAuxClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (targetIsInteractive(e.target)) return
+    if (e.button === 1) openInNewTab()
+  }
+  const handleFragmentCardKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (targetIsInteractive(e.target)) return
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    e.preventDefault()
+    onSelect()
+  }
 
-  return (
-    <Link
-      to={href}
-      draggable={false}
-      className={cn(
-        'flex cursor-pointer flex-col gap-4 rounded-2xl border p-6 no-underline text-inherit transition-colors',
-        isActive
-          ? 'border-foreground/40 bg-secondary shadow-sm'
-          : cn(
-              'bg-background hover:bg-foreground/[0.02]',
-              // Needs-input cards get an amber border so they stand
-              // out in the list.
-              isNeedsInput
-                ? 'border-[var(--color-amber-400)]'
-                : 'border-border',
-            ),
-        isDone && !isActive && 'opacity-60',
-        className,
-      )}
-      data-testid={`task-card-${task.id}`}
-    >
+  const cardClassName = cn(
+    ACTIVITY_CARD_BASE,
+    isFragmentPreview ? 'cursor-default' : 'cursor-pointer',
+    isActive
+      ? ACTIVITY_CARD_ACTIVE
+      : cn(
+          ACTIVITY_CARD_IDLE,
+          // Needs-input cards get an amber border so they stand
+          // out in the list.
+          isNeedsInput
+            ? 'border-[var(--color-amber-400)]'
+            : 'border-border',
+        ),
+    isDone && !isActive && 'opacity-60',
+    className,
+  )
+  const cardContent = (
+    <>
       {/* Header — author + time, unread/status pills right */}
       <div className="flex items-start gap-3">
         <Avatar className="h-10 w-10 shrink-0 select-none">
@@ -218,7 +267,7 @@ export const TaskCard = memo(function TaskCard({
               rather than interpunct prefixes — a leading "·" reads as
               a list bullet once items wrap onto their own line. */}
           <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
-            <span className="truncate">{getRelativeTime(task.startedAt)}</span>
+            <span className="truncate">{getRelativeTime(displayTime)}</span>
             {metaParts.map((part) => (
               <span key={part} className="truncate">
                 {part}
@@ -238,19 +287,42 @@ export const TaskCard = memo(function TaskCard({
       </div>
 
       {/* Title (AI-generated, like a chat title) + the body message */}
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-3">
         {task.title && (
           <h3 className="text-base font-semibold leading-6 text-foreground break-words">
             {task.title}
           </h3>
         )}
-        <p className="line-clamp-2 text-sm leading-6 text-foreground break-words">
-          {task.description ?? task.name}
-        </p>
+        {fragmentPreview ? (
+          <EmbeddedFragmentPreview
+            workspaceId={fragmentPreview.artifact.workspaceId ?? workspaceId}
+            chatId={task.threadChatId ?? task.chatId}
+            path={fragmentPreview.artifact.path}
+            name={fragmentPreview.artifact.name}
+            mime={fragmentPreview.artifact.mime}
+            params={fragmentPreview.artifact.params}
+            testId="home-task-fragment-preview"
+            interactiveAttribute="data-task-card-interactive"
+          />
+        ) : (
+          <MarkdownContent
+            text={bodyText}
+            renderLinks={false}
+            className={ACTIVITY_CARD_MARKDOWN}
+          />
+        )}
       </div>
 
       {/* Footer */}
-      <div className="flex items-center gap-2 border-t border-border pt-4">
+      <div
+        className={cn(
+          ACTIVITY_CARD_FOOTER_BASE,
+          isFragmentPreview
+            ? ACTIVITY_CARD_FRAGMENT_FOOTER
+            : ACTIVITY_CARD_REGULAR_FOOTER,
+        )}
+        data-task-card-interactive="true"
+      >
         <Button
           type="button"
           size="sm"
@@ -382,6 +454,33 @@ export const TaskCard = memo(function TaskCard({
           )}
         </div>
       </div>
+    </>
+  )
+
+  if (isFragmentPreview) {
+    return (
+      <div
+        role="link"
+        tabIndex={0}
+        className={cardClassName}
+        data-testid={`task-card-${task.id}`}
+        onClick={handleFragmentCardClick}
+        onAuxClick={handleFragmentCardAuxClick}
+        onKeyDown={handleFragmentCardKeyDown}
+      >
+        {cardContent}
+      </div>
+    )
+  }
+
+  return (
+    <Link
+      to={href}
+      draggable={false}
+      className={cardClassName}
+      data-testid={`task-card-${task.id}`}
+    >
+      {cardContent}
     </Link>
   )
 })

@@ -537,7 +537,8 @@ function setSecurityHeaders(res: ServerResponse, nonce: string): void {
     "font-src 'self' data:",
     "connect-src 'self'",
     "frame-ancestors 'self'",
-    "navigate-to 'self'",
+    // Do not emit `navigate-to` here: unsupported clients log it as an
+    // unrecognized directive, and the rest of this policy still applies.
     "base-uri 'self'",
     "form-action 'self'",
     "object-src 'none'",

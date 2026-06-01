@@ -1,6 +1,7 @@
 import type { MouseEvent } from 'react'
-import { File, Folder } from 'lucide-react'
+import { File, Folder, Zap } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { isAppDirectory } from '@/data/file-kind'
 import { SANDBOX_HOME } from '@/lib/remark-sandbox-paths'
 import { buildPath } from '@/router/nav'
 import { useGetLibraryFileQuery } from '@/store/api'
@@ -35,9 +36,11 @@ export function displayBasename(displayPath: string): string {
 export function pathChipHref(workspaceId: string | undefined, sandboxPath: string, isDir: boolean): string | undefined {
   if (!workspaceId) return undefined
   const rel = workspaceRelativePath(sandboxPath)
-  return isDir
-    ? buildPath(workspaceId, 'context', { folder: normalizeLibraryPath(rel) })
-    : buildPath(workspaceId, 'context', { item: rel })
+  const normalizedRel = normalizeLibraryPath(rel)
+  const isAppDir = isAppDirectory(displayBasename(normalizedRel))
+  return isDir && !isAppDir
+    ? buildPath(workspaceId, 'context', { folder: normalizedRel })
+    : buildPath(workspaceId, 'context', { item: isAppDir ? normalizedRel : rel })
 }
 
 export function PathChip({ sandboxPath, displayPath, workspaceId }: PathChipProps) {
@@ -53,14 +56,15 @@ export function PathChip({ sandboxPath, displayPath, workspaceId }: PathChipProp
     { skip: skipMeta },
   )
   const isDir = sandboxPath.endsWith('/') || !rel || !!meta?.isDir
-  const Icon = isDir ? Folder : File
+  const isAppDir = isAppDirectory(displayBasename(rel))
+  const Icon = isAppDir ? Zap : isDir ? Folder : File
   const href = pathChipHref(workspaceId, sandboxPath, isDir)
   // A file chip opens the in-chat preview panel on plain click rather
   // than navigating to the Library detail page. Directories keep the
   // folder-browser navigation; modifier clicks fall through to the
   // <Link> so the detail page can still open in a new tab.
   const handleClick = (e: MouseEvent<HTMLAnchorElement>) => {
-    if (isDir || !workspaceId) return
+    if ((isDir && !isAppDir) || !workspaceId) return
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
     e.preventDefault()
     dispatch(openArtifact({ workspaceId, path: rel, name: displayBasename(displayPath), mime: meta?.mime }))

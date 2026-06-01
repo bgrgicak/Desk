@@ -10,6 +10,8 @@ fragment usually reads better.
 - Reads the URL `items` param (JSON-encoded array of card objects).
 - Optionally reads a `title` param and renders it as a header above the
   grid.
+- The grid auto-fits columns to the actual item count and available width:
+  a single card fills the row, while multiple cards share responsive columns.
 - Each item renders as a single Card:
   - `title` — optional. Hyperlinked when `link` is set; otherwise plain
     text.

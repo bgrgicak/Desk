@@ -70,12 +70,13 @@ afterAll(async () => {
   delete process.env.ROOMY_HOME;
 });
 
-async function issueSandboxToken(): Promise<string> {
+async function issueSandboxToken(opts?: { runId?: string }): Promise<string> {
   const token = `tok_${crypto.randomBytes(16).toString("hex")}`;
   await queries.sandboxSessions.issue(pool, {
     id: generateId("sandboxSession"),
     agentId,
     workspaceId,
+    runId: opts?.runId,
     tokenHash: crypto.createHash("sha256").update(token).digest("hex"),
   });
   return token;
@@ -232,6 +233,30 @@ describe("POST /sandbox/messages", () => {
     expect(anchorRows[0].state).toBe("running");
   });
 
+  it("creates a child task under the current task when parentTaskId is supplied", async () => {
+    const token = await issueSandboxToken();
+    const parent = await sandboxPost({
+      chatId: sourceChatId,
+      title: "Parent task",
+      content: "Coordinate the build",
+      executeAt: "2026-06-01T09:00:00Z",
+    }, token);
+    expect(parent.status).toBe(201);
+
+    const child = await sandboxPost({
+      parentTaskId: parent.body.message.id,
+      title: "Implement parser",
+      content: "Parse RSS and Atom feeds.",
+      executeAt: "2026-06-01T10:00:00Z",
+    }, token);
+    expect(child.status).toBe(201);
+    expect(child.body.message.kind).toBe("task");
+    expect(child.body.message.parentId).toBe(parent.body.message.id);
+    expect(child.body.message.chatId).toBe(parent.body.threadChat.id);
+    expect(child.body.parentChatId).toBe(parent.body.threadChat.id);
+    expect(child.body.threadChat.id).not.toBe(parent.body.threadChat.id);
+  });
+
   it("leaves a successful unscheduled agent task in `running` for `task complete` to close", async () => {
     // afterTaskRun deliberately does NOT propagate success onto an
     // agent-authored unscheduled parent: the canonical close is
@@ -352,19 +377,17 @@ describe("POST /sandbox/messages", () => {
     }
   });
 
-  it("rejects requests with no chatId — agents must always anchor tasks to a chat", async () => {
-    // Contract: the agent CLI's `--chat <id>` is required and the
-    // sandbox endpoint mirrors that on the wire. Tasks are threads of a
-    // source chat; there is no "create a chatless task" path for agents
-    // today. (If we later want one, it should be an explicit opt-in
-    // flag, not a missing-field fallback.)
+  it("rejects requests with no chatId or parent task when the sandbox session is not a task run", async () => {
+    // Agents can omit --chat only when the server can infer the parent
+    // task from a task_run-scoped sandbox token. A plain sandbox session
+    // still needs an explicit source chat or parent task.
     const token = await issueSandboxToken();
     const res = await sandboxPost({
       title: "No chat",
       content: "Should be rejected",
     }, token);
     expect(res.status).toBe(400);
-    expect(res.body.message).toMatch(/Missing chatId/);
+    expect(res.body.message).toMatch(/No current task/);
   });
 
   it("rejects unsafe attachment paths before creating the anchor or thread", async () => {
@@ -619,6 +642,31 @@ describe("POST /sandbox/messages/complete", () => {
     expect(after.rows[0].count).toBe(before.rows[0].count + 1);
   });
 
+  it("defaults completion to the current task when called from a task_run sandbox session", async () => {
+    const token = await issueSandboxToken();
+    const spawned = await spawnSubTask(token);
+    const runId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, kind, state, parent_id)
+       VALUES (?, ?, 'agent', '{"type":"text","text":"run"}', 'task_run', 'running', ?)`,
+      [runId, spawned.threadChat.id, spawned.message.id],
+    );
+
+    const runToken = await issueSandboxToken({ runId });
+    const res = await sandboxPost({
+      message: "Done from current task context.",
+    }, runToken, "/sandbox/messages/complete");
+
+    expect(res.status).toBe(200);
+    expect(res.body.task.id).toBe(spawned.message.id);
+    expect(res.body.task.state).toBe("succeeded");
+    expect(res.body.report.parentId).toBe(spawned.message.id);
+    expect(res.body.report.content).toEqual({
+      type: "text",
+      text: "Done from current task context.",
+    });
+  });
+
   it("works without a --message — anchor flips to succeeded but no report is posted", async () => {
     const token = await issueSandboxToken();
     const spawned = await spawnSubTask(token);
@@ -692,13 +740,13 @@ describe("POST /sandbox/messages/complete", () => {
     expect(res.body.message).toMatch(/No task anchor/);
   });
 
-  it("rejects requests with neither chatId nor messageId", async () => {
+  it("rejects requests with neither chatId nor messageId when the sandbox session is not a task run", async () => {
     const token = await issueSandboxToken();
     const res = await sandboxPost({
       message: "no chat",
     }, token, "/sandbox/messages/complete");
     expect(res.status).toBe(400);
-    expect(res.body.message).toMatch(/Missing messageId or chatId/);
+    expect(res.body.message).toMatch(/No current task/);
   });
 
   // Lets the agent complete a task from outside its thread — e.g. from
@@ -755,5 +803,68 @@ describe("POST /sandbox/messages/complete", () => {
     }, token, "/sandbox/messages/complete");
     expect(res.status).toBe(400);
     expect(res.body.message).toMatch(/is not a task/);
+  });
+});
+
+describe("sandbox current-task update endpoints", () => {
+  async function spawnRunningTask() {
+    const token = await issueSandboxToken();
+    const create = await sandboxPost({
+      chatId: sourceChatId,
+      title: "Current task",
+      content: "Do the current work",
+      executeAt: "2026-06-01T09:00:00Z",
+    }, token);
+    expect(create.status).toBe(201);
+    const runId = generateId("message");
+    await pool.query(
+      `INSERT INTO messages (id, chat_id, role, content, kind, state, parent_id)
+       VALUES (?, ?, 'agent', '{"type":"text","text":"run"}', 'task_run', 'running', ?)`,
+      [runId, create.body.threadChat.id, create.body.message.id],
+    );
+    const runToken = await issueSandboxToken({ runId });
+    return {
+      token: runToken,
+      taskId: create.body.message.id as string,
+      threadChatId: create.body.threadChat.id as string,
+      runId,
+    };
+  }
+
+  it("appends progress to the current task thread and parents it to the current run", async () => {
+    const task = await spawnRunningTask();
+
+    const res = await sandboxPost({
+      message: "Scaffolding RSS app",
+    }, task.token, "/sandbox/tasks/progress");
+
+    expect(res.status).toBe(201);
+    expect(res.body.message.chatId).toBe(task.threadChatId);
+    expect(res.body.message.parentId).toBe(task.runId);
+    expect(res.body.message.role).toBe("agent");
+    expect(res.body.message.content).toEqual({
+      type: "text",
+      text: "Scaffolding RSS app",
+    });
+  });
+
+  it("marks the current task and current run failed with a visible error message", async () => {
+    const task = await spawnRunningTask();
+
+    const res = await sandboxPost({
+      message: "Docker container is marked for removal",
+    }, task.token, "/sandbox/tasks/fail");
+
+    expect(res.status).toBe(200);
+    expect(res.body.task.id).toBe(task.taskId);
+    expect(res.body.task.state).toBe("failed");
+    expect(res.body.run.id).toBe(task.runId);
+    expect(res.body.run.state).toBe("failed");
+    expect(res.body.report.chatId).toBe(task.threadChatId);
+    expect(res.body.report.parentId).toBe(task.runId);
+    expect(res.body.report.content).toEqual({
+      type: "text",
+      text: "Docker container is marked for removal",
+    });
   });
 });

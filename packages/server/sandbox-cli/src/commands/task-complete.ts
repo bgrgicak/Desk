@@ -3,7 +3,7 @@ import { CliError, parseFlags } from "../errors.js";
 import { output } from "../index.js";
 
 export const usage =
-  "roomy-agent task complete (--chat <thread-chat-id> | --message-id <anchor-id>) [--message <text>]";
+  "roomy-agent task complete [(--chat <thread-chat-id> | --message-id <anchor-id>)] [--message <text>]";
 
 export const help = `\
 roomy-agent task complete — mark a task done and (optionally) deliver a
@@ -14,6 +14,8 @@ task anchor to 'succeeded' and (when --message is given) posts that
 message in the parent chat attributed to this agent.
 
 Identify the task with exactly one of:
+  no id                  From inside a task run, the server infers the current
+                         task from the sandbox session.
   --chat <id>            The agent's current chat, when it IS the task's
                          dedicated thread. The server walks back to the
                          anchor in the parent chat via the thread link.
@@ -64,12 +66,6 @@ export async function run(argv: string[]): Promise<void> {
 
   const hasChat = typeof chatId === "string" && chatId.length > 0;
   const hasMessageId = typeof messageId === "string" && messageId.length > 0;
-  if (!hasChat && !hasMessageId) {
-    throw new CliError(
-      "INVALID_ARGS",
-      "Pass either --chat <thread-id> or --message-id <anchor-id>. Usage:\n" + usage,
-    );
-  }
   if (hasChat && hasMessageId) {
     throw new CliError(
       "INVALID_ARGS",

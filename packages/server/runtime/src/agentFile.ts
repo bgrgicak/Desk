@@ -23,7 +23,15 @@ export interface AgentFileInput {
   userTimezone?: string;
   chatId?: string;
   goal?: GoalKey | null;
-  runMode?: "chat" | "scheduled-task" | "summary" | "reflection";
+  runMode?: "chat" | "scheduled-task" | "task" | "summary" | "reflection";
+  taskContext?: {
+    taskId?: string;
+    taskRunId?: string;
+    taskThreadChatId?: string;
+    sourceChatId?: string;
+    parentTaskId?: string;
+    schedule?: string;
+  };
   home?: string;
   workspaceSlug?: string;
   workspaceKind?: WorkspaceKind;
@@ -45,6 +53,7 @@ export function renderAgentFile(input: AgentFileInput): string {
     chatId: input.chatId,
     goal: input.goal ?? null,
     runMode: input.runMode ?? "chat",
+    taskContext: input.taskContext,
     home: input.home,
     workspaceSlug: input.workspaceSlug,
     workspaceKind: input.workspaceKind ?? "project",

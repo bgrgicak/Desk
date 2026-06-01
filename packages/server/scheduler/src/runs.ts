@@ -506,7 +506,21 @@ export function createRunManager(opts: RunManagerOptions) {
         userTimezone,
         chatId: executionChatId,
         goal: chatGoal,
-        runMode: outputKind === "summary" ? "summary" : (msg.kind === "task" && (msg.executeAt || msg.cron) ? "scheduled-task" : "chat"),
+        runMode: outputKind === "summary" ? "summary" : (msg.kind === "task" ? "task" : "chat"),
+        taskContext: msg.kind === "task"
+          ? {
+              taskId: msg.id,
+              taskRunId: runId,
+              taskThreadChatId: executionChatId,
+              sourceChatId: msg.chatId,
+              parentTaskId: msg.parentId,
+              schedule: msg.cron
+                ? `cron ${msg.cron}`
+                : msg.executeAt
+                  ? `at ${msg.executeAt}`
+                  : "none",
+            }
+          : undefined,
         workspaceKind,
         localFilesystemDirectories: localFsResolution.agentDirectories,
       };
@@ -845,8 +859,7 @@ export function createRunManager(opts: RunManagerOptions) {
    * kanban badge reads Active, and the run has now ended. Two outcomes:
    *
    *   - Run failed: mirror to `state='failed'` so the user sees the
-   *     surfaced failure (folded into Open by the UI selector — failure
-   *     is internal-only) instead of stale Active. Guarded against an
+   *     surfaced failure instead of stale Active. Guarded against an
    *     existing terminal state so a `task complete` that already ran
    *     from inside the agent isn't overwritten.
    *

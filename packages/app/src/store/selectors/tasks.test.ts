@@ -52,6 +52,18 @@ describe('task selectors', () => {
     expect(isTaskListMessageForDeveloperMode(reflection, true)).toBe(true)
   })
 
+  it('hides child task anchors from the top-level task list', () => {
+    const child = message({
+      id: 'msg_child_task',
+      kind: 'task',
+      parentId: 'msg_parent_task',
+      content: { type: 'text', text: 'Implement parser' },
+    })
+
+    expect(isTaskListMessageForDeveloperMode(child, false)).toBe(false)
+    expect(isTaskListMessageForDeveloperMode(child, true)).toBe(false)
+  })
+
   it('maps reflection requests as readable developer tasks', () => {
     const task = toUiTask(message({
       id: 'msg_reflection_request',
@@ -407,11 +419,7 @@ describe('task selectors', () => {
     expect(task.status).toBe('todo')
   })
 
-  it('folds errored parent tasks into Open so failure is internal-only', () => {
-    // `state='failed'` deliberately does not promote to its own UI status
-    // — the user retries from the same column they created it in. The
-    // statusText still says "Failed" so the detail panel can surface
-    // the cause, but the kanban badge stays Open.
+  it('maps errored parent tasks to the failed task status', () => {
     const task = toUiTask(message({
       id: 'msg_parent_failed',
       role: 'user',
@@ -421,9 +429,10 @@ describe('task selectors', () => {
       executeAt: undefined,
       cron: undefined,
       state: 'failed',
+      taskStatus: 'failed',
     }), [])
 
-    expect(task.status).toBe('todo')
+    expect(task.status).toBe('failed')
     expect(task.statusText).toBe('Failed')
   })
 

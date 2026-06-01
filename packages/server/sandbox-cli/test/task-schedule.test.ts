@@ -68,6 +68,15 @@ describe("roomy-agent task schedule", () => {
     });
   });
 
+  it("forwards --parent-task and allows omitting --chat for child tasks", async () => {
+    await run(["--parent-task", "msg_parent", "--title", "Implement parser", "Parse", "RSS"]);
+    expect(postJsonMock).toHaveBeenCalledWith("/sandbox/messages", {
+      parentTaskId: "msg_parent",
+      content: "Parse RSS",
+      title: "Implement parser",
+    });
+  });
+
   it("rejects --at and --cron together", async () => {
     await expect(
       run(["--chat", "ch_a", "--at", "2026-05-01T00:00:00Z", "--cron", "* * * * *", "x"]),
@@ -75,8 +84,8 @@ describe("roomy-agent task schedule", () => {
     expect(postJsonMock).not.toHaveBeenCalled();
   });
 
-  it("rejects missing --chat", async () => {
-    await expect(run(["hello"])).rejects.toThrow(/Missing --chat/);
+  it("rejects missing --chat unless --parent-task is supplied", async () => {
+    await expect(run(["hello"])).rejects.toThrow(/Missing --chat or --parent-task/);
     expect(postJsonMock).not.toHaveBeenCalled();
   });
 

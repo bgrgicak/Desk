@@ -100,6 +100,59 @@ export interface WorkspaceConnectorGrant {
  */
 export type ServerChat = ChatWithListMeta;
 
+export type HomeDayItemStatus =
+  | "needs_input"
+  | "active"
+  | "done";
+
+interface HomeDayBaseItem {
+  id: string;
+  title: string;
+  preview: string;
+  status: HomeDayItemStatus;
+  statusLabel: string;
+  updatedAt: string;
+  href: string;
+  room: {
+    id: string;
+    name: string;
+    color: string;
+    icon: string;
+  };
+}
+
+export interface HomeDayChatItem extends HomeDayBaseItem {
+  kind: "chat";
+  chat: {
+    id: string;
+    unread: boolean;
+    running: boolean;
+    failed: boolean;
+    latestFailedMessageId: string | null;
+  };
+}
+
+export interface HomeDayTaskItem extends HomeDayBaseItem {
+  kind: "task";
+  task: ServerMessage;
+}
+
+export type HomeDayItem = HomeDayChatItem | HomeDayTaskItem;
+
+export interface HomeDayResponse {
+  refreshedAt: string;
+  counts: {
+    needsInput: number;
+    active: number;
+    done: number;
+  };
+  sections: {
+    needsInput: HomeDayItem[];
+    active: HomeDayItem[];
+    done: HomeDayItem[];
+  };
+}
+
 export interface AttachmentRef {
   path: string;
   name: string;

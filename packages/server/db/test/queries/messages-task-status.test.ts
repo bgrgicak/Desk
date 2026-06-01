@@ -142,6 +142,21 @@ describe("decorateMessagesWithTaskStatus", () => {
     expect(decorated.taskStatus).toBe("complete");
   });
 
+  it("returns 'failed' for failed task rows", async () => {
+    const taskId = generateId("message");
+    await messages.insert(pool, {
+      id: taskId,
+      chatId: anchorChatId,
+      role: "user",
+      content: { type: "text", text: "failed task" },
+      kind: "task",
+      state: "failed",
+    });
+    const task = (await messages.findById(pool, taskId))!;
+    const [decorated] = await messages.decorateMessagesWithTaskStatus(pool, [task]);
+    expect(decorated.taskStatus).toBe("failed");
+  });
+
   it("returns 'scheduled' when executeAt is set and no run is in flight", async () => {
     const taskId = generateId("message");
     const future = new Date(Date.now() + 3_600_000).toISOString();

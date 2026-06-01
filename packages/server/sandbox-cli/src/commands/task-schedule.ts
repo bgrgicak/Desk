@@ -3,7 +3,7 @@ import { CliError, parseFlags } from "../errors.js";
 import { output } from "../index.js";
 
 export const usage =
-  'roomy-agent task schedule --chat <id> [--title <text>] [--at <iso8601> | --cron <expr>] [--kind <kind>] [--attach <path> ...] <content>';
+  'roomy-agent task schedule (--chat <id> | --parent-task <message-id>) [--title <text>] [--at <iso8601> | --cron <expr>] [--kind <kind>] [--attach <path> ...] <content>';
 
 export const help = `\
 roomy-agent task schedule — create a task message. By default the task
@@ -35,6 +35,9 @@ Required:
                          (Only the user, via the Tasks page composer,
                          can spawn a standalone task without anchoring
                          it to a parent conversation.)
+  --parent-task <id>     Parent task anchor. The new task is created as a
+                         child of that task and appears in the parent task
+                         thread. May be used instead of --chat.
   <content>              Task body (positional). MUST include everything
                          the agent needs to act when the task fires —
                          the goal, required context, success criteria.
@@ -105,10 +108,11 @@ export async function run(argv: string[]): Promise<void> {
   const cron = flags["cron"];
   const title = flags["title"];
   const kind = flags["kind"];
+  const parentTaskId = flags["parent-task"];
   const attachFlag = flags["attach"];
 
-  if (typeof chatId !== "string" || !chatId) {
-    throw new CliError("INVALID_ARGS", "Missing --chat <id>. Usage:\n" + usage);
+  if ((typeof chatId !== "string" || !chatId) && (typeof parentTaskId !== "string" || !parentTaskId)) {
+    throw new CliError("INVALID_ARGS", "Missing --chat or --parent-task. Usage:\n" + usage);
   }
   if (!content) {
     throw new CliError("INVALID_ARGS", "Missing task content. Usage:\n" + usage);
@@ -118,6 +122,8 @@ export async function run(argv: string[]): Promise<void> {
   }
 
   const body: Record<string, unknown> = { chatId, content };
+  if (typeof parentTaskId === "string") body.parentTaskId = parentTaskId;
+  if (typeof chatId !== "string" || !chatId) delete body.chatId;
   if (typeof title === "string") body.title = title;
   if (typeof at === "string") body.executeAt = at;
   if (typeof cron === "string") body.cron = cron;

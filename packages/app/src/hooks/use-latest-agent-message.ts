@@ -1,15 +1,31 @@
 import { useGetChatMessagesQuery } from '@/store/api'
+import { appAttachmentToPreview } from '@/components/context/AppPreview'
+import { isRegularMessageVisible } from '@/components/compose/messageVisibility'
+import type { ServerMessage } from '@/store/types'
 
-export interface LatestAgentMessage {
-  /** Plain-text preview shown in the card body. */
+interface LatestAgentTextMessage {
+  kind: 'text'
   text: string
-  /** When the message was sent — used as the card's "last update" time. */
   createdAt: Date
 }
 
+interface LatestAgentFragmentMessage {
+  kind: 'fragment'
+  artifact: {
+    path: string
+    name?: string
+    mime?: string
+    workspaceId?: string
+    params?: Record<string, string>
+  }
+  createdAt: Date
+}
+
+export type LatestAgentMessage = LatestAgentTextMessage | LatestAgentFragmentMessage
+
 /**
- * Returns the most recent agent text message in a chat — used by
- * `TaskCard` to surface "what's happening" on the card body and as
+ * Returns the most recent supported agent output in a chat — used by
+ * Home cards to surface "what's happening" on the card body and as
  * the card's last-update timestamp, instead of statically echoing the
  * user's original task description and creation date.
  *
@@ -17,8 +33,11 @@ export interface LatestAgentMessage {
  *   • `chatId` is omitted (e.g. mock-data cards with no backing chat),
  *   • the chat has no agent messages yet (the user just created the
  *     task and the agent hasn't replied), or
- *   • the latest agent message isn't plain text (the card preview only
- *     handles `content.type === 'text'`).
+ *   • the latest visible message is not a supported agent preview
+ *     shape. Text and app fragments are supported; user replies and
+ *     other artifact refs deliberately do not fall back to older agent
+ *     output because that would misrepresent the current action
+ *     surface.
  *
  * Callers fall back to the user's task body + creation date.
  *
@@ -27,18 +46,67 @@ export interface LatestAgentMessage {
  */
 export function useLatestAgentMessage(chatId?: string): LatestAgentMessage | undefined {
   const { data } = useGetChatMessagesQuery(
-    { chatId: chatId ?? '' },
+    { chatId: chatId ?? '', full: true },
     { skip: !chatId },
   )
-  if (!data?.items?.length) return undefined
-  for (let i = data.items.length - 1; i >= 0; i--) {
-    const m = data.items[i]
-    if (m.role !== 'agent') continue
-    if (m.content.type !== 'text') continue
-    const text = m.content.text.trim()
-    if (text.length > 0) {
-      return { text, createdAt: new Date(m.createdAt) }
+  return latestAgentMessageFromItems(data?.items)
+}
+
+export function latestAgentMessageFromItems(
+  items: ServerMessage[] | undefined,
+): LatestAgentMessage | undefined {
+  if (!items?.length) return undefined
+  let skippedFragmentAttachmentEvent = false
+  for (let i = items.length - 1; i >= 0; i--) {
+    const m = items[i]
+    if (!isRegularMessageVisible(m)) continue
+    if (m.role !== 'agent') return undefined
+
+    if (m.content.type === 'events' && valueContainsAppFragmentRef(m.content.log)) {
+      skippedFragmentAttachmentEvent = true
+      continue
     }
+
+    if (m.content.type === 'artifactRef') {
+      const appPreview = appAttachmentToPreview(m.content.path)
+      if (!appPreview?.fragment) return undefined
+      return {
+        kind: 'fragment',
+        createdAt: new Date(m.createdAt),
+        artifact: {
+          path: m.content.path,
+          ...(m.content.name ? { name: m.content.name } : {}),
+          ...(m.content.mime ? { mime: m.content.mime } : {}),
+          ...(m.content.workspaceId ? { workspaceId: m.content.workspaceId } : {}),
+          ...(m.content.params ? { params: m.content.params } : {}),
+        },
+      }
+    }
+
+    if (skippedFragmentAttachmentEvent) return undefined
+
+    if (m.content.type === 'text') {
+      const text = m.content.text.trim()
+      return text.length > 0
+        ? { kind: 'text', text, createdAt: new Date(m.createdAt) }
+        : undefined
+    }
+
+    return undefined
   }
   return undefined
+}
+
+function valueContainsAppFragmentRef(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return /\.app\/dist\/fragments\//.test(value)
+  }
+  if (!value || typeof value !== 'object') return false
+  if (Array.isArray(value)) return value.some(valueContainsAppFragmentRef)
+
+  const record = value as Record<string, unknown>
+  if (typeof record.path === 'string' && appAttachmentToPreview(record.path)?.fragment) {
+    return true
+  }
+  return Object.values(record).some(valueContainsAppFragmentRef)
 }

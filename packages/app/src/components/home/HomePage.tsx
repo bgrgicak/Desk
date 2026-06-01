@@ -18,7 +18,6 @@ import {
   CheckCircle2,
   RotateCcw,
   Search,
-  X,
 } from 'lucide-react'
 import {
   cn,
@@ -61,20 +60,16 @@ import {
   api,
   useGetMeQuery,
   useGetWorkspacesQuery,
+  useGetHomeDayQuery,
   useGetMessagesQuery,
   useGetChatsQuery,
-  usePatchMessageMutation,
-  useRunMessageMutation,
-  useDeleteMessageMutation,
   useDeleteWorkspaceMutation,
 } from '@/store/api'
-import type { ServerWorkspace } from '@/store/types'
-import type { Task } from '@/data/ui-types'
+import type { HomeDayItem, ServerWorkspace } from '@/store/types'
 import { getRelativeTime } from '@/data/ui-types'
 import { toWorkspaceInfo } from '@/store/selectors/workspaces'
 import { roomColor } from '@/components/rooms/roomColor'
 import { taskMessageKindsForDeveloperMode } from '@/store/selectors/tasks'
-import { buildTaskStatusMove, buildTaskLifecycleMove } from '@/lib/task-status'
 import { usePrefs } from '@/hooks/use-prefs'
 import { useAvatarUrl } from '@/hooks/use-avatar'
 import { useWorkspaceIconUrl } from '@/hooks/use-workspace-icon'
@@ -99,28 +94,14 @@ import { RoomyIcon } from './RoomyIcon'
 import { CreateWorkspaceModal } from './CreateWorkspaceModal'
 import { HomeSettingsPopover } from './HomeSettingsPopover'
 import { AskAiView } from './AskAiView'
-import { HomeTaskList } from './HomeTaskList'
+import { HomeDayList } from './HomeDayList'
 import { HomeSectionTabs } from './HomeSectionTabs'
-import { TaskChatPanel } from '@/components/tasks/TaskChatPanel'
-import { RoomAvatarStack } from '@/components/layout/RoomAvatarStack'
-import { SplitResizeHandle } from '@/components/shared/SplitResizeHandle'
-import { useSplitResize } from '@/components/shared/splitPane'
 import {
-  selectTasksSplitRatio,
-  setTasksSplitRatio,
-  TASKS_SPLIT_RATIO_STORAGE_KEY_EXPORT,
-  PREVIEW_MIN_CHAT_WIDTH,
-  PREVIEW_MIN_PANEL_WIDTH,
   selectIsPreviewOpen,
   selectPreviewSplitRatio,
 } from '@/store/slices/previewPanelSlice'
 import { PreviewPanel } from '@/components/chats/PreviewPanel'
 import { AnimatePresence, motion } from 'framer-motion'
-import {
-  HomeWorkspaceTasks,
-  type HomeTask,
-  type HomeWorkspaceBuckets,
-} from './HomeWorkspaceTasks'
 
 // Main column — matches the Tasks page (`max-w-4xl`) so Home and a
 // room view share one content rhythm.
@@ -141,10 +122,6 @@ function errMsg(err: unknown): string | undefined {
     }
   }
   return undefined
-}
-
-function recency(t: Task): number {
-  return (t.completedAt ?? t.nextRun ?? t.startedAt).getTime()
 }
 
 /** A click that the browser should handle natively (open in a new tab,
@@ -398,12 +375,7 @@ function SectionEmpty({
 export function HomePage() {
   const navigate = useNavigate()
   const location = useLocation()
-  // `?task=<id>` opens that task's chat thread in a docked side panel
-  // on the right (same UX as the Tasks page) without leaving Home.
-  // Cmd-click / middle-click on a card hits this URL form too, so
-  // the deep-link still works.
   const [searchParams, setSearchParams] = useSearchParams()
-  const selectedTaskId = searchParams.get('task')
   const { data: workspaces } = useGetWorkspacesQuery()
   const projectWorkspaces = (workspaces ?? []).filter(w => w.kind !== 'hub')
   const { data: me } = useGetMeQuery()
@@ -473,32 +445,11 @@ export function HomePage() {
   const { order, isVisible } = useHomeSections()
 
   const dispatch = useDispatch()
-  // Docked task-chat split — Home shares the Tasks page's split
-  // ratio (same Redux selector + localStorage key) so the chat
-  // column width feels consistent across both surfaces. The chat
-  // panel + header both consume the same `chatWidth` derived here.
+  const { data: homeDay, refetch: refetchHomeDay } = useGetHomeDayQuery()
   const isPreviewOpen = useSelector(selectIsPreviewOpen)
   const previewSplitRatio = useSelector(selectPreviewSplitRatio)
   const isMobile = useIsMobile()
   const previewPanelWidth = `${Math.round((1 - previewSplitRatio) * 100)}vw`
-  const splitRatio = useSelector(selectTasksSplitRatio)
-  const chatWidth = `${Math.round((1 - splitRatio) * 100)}vw`
-  const { isResizing: isChatResizing, onMouseDown: onChatResizeStart } = useSplitResize({
-    getStartRatio: () => splitRatio,
-    onRatio: (r) => dispatch(setTasksSplitRatio(r)),
-    onCommit: (r) => {
-      try {
-        window.localStorage.setItem(TASKS_SPLIT_RATIO_STORAGE_KEY_EXPORT, String(r))
-      } catch {
-        // localStorage unavailable — ratio still applies for this session.
-      }
-    },
-    minLeftPx: PREVIEW_MIN_PANEL_WIDTH,
-    minRightPx: PREVIEW_MIN_CHAT_WIDTH,
-  })
-  const [patchMessage] = usePatchMessageMutation()
-  const [runMessage] = useRunMessageMutation()
-  const [deleteMessage] = useDeleteMessageMutation()
   const [deleteWorkspace] = useDeleteWorkspaceMutation()
   // Bumped by the "Refresh" kebab action — added to the digest
   // effect's deps so the greeting/summary regenerate even when the
@@ -555,43 +506,21 @@ export function HomePage() {
     [],
   )
 
-  // ── Cross-room aggregation (one headless child per workspace) ──
-  const [bucketsByWs, setBucketsByWs] = useState<Record<string, HomeWorkspaceBuckets>>({})
-  const handleTasks = useCallback((wsId: string, b: HomeWorkspaceBuckets) => {
-    setBucketsByWs(prev => (prev[wsId] === b ? prev : { ...prev, [wsId]: b }))
-  }, [])
-
-  const { needsInput, active, done } = useMemo(() => {
-    const all = Object.values(bucketsByWs)
-    const sortRows = (rows: HomeTask[]) =>
-      [...rows].sort((a, b) => recency(b.task) - recency(a.task))
-    return {
-      needsInput: sortRows(all.flatMap(b => b.needsInput)),
-      active: sortRows(all.flatMap(b => b.active)),
-      done: sortRows(all.flatMap(b => b.done)),
-    }
-  }, [bucketsByWs])
-
-  // The selected task (if any) — looked up across every bucket so a
-  // deep-linked `?task=<id>` opens the panel regardless of which
-  // section the task lives in. Returns the full `HomeTask` so the
-  // panel inherits the room name / icon along with the task.
-  const selectedHomeTask = useMemo(() => {
-    if (!selectedTaskId) return null
-    for (const list of [needsInput, active, done]) {
-      const found = list.find(h => h.task.id === selectedTaskId)
-      if (found) return found
-    }
-    return null
-  }, [selectedTaskId, needsInput, active, done])
+  const needsInput = homeDay?.sections.needsInput ?? []
+  const active = homeDay?.sections.active ?? []
+  const done = homeDay?.sections.done ?? []
 
   // ── AI digest (greeting + summary) ──
-  const sig = `${needsInput.length}-${active.length}-${done.length}`
+  const sig = `${homeDay?.counts.needsInput ?? 0}-${homeDay?.counts.active ?? 0}-${homeDay?.counts.done ?? 0}`
   const [digest, setDigest] = useState<HomeDigest | null>(null)
   useEffect(() => {
     let cancelled = false
     void generateHomeDigest(
-      { needsInput: needsInput.length, active: active.length, done: done.length },
+      {
+        needsInput: homeDay?.counts.needsInput ?? 0,
+        active: homeDay?.counts.active ?? 0,
+        done: homeDay?.counts.done ?? 0,
+      },
       me?.username,
     ).then(d => {
       if (!cancelled) setDigest(d)
@@ -601,7 +530,7 @@ export function HomePage() {
     }
     // `sig` already encodes the three counts; listed here to satisfy
     // the exhaustive-deps lint without re-running on identical counts.
-  }, [sig, me?.username, needsInput.length, active.length, done.length, refreshNonce])
+  }, [sig, me?.username, homeDay?.counts.needsInput, homeDay?.counts.active, homeDay?.counts.done, refreshNonce])
 
   // Re-render the "Refreshed Xm ago" pill every minute.
   const [, setTick] = useState(0)
@@ -669,108 +598,21 @@ export function HomePage() {
     setLeaving(true)
     window.setTimeout(() => navigate(buildDefaultViewPath(ws.id, defaultView)), 200)
   }
-  // Card click + Replies button → dock the task's chat in a side
-  // panel on Home (URL becomes `?task=<id>`). The card's own `href`
-  // points at the same URL so cmd-click / middle-click opens the
-  // panelled view in a new tab.
-  const openTask = (h: HomeTask) => {
-    setSearchParams(
-      prev => {
-        const next = new URLSearchParams(prev)
-        next.set('task', h.task.id)
-        return next
-      },
-      { replace: false },
-    )
-  }
-  const closeTaskPanel = useCallback(() => {
-    setSearchParams(
-      prev => {
-        const next = new URLSearchParams(prev)
-        next.delete('task')
-        return next
-      },
-      { replace: false },
-    )
-  }, [setSearchParams])
 
-  // Esc closes the docked task chat (parity with TasksPage's panel).
-  useEffect(() => {
-    if (!selectedHomeTask) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeTaskPanel()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [selectedHomeTask, closeTaskPanel])
-
-  // ── Task actions (mirror App.tsx Tasks handlers) ──
-  const doMarkDone = async (h: HomeTask) => {
-    const t = h.task
-    if (!t.chatId || !t.messageId) return
-    const move = buildTaskStatusMove(t, 'complete', 'user')
-    if (move.kind !== 'patch') return
-    try {
-      await patchMessage({ chatId: t.chatId, messageId: t.messageId, patch: move.patch }).unwrap()
-    } catch (err) {
-      toast.error('Failed to mark done', { description: errMsg(err) })
-    }
-  }
-  const doReopen = async (h: HomeTask) => {
-    const t = h.task
-    if (!t.chatId || !t.messageId) return
-    const move = buildTaskStatusMove(t, 'todo', 'user')
-    if (move.kind !== 'patch') return
-    try {
-      await patchMessage({ chatId: t.chatId, messageId: t.messageId, patch: move.patch }).unwrap()
-    } catch (err) {
-      toast.error('Reopen failed', { description: errMsg(err) })
-    }
-  }
-  const doRunNow = async (h: HomeTask) => {
-    const t = h.task
-    if (!t.chatId || !t.messageId) return
-    try {
-      await runMessage({ chatId: t.chatId, messageId: t.messageId }).unwrap()
-    } catch (err) {
-      toast.error('Run failed', { description: errMsg(err) })
-    }
-  }
-  const doPause = async (h: HomeTask) => {
-    const t = h.task
-    if (!t.chatId || !t.messageId) return
-    const move = buildTaskLifecycleMove(t, 'pause', 'user')
-    if (move.kind !== 'patch') return
-    try {
-      await patchMessage({ chatId: t.chatId, messageId: t.messageId, patch: move.patch }).unwrap()
-    } catch (err) {
-      toast.error('Pause failed', { description: errMsg(err) })
-    }
-  }
-  const doDelete = async (h: HomeTask) => {
-    const t = h.task
-    if (!t.chatId || !t.messageId) return
-    try {
-      await deleteMessage({ chatId: t.chatId, messageId: t.messageId }).unwrap()
-    } catch (err) {
-      toast.error('Delete failed', { description: errMsg(err) })
-    }
-  }
-
-  const sectionRows: Record<Exclude<HomeSectionKey, 'summary'>, HomeTask[]> = {
+  const sectionRows: Record<Exclude<HomeSectionKey, 'summary'>, HomeDayItem[]> = {
     needsInput,
     nowHappening: active,
     done,
   }
   const sectionCounts: Record<Exclude<HomeSectionKey, 'summary'>, number> = {
-    needsInput: needsInput.length,
-    nowHappening: active.length,
-    done: done.length,
+    needsInput: homeDay?.counts.needsInput ?? 0,
+    nowHappening: homeDay?.counts.active ?? 0,
+    done: homeDay?.counts.done ?? 0,
   }
   const sectionEmpty: Record<Exclude<HomeSectionKey, 'summary'>, string> = {
     needsInput: 'Nothing needs your input across your rooms.',
-    nowHappening: 'No tasks are running right now.',
-    done: 'Nothing completed recently.',
+    nowHappening: 'Nothing is running right now.',
+    done: 'Nothing recent yet.',
   }
 
   /** Navigate into a room's Tasks view with a router-state hint that
@@ -786,10 +628,14 @@ export function HomePage() {
     )
   }
 
-  /** Reload the digest (AI greeting + summary) and force every
-   *  cross-room messages query to refetch. */
+  /** Reload the digest + Home Day read model. */
   const refreshHome = () => {
-    dispatch(api.util.invalidateTags([{ type: 'Message', id: 'CROSS' }]))
+    dispatch(api.util.invalidateTags([
+      { type: 'Message', id: 'CROSS' },
+      { type: 'Chat', id: 'LIST' },
+      'HomeDay',
+    ]))
+    void refetchHomeDay()
     setRefreshNonce(n => n + 1)
   }
 
@@ -815,18 +661,7 @@ export function HomePage() {
     >
       <BackgroundBlobs />
 
-      {/* Headless cross-room fetchers (always mounted so the Your-day
-          badge + digest stay live regardless of which view is open). */}
-      {projectWorkspaces.map(ws => (
-        <HomeWorkspaceTasks key={ws.id} workspace={ws} onTasks={handleTasks} />
-      ))}
-
-      {/* Top bar row — Home top bar on the left (shrinks when the
-          task chat panel docks on the right) + the chat panel's own
-          header (avatar stack + close X) on the right when a task is
-          selected. Top bar + chat header sit on the same 64 px row so
-          the page reads as: `Sidebar | Home area | Chat panel`, each
-          column owning its own top chrome. */}
+      {/* Top bar row. */}
       <div className="relative z-20 flex w-full shrink-0">
       <div className="relative flex flex-1 min-w-0 items-center px-6 py-4 min-h-16">
         <div className="h-8 w-8 shrink-0 md:hidden">
@@ -900,48 +735,6 @@ export function HomePage() {
         </div>
       </div>{/* /home top bar */}
 
-      {/* Chat-panel header — sibling of the home top bar. Sits on the
-          same 64 px row, holds the room+user avatar stack (centred)
-          and the close X. Width is driven by the shared Tasks split
-          ratio so dragging the panel resizes header and body
-          together. */}
-      <AnimatePresence initial={false}>
-        {view === 'day' && selectedHomeTask && (
-          <motion.div
-            key="home-chat-header"
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: chatWidth, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
-            className="relative shrink-0 flex items-center justify-center min-h-16 px-6 py-4 overflow-hidden"
-          >
-            <RoomAvatarStack
-              workspace={{
-                id: selectedHomeTask.workspaceId,
-                name: selectedHomeTask.roomName,
-                emoji: '',
-                // `RoomAvatarStack` runs the colour through
-                // `roomColor()` itself, so passing the already-
-                // resolved tint here works (it'll snap to the same
-                // palette entry).
-                bg: selectedHomeTask.roomColor,
-                description: '',
-                unreadCount: 0,
-              }}
-            />
-            <Button
-              variant="ghost"
-              size="icon"
-              className="absolute right-4 top-1/2 -translate-y-1/2 h-8 w-8 text-muted-foreground hover:text-foreground"
-              onClick={closeTaskPanel}
-              aria-label="Close task chat"
-              data-testid="home-task-chat-close"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          </motion.div>
-        )}
-      </AnimatePresence>
       </div>{/* /top bar row */}
 
       {/* Row below the bar: sidebar (left) + main (centre) + chat
@@ -981,7 +774,7 @@ export function HomePage() {
                 label="Your day"
                 href={dayHref}
                 active={view === 'day'}
-                badge={needsInput.length || undefined}
+                badge={sectionCounts.needsInput || undefined}
               />
               <HomeNavItem
                 icon={MessageCircle}
@@ -1165,7 +958,7 @@ export function HomePage() {
               <div className="flex flex-col gap-3">
                 {digest && (
                   <span className="inline-flex w-fit items-center rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                    Refreshed {getRelativeTime(new Date(digest.generatedAt))}
+                    Refreshed {getRelativeTime(new Date(homeDay?.refreshedAt ?? digest.generatedAt))}
                   </span>
                 )}
                 {/* Greeting — page-level heading (`text-3xl`). */}
@@ -1211,17 +1004,8 @@ export function HomePage() {
                       onCreateInRoom={createInRoom}
                     />
                   ) : (
-                    <HomeTaskList
+                    <HomeDayList
                       items={sectionRows[key]}
-                      authorName={me?.username}
-                      authorAvatarUrl={userAvatarUrl}
-                      selectedTaskId={selectedTaskId}
-                      onOpenTask={openTask}
-                      onMarkDone={doMarkDone}
-                      onReopen={doReopen}
-                      onRunNow={doRunNow}
-                      onPause={doPause}
-                      onDelete={doDelete}
                     />
                   )}
                 </section>
@@ -1232,34 +1016,6 @@ export function HomePage() {
         </main>
       )}
 
-      {/* Docked task chat — sibling of main, mounts on the right of
-          the content row whenever `?task=<id>` is set. The chat
-          panel's header (avatar stack + close X) lives in the top
-          bar row above; this is the panel body only. Width is
-          driven by `chatWidth` so the resize handle below moves
-          header + body in lockstep. */}
-      {view === 'day' && (
-        <AnimatePresence initial={false}>
-          {selectedHomeTask && (
-            <motion.div
-              key="home-task-chat"
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: chatWidth, opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
-              transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
-              className="relative shrink-0 flex flex-col overflow-hidden"
-            >
-              <SplitResizeHandle
-                isResizing={isChatResizing}
-                onMouseDown={onChatResizeStart}
-                ariaLabel="Resize Home and task chat panels"
-                inset
-              />
-              <TaskChatPanel task={selectedHomeTask.task} />
-            </motion.div>
-          )}
-        </AnimatePresence>
-      )}
       </div>{/* /sidebar + main row */}
 
       <AlertDialog

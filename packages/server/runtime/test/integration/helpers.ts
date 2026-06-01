@@ -1,5 +1,16 @@
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+
+export async function mkdtempForDocker(prefix: string): Promise<string> {
+  const base = process.env.ROOMY_DOCKER_TEST_TMPDIR
+    ?? (process.platform === "darwin"
+      ? path.join(os.homedir(), ".cache", "roomy-test-tmp")
+      : os.tmpdir());
+  await fs.mkdir(base, { recursive: true });
+  return fs.mkdtemp(path.join(base, prefix));
+}
 
 export async function rmTempTree(path: string): Promise<void> {
   let lastError: unknown;

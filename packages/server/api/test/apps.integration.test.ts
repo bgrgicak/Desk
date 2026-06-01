@@ -501,7 +501,7 @@ describe("static-app route + capability bridge", () => {
     expect(csp).toContain("connect-src 'self'");
     expect(csp).not.toMatch(/connect-src[^;]*https:/);
     expect(csp).toContain("frame-ancestors 'self'");
-    expect(csp).toContain("navigate-to 'self'");
+    expect(csp).not.toContain("navigate-to");
     expect(idx.headers["x-frame-options"]).toBe("SAMEORIGIN");
     expect(idx.headers["x-content-type-options"]).toBe("nosniff");
     expect(idx.headers["referrer-policy"]).toBe("same-origin");

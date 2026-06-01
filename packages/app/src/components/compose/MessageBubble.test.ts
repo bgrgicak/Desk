@@ -1,6 +1,14 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { configureStore } from '@reduxjs/toolkit'
+import { Provider } from 'react-redux'
+import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
+import type { ComponentProps } from 'react'
 import { artifactRefHref, attachmentAlignmentClass, copyTextForMessages, eventDisplayChunks } from './MessageBubble'
+import { api } from '@/store/api'
 import type { ServerMessage } from '@/store/types'
+import { MessageBubble } from './MessageBubble'
 
 function msg(content: ServerMessage['content'], overrides: Partial<ServerMessage> = {}): ServerMessage {
   return {
@@ -12,6 +20,30 @@ function msg(content: ServerMessage['content'], overrides: Partial<ServerMessage
     createdAt: '2026-05-22T10:00:00.000Z',
     ...overrides,
   }
+}
+
+function renderBubble(message: ServerMessage, props: Partial<ComponentProps<typeof MessageBubble>> = {}) {
+  const store = configureStore({
+    reducer: { [api.reducerPath]: api.reducer },
+    middleware: getDefault => getDefault().concat(api.middleware),
+  })
+
+  return renderToStaticMarkup(
+    createElement(
+      Provider,
+      {
+        store,
+        children: createElement(
+          MemoryRouter,
+          null,
+          createElement(MessageBubble, {
+            message,
+            ...props,
+          }),
+        ),
+      },
+    ),
+  )
 }
 
 describe('copyTextForMessages', () => {
@@ -169,5 +201,26 @@ describe('eventDisplayChunks', () => {
     expect(eventDisplayChunks(log, true)).toEqual([
       { kind: 'diagnostic', lines: [log[0].line] },
     ])
+  })
+})
+
+describe('MessageBubble task anchors', () => {
+  it('renders task anchor descriptions as markdown HTML', () => {
+    const markup = renderBubble(
+      msg(
+        { type: 'text', text: 'Investigate RSS\n\nReview **feed parsing** and `chat-forms` output.' },
+        {
+          id: 'msg_task',
+          kind: 'task',
+          title: 'Investigate RSS',
+          threadChatId: 'cht_thread',
+        },
+      ),
+      { currentChatId: 'cht_thread' },
+    )
+
+    expect(markup).toContain('<strong>feed parsing</strong>')
+    expect(markup).toContain('<code')
+    expect(markup).not.toContain('**feed parsing**')
   })
 })

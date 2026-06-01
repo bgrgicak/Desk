@@ -6,15 +6,12 @@
  * OAuth model and return a successful turn.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import { ensureLayout, ensureWorkspaceLayout } from "@roomy-ai/storage";
 import { sandboxImage } from "../../src/docker.js";
 import { createDriver, type LogEvent } from "../../src/driver.js";
 import { detectEngine, type Engine } from "../../src/engine.js";
 import { loadCodexEnv } from "../../src/localSources/codex.js";
-import { rmTempTree } from "./helpers.js";
+import { mkdtempForDocker, rmTempTree } from "./helpers.js";
 
 let engineForSetup: Engine | null = null;
 let SKIP = false;
@@ -35,7 +32,7 @@ const workspaceSlug = "model-fallback-int";
 
 beforeAll(async () => {
   if (SKIP) return;
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-model-fallback-int-"));
+  home = await mkdtempForDocker("roomy-model-fallback-int-");
   await ensureLayout(home);
   await ensureWorkspaceLayout(home, workspaceSlug);
   process.env.ROOMY_HOME = home;

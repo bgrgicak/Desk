@@ -15,14 +15,15 @@ export interface TaskActionHandlers {
   onRunNow:   (task: Task) => Promise<void>
   onPause:    (task: Task) => Promise<void>
   onDelete:   (task: Task) => Promise<void>
+  onReopen:   (task: Task) => Promise<void>
   onSchedule: (task: Task, next: SchedulePickerValue | null) => Promise<void>
 }
 
 /**
- * Shared task-action handlers. Used by the tasks board and by the
- * chat-header overflow menu when viewing a task's thread chat — both
- * surfaces dispatch the same mutations and surface the same error
- * toasts, so consolidating them here keeps the two menus in lock-step.
+ * Shared task-action handlers. Used by the tasks board, Home task rows,
+ * and the chat-header overflow menu when viewing a task's thread chat.
+ * All surfaces dispatch the same mutations and surface the same error
+ * toasts, so consolidating them here keeps the menus in lock-step.
  */
 export function useTaskActions(): TaskActionHandlers {
   const [patchMessageMutation]  = usePatchMessageMutation()
@@ -101,6 +102,21 @@ export function useTaskActions(): TaskActionHandlers {
     }
   }, [deleteMessageMutation])
 
+  const onReopen = useCallback(async (task: Task) => {
+    if (!task.chatId || !task.messageId) return
+    const move = buildTaskStatusMove(task, 'todo', 'user')
+    if (move.kind !== 'patch') return
+    try {
+      await patchMessageMutation({
+        chatId: task.chatId,
+        messageId: task.messageId,
+        patch: move.patch,
+      }).unwrap()
+    } catch (err) {
+      toast.error('Reopen failed', { description: extractApiError(err) })
+    }
+  }, [patchMessageMutation])
+
   const onSchedule = useCallback(async (task: Task, next: SchedulePickerValue | null) => {
     if (!task.chatId || !task.messageId) return
     try {
@@ -117,5 +133,5 @@ export function useTaskActions(): TaskActionHandlers {
     }
   }, [patchMessageMutation])
 
-  return { onMarkDone, onRunNow, onPause, onDelete, onSchedule }
+  return { onMarkDone, onRunNow, onPause, onDelete, onReopen, onSchedule }
 }

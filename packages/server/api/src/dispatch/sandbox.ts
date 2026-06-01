@@ -1,6 +1,6 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { queries } from "@roomy-ai/db";
-import { generateId, NotFoundError, ValidationError } from "@roomy-ai/shared";
+import { generateId, NotFoundError, ValidationError, type Agent, type Message, type SandboxSession } from "@roomy-ai/shared";
 import { withModule } from "@roomy-ai/shared/logger";
 import { authenticateSandboxToken } from "../auth/sandboxToken.js";
 import { requireOwnedChat } from "../auth/ownership.js";
@@ -12,6 +12,55 @@ import { parseSearchKinds, parseSearchScope } from "../routes/search-params.js";
 import type { DispatchContext } from "./context.js";
 
 const log = withModule("api/dispatch/sandbox");
+
+interface CurrentTaskContext {
+  task: Message;
+  run: Message | null;
+  threadChatId: string;
+}
+
+async function currentTaskFromSession(
+  pool: DispatchContext["pool"],
+  session: SandboxSession,
+): Promise<CurrentTaskContext | null> {
+  if (!session.runId) return null;
+  const run = await queries.messages.findById(pool, session.runId);
+  if (!run || run.kind !== "task_run" || !run.parentId) return null;
+  const task = await queries.messages.findById(pool, run.parentId);
+  if (!task || task.kind !== "task") return null;
+  return {
+    task,
+    run,
+    threadChatId: run.chatId || task.threadChatId || task.chatId,
+  };
+}
+
+async function taskByIdForAgent(
+  pool: DispatchContext["pool"],
+  taskId: string,
+  agent: Agent,
+): Promise<Message> {
+  const task = await queries.messages.findById(pool, taskId);
+  if (!task) throw new NotFoundError(`Task not found: ${taskId}`);
+  await requireOwnedChat(pool, task.chatId, agent.userId);
+  if (task.kind !== "task") {
+    throw new ValidationError(`Message ${task.id} is not a task (kind=${task.kind})`);
+  }
+  return task;
+}
+
+async function resolveCurrentTaskOrThrow(
+  pool: DispatchContext["pool"],
+  session: SandboxSession,
+  agent: Agent,
+): Promise<CurrentTaskContext> {
+  const ctx = await currentTaskFromSession(pool, session);
+  if (!ctx) {
+    throw new ValidationError("No current task in this sandbox session; pass an explicit task id or run from a task");
+  }
+  await requireOwnedChat(pool, ctx.task.chatId, agent.userId);
+  return ctx;
+}
 
 /**
  * Dispatcher for every `/sandbox/*` route. All sandbox routes share the
@@ -59,16 +108,26 @@ export async function dispatchSandbox(
   if (path === "/sandbox/messages" && method === "POST") {
     const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-    const { agent } = await authenticateSandboxToken(pool, token);
-    const body = await parseBody(req) as { chatId?: string; newChat?: boolean; title?: unknown; content?: unknown; executeAt?: unknown; cron?: unknown } & Record<string, unknown>;
-    if (!body.chatId || typeof body.chatId !== "string") {
-      throw new ValidationError("Missing chatId");
+    const { agent, session } = await authenticateSandboxToken(pool, token);
+    const body = await parseBody(req) as { chatId?: string; newChat?: boolean; title?: unknown; content?: unknown; executeAt?: unknown; cron?: unknown; parentTaskId?: unknown } & Record<string, unknown>;
+    let parentTask: Message | null = null;
+    if (typeof body.parentTaskId === "string" && body.parentTaskId) {
+      parentTask = await taskByIdForAgent(pool, body.parentTaskId, agent);
+    } else if (!body.chatId) {
+      parentTask = (await resolveCurrentTaskOrThrow(pool, session, agent)).task;
     }
-    const sourceChatId = body.chatId;
+
+    const sourceChatId = parentTask
+      ? parentTask.threadChatId ?? parentTask.chatId
+      : body.chatId;
+    if (!sourceChatId || typeof sourceChatId !== "string") {
+      throw new ValidationError("Missing chatId or parentTaskId");
+    }
     await requireOwnedChat(pool, sourceChatId, agent.userId);
 
     const sendBody = { kind: "task", ...body };
     delete (sendBody as { chatId?: string }).chatId;
+    delete (sendBody as { parentTaskId?: unknown }).parentTaskId;
     // `newChat` is accepted but ignored — task creation now always spawns
     // a thread off the source chat. Field kept on the wire for older
     // callers; the legacy "peer chat at workspace level" mode is gone.
@@ -113,7 +172,7 @@ export async function dispatchSandbox(
     // Clicking the task in the tasks list opens this thread; the source
     // chat shows the anchor inline with an "open thread" affordance.
     const { userMessage: anchorMessage } = await chatRoutes.sendMessage(
-      pool, sourceChatId, sendBody, emit, { role: "agent" },
+      pool, sourceChatId, sendBody, emit, { role: "agent", parentId: parentTask?.id ?? null },
     );
     const threadChat = await chatRoutes.createThreadShell(
       pool, sourceChatId, anchorMessage, emit,
@@ -301,15 +360,25 @@ export async function dispatchSandbox(
   if (path === "/sandbox/messages/complete" && method === "POST") {
     const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-    const { agent } = await authenticateSandboxToken(pool, token);
+    const { agent, session } = await authenticateSandboxToken(pool, token);
     const body = await parseBody(req) as { chatId?: unknown; messageId?: unknown; message?: unknown };
     const messageIdArg = typeof body.messageId === "string" && body.messageId ? body.messageId : null;
     const chatIdArg = typeof body.chatId === "string" && body.chatId ? body.chatId : null;
     if (!messageIdArg && !chatIdArg) {
-      throw new ValidationError("Missing messageId or chatId — pass one to identify the task");
+      const current = await resolveCurrentTaskOrThrow(pool, session, agent);
+      body.messageId = current.task.id;
     }
 
     const anchor = await (async () => {
+      const currentMessageId = typeof body.messageId === "string" && body.messageId ? body.messageId : messageIdArg;
+      if (currentMessageId) {
+        const found = await queries.messages.findById(pool, currentMessageId);
+        if (!found) {
+          throw new NotFoundError(`Task not found: ${currentMessageId}`);
+        }
+        await requireOwnedChat(pool, found.chatId, agent.userId);
+        return found;
+      }
       if (messageIdArg) {
         const found = await queries.messages.findById(pool, messageIdArg);
         if (!found) {
@@ -355,6 +424,12 @@ export async function dispatchSandbox(
       updatedAnchor = transitioned;
       emit({ type: "message.updated", payload: transitioned });
     }
+    const current = await currentTaskFromSession(pool, session);
+    let updatedRun: Message | null = null;
+    if (current?.run && current.task.id === anchor.id) {
+      updatedRun = await queries.messages.finalizeExecution(pool, current.run.id, "succeeded");
+      if (updatedRun) emit({ type: "message.updated", payload: updatedRun });
+    }
 
     let report: typeof anchor | undefined;
     const rawMessage = typeof body.message === "string" ? body.message.trim() : "";
@@ -380,7 +455,69 @@ export async function dispatchSandbox(
       });
     }
 
-    sendJson(res, 200, { task: updatedAnchor, report, parentChatId: anchor.chatId });
+    sendJson(res, 200, { task: updatedAnchor, run: updatedRun ?? undefined, report, parentChatId: anchor.chatId });
+    return true;
+  }
+
+  if (path === "/sandbox/tasks/progress" && method === "POST") {
+    const tokenHeader = req.headers["x-roomy-sandbox-token"];
+    const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+    const { agent, session } = await authenticateSandboxToken(pool, token);
+    const body = await parseBody(req) as { message?: unknown };
+    const rawMessage = typeof body.message === "string" ? body.message.trim() : "";
+    if (!rawMessage) throw new ValidationError("Missing progress message");
+    const current = await resolveCurrentTaskOrThrow(pool, session, agent);
+    const progress = await queries.messages.insert(pool, {
+      id: generateId("message"),
+      chatId: current.threadChatId,
+      role: "agent",
+      content: { type: "text", text: rawMessage },
+      parentId: current.run?.id ?? current.task.id,
+      agentId: agent.id,
+    });
+    const chat = await queries.chats.findById(pool, current.threadChatId);
+    emit({
+      type: "message.appended",
+      payload: progress,
+      workspaceId: chat?.workspaceId,
+      chatTitle: chat?.title,
+    });
+    sendJson(res, 201, { task: current.task, run: current.run ?? undefined, message: progress });
+    return true;
+  }
+
+  if (path === "/sandbox/tasks/fail" && method === "POST") {
+    const tokenHeader = req.headers["x-roomy-sandbox-token"];
+    const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+    const { agent, session } = await authenticateSandboxToken(pool, token);
+    const body = await parseBody(req) as { message?: unknown };
+    const rawMessage = typeof body.message === "string" ? body.message.trim() : "";
+    if (!rawMessage) throw new ValidationError("Missing failure message");
+    const current = await resolveCurrentTaskOrThrow(pool, session, agent);
+
+    const updatedRun = current.run
+      ? await queries.messages.finalizeExecution(pool, current.run.id, "failed") ?? await queries.messages.findById(pool, current.run.id)
+      : null;
+    if (updatedRun) emit({ type: "message.updated", payload: updatedRun });
+    const updatedTask = await queries.messages.updateMessage(pool, current.task.id, { state: "failed" }) ?? current.task;
+    emit({ type: "message.updated", payload: updatedTask });
+
+    const report = await queries.messages.insert(pool, {
+      id: generateId("message"),
+      chatId: current.threadChatId,
+      role: "agent",
+      content: { type: "text", text: rawMessage },
+      parentId: current.run?.id ?? current.task.id,
+      agentId: agent.id,
+    });
+    const chat = await queries.chats.findById(pool, current.threadChatId);
+    emit({
+      type: "message.appended",
+      payload: report,
+      workspaceId: chat?.workspaceId,
+      chatTitle: chat?.title,
+    });
+    sendJson(res, 200, { task: updatedTask, run: updatedRun ?? undefined, report });
     return true;
   }
 

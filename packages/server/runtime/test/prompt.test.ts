@@ -52,7 +52,7 @@ describe("renderPromptBody", () => {
     userName: "Roomy",
   };
 
-  it("orders identity → mandate → task routing → artifacts → task context → scheduling → persistence → memory rules → goal → Roomy skill router", () => {
+  it("orders identity → mandate → uncertainty gate → task routing → artifacts → task context → scheduling → persistence → memory rules → goal → Roomy skill router", () => {
     const body = renderPromptBody({
       ...baseInput,
       chatId: "chat-x",
@@ -62,6 +62,7 @@ describe("renderPromptBody", () => {
 
     const idxIdentity = body.indexOf("## Identity");
     const idxMandate = body.indexOf("Your mandate is to help");
+    const idxUncertaintyGate = body.indexOf("## Learning before uncertain answers");
     const idxTaskRouting = body.indexOf("## Focused task routing");
     const idxArtifacts = body.indexOf("## Your workspace");
     const idxTaskContext = body.indexOf("## Building task context");
@@ -74,9 +75,10 @@ describe("renderPromptBody", () => {
     expect(idxIdentity).toBeGreaterThanOrEqual(0);
     expect(idxMandate).toBeGreaterThanOrEqual(0);
     expect(idxMandate).toBeGreaterThan(idxIdentity);
-    // Task routing sits immediately after mandate so the decision rule
-    // is read before any goal-specific or workspace-specific guidance.
-    expect(idxTaskRouting).toBeGreaterThan(idxMandate);
+    // The uncertainty gate sits immediately after the mandate so the
+    // agent reads the epistemic check before routing or workspace rules.
+    expect(idxUncertaintyGate).toBeGreaterThan(idxMandate);
+    expect(idxTaskRouting).toBeGreaterThan(idxUncertaintyGate);
     expect(idxArtifacts).toBeGreaterThan(idxTaskRouting);
     expect(idxTaskContext).toBeGreaterThan(idxArtifacts);
     expect(idxScheduling).toBeGreaterThan(idxTaskContext);
@@ -117,12 +119,147 @@ describe("renderPromptBody", () => {
     expect(reflection).not.toContain("## Focused task routing");
   });
 
+  it("uses task-execution instructions instead of ordinary task routing for task runs", () => {
+    const body = renderPromptBody({
+      ...baseInput,
+      chatId: "cht_thread",
+      goal: "task",
+      runMode: "task",
+      taskContext: {
+        taskId: "msg_task",
+        taskRunId: "msg_run",
+        taskThreadChatId: "cht_thread",
+        sourceChatId: "cht_source",
+        parentTaskId: "msg_parent",
+        schedule: "none",
+      },
+    });
+
+    expect(body).toContain("## Executing an existing Roomy task");
+    expect(body).toContain("This run is already the execution of a Roomy task");
+    expect(body).toContain("Current task id: msg_task");
+    expect(body).toContain("Current run id: msg_run");
+    expect(body).toContain("Task thread chat id: cht_thread");
+    expect(body).toContain("Source chat id: cht_source");
+    expect(body).toContain("Parent task id: msg_parent");
+    expect(body).toContain("Schedule: none");
+    expect(body).toContain("roomy-agent task progress");
+    expect(body).toContain("roomy-agent task create-child");
+    expect(body).toContain("roomy-agent task fail");
+    expect(body).toContain("roomy-agent task complete");
+    expect(body).not.toContain("## Focused task routing");
+    expect(body).not.toContain("## User's goal: track a task");
+    expect(body).not.toContain("Default-to-task heuristics");
+    expect(body).not.toContain("create a sibling task just because");
+  });
+
+  describe("task prompt behavior matrix", () => {
+    const chatPrompt = () => renderPromptBody({ ...baseInput, chatId: "cht_chat" });
+    const taskPrompt = () => renderPromptBody({
+      ...baseInput,
+      chatId: "cht_thread",
+      runMode: "task",
+      taskContext: {
+        taskId: "msg_task",
+        taskRunId: "msg_run",
+        taskThreadChatId: "cht_thread",
+        sourceChatId: "cht_source",
+        schedule: "none",
+      },
+    });
+
+    it("1. quick ordinary chat answers stay inline", () => {
+      expect(chatPrompt()).toContain("quick answer, explanation, or clarification");
+    });
+
+    it("2. tiny ordinary chat edits stay inline", () => {
+      expect(chatPrompt()).toContain("tiny edit clearly meant to be done inline");
+    });
+
+    it("3. explicit ordinary chat delegation still creates one task", () => {
+      const body = chatPrompt();
+      expect(body).toContain('"make this a task"');
+      expect(body).toContain("roomy-agent task schedule --chat <thisChatId>");
+    });
+
+    it("4. user-created RSS task opens as existing task execution", () => {
+      expect(taskPrompt()).toContain("This run is already the execution of a Roomy task");
+    });
+
+    it("5. existing task execution does not inherit default-to-task heuristics", () => {
+      expect(taskPrompt()).not.toContain("Default-to-task heuristics");
+    });
+
+    it("6. durable subordinate work uses child tasks", () => {
+      expect(taskPrompt()).toContain("roomy-agent task create-child");
+    });
+
+    it("7. recurring subordinate work stays parented", () => {
+      expect(taskPrompt()).toContain("roomy-agent task schedule --parent-task msg_task");
+    });
+
+    it("8. missing user context is handled in the current task thread", () => {
+      expect(taskPrompt()).toContain("ask there");
+      expect(taskPrompt()).toContain("Do not open a new task just to ask for input");
+    });
+
+    it("9. unrecoverable execution errors fail the current task", () => {
+      expect(taskPrompt()).toContain("roomy-agent task fail");
+    });
+
+    it("10. finished work completes the current task", () => {
+      expect(taskPrompt()).toContain("roomy-agent task complete");
+    });
+  });
+
   it("nudges every assistant run to end with visible user-facing text", () => {
     const body = renderPromptBody({ ...baseInput, chatId: "chat-x" });
 
     expect(body).toContain("Always finish each assistant run with a visible user-facing response");
     expect(body).toContain("completed work mostly through tool calls");
     expect(body).toContain("briefly say what failed and the next\nuseful step");
+  });
+
+  it("requires investigation before unsupported unknown or broad negative answers", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-x" });
+
+    expect(body).toContain("## Learning before uncertain answers");
+    expect(body).toContain("When your likely answer would be \"I don't know\"");
+    expect(body).toContain("First ask internally: \"What would let me know?\"");
+    expect(body).toContain("use the most relevant available sources and tools");
+    expect(body).toContain("Do not treat \"not found locally\" as proof that something does not exist");
+    expect(body).toContain("Only say \"I don't know\", \"I couldn't verify\", or \"I found no evidence\"");
+    expect(body).toContain("briefly state what you checked");
+  });
+
+  it("scopes negative claims instead of turning narrow searches into broad conclusions", () => {
+    const body = renderPromptBody({ ...baseInput, chatId: "chat-x" });
+
+    expect(body).toContain("\"not found in this workspace\"");
+    expect(body).toContain("\"not found in the available local skills\"");
+    expect(body).toContain("\"not found in the public docs I checked\"");
+    expect(body).toContain("\"I couldn't verify whether it exists publicly\"");
+    expect(body).toContain("It does not exist");
+    expect(body).toContain("requires strong evidence");
+  });
+
+  it("applies the uncertainty gate to task execution but not summary/reflection runs", () => {
+    const task = renderPromptBody({
+      ...baseInput,
+      chatId: "cht_thread",
+      runMode: "task",
+      taskContext: {
+        taskId: "msg_task",
+        taskRunId: "msg_run",
+        taskThreadChatId: "cht_thread",
+      },
+    });
+    const summary = renderPromptBody({ ...baseInput, chatId: "chat-x", runMode: "summary" });
+    const reflection = renderPromptBody({ ...baseInput, chatId: "chat-x", runMode: "reflection" });
+
+    expect(task).toContain("## Learning before uncertain answers");
+    expect(summary).not.toContain("## Learning before uncertain answers");
+    expect(reflection).not.toContain("## Learning before uncertain answers");
   });
 
   it("places Roomy identity at the top of the system prompt", () => {
