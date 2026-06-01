@@ -12,6 +12,10 @@
 import { test, expect } from "../fixtures";
 import type { Page } from "@playwright/test";
 
+function escapeRegex(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 async function getFirstWorkspaceId(
   serverUrl: string,
   token: string,
@@ -626,9 +630,13 @@ test("clicking a pending 'Use in chat' file in the Files sidebar opens its libra
   await page.waitForURL(/chat=new/, { timeout: 10_000 });
   await page.waitForLoadState("networkidle");
 
-  // Switch to the "Files" tab in the right panel and click the pending file
-  await page.getByRole("button", { name: /^Files$/ }).first().click();
-  await page.getByText(fileName, { exact: true }).first().click();
+  // Open the right panel and click the pending file in its Files section.
+  await page.getByRole("button", { name: "Open side panel" }).click();
+  const panelFile = page
+    .getByRole("link", { name: new RegExp(`^${escapeRegex(fileName)}$`) })
+    .first();
+  await expect(panelFile).toBeVisible({ timeout: 10_000 });
+  await panelFile.click();
 
   // After PR #143 a plain click on a file row in the chat right panel
   // opens the in-chat preview side panel instead of navigating to the

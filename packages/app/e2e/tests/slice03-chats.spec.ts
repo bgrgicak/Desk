@@ -48,6 +48,28 @@ test("chats the user has are listed in the sidebar", async ({
   ).toBeVisible({ timeout: 10_000 });
 });
 
+test("room chat right panel starts hidden by default", async ({
+  loggedInPage,
+}) => {
+  const openPanel = loggedInPage.getByRole("button", {
+    name: /open side panel/i,
+  });
+
+  await expect(openPanel).toBeVisible({ timeout: 10_000 });
+  await expect(
+    loggedInPage.getByText("Threads spawned from this chat appear here."),
+  ).toBeHidden();
+
+  await openPanel.click();
+
+  await expect(
+    loggedInPage.getByText("Threads spawned from this chat appear here."),
+  ).toBeVisible({ timeout: 5_000 });
+  await expect(
+    loggedInPage.getByRole("button", { name: /close side panel/i }),
+  ).toBeVisible();
+});
+
 test("deleting a chat via the API removes it from the sidebar", async ({
   loggedInPage,
   serverUrl,

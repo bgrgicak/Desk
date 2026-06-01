@@ -844,6 +844,47 @@ execRunFn: async (_id, _agentId, prompt, onLog) => {
 });
 
 describe("fireMessage on kind='task'", () => {
+  it("passes task-execution prompt mode and current task metadata to the runtime", async () => {
+    let captured: unknown;
+    const mgr = createRunManager({
+      pool,
+      execRunFn: async (_id, _agentId, _prompt, onLog, opts) => {
+        captured = opts?.agentFileInput;
+        onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
+        return { exitCode: 0 };
+      },
+    });
+
+    const taskId = await insertTask({
+      content: { type: "text", text: "do the thing" },
+    });
+
+    await mgr.fireMessage(taskId);
+
+    const input = captured as {
+      runMode?: string;
+      chatId?: string;
+      taskContext?: {
+        taskId?: string;
+        taskRunId?: string;
+        taskThreadChatId?: string;
+        sourceChatId?: string;
+        schedule?: string;
+      };
+    };
+    const runs = await listTaskRuns(taskId);
+    expect(input.runMode).toBe("task");
+    expect(input.chatId).toBe(chatId);
+    expect(input.taskContext).toEqual({
+      taskId,
+      taskRunId: runs[0].id,
+      taskThreadChatId: chatId,
+      sourceChatId: chatId,
+      parentTaskId: undefined,
+      schedule: "none",
+    });
+  });
+
   it("each fire creates a task_run child; the task definition is not mutated", async () => {
     const events: WsEvent[] = [];
     const mgr = createRunManager({

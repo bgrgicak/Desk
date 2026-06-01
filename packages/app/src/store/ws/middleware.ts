@@ -859,6 +859,7 @@ export function applyEventToCache(
           };
         }),
       );
+      if (!isViewedAndUnread) dispatch(api.util.invalidateTags(["HomeDay"]));
       break;
     }
     case "chat.deleted": {
@@ -875,6 +876,7 @@ export function applyEventToCache(
           draft.filter((c) => c.id !== chatId),
         ),
       );
+      dispatch(api.util.invalidateTags(["HomeDay"]));
       break;
     }
     case "message.appended":
@@ -917,7 +919,7 @@ export function applyEventToCache(
           "workspaceId" in event ? event.workspaceId : undefined,
         );
       }
-      dispatch(api.util.invalidateTags([{ type: "Message", id: "CROSS" }]));
+      dispatch(api.util.invalidateTags([{ type: "Message", id: "CROSS" }, "HomeDay"]));
       // Sidebar running/failed flags used to be inferred here from
       // agent_turn message-state transitions. They're now carried by
       // the server's `chat.updated` event (running/failed are part of

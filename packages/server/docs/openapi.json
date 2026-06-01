@@ -228,32 +228,6 @@
         }
       }
     },
-    "/auth/auto-login": {
-      "post": {
-        "summary": "Auto-login as the local Roomy owner",
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Session token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "token": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Auto-login disabled or no user available"
-          }
-        }
-      }
-    },
     "/auth/logout": {
       "post": {
         "summary": "Log out",
@@ -2102,6 +2076,391 @@
           },
           "413": {
             "description": "File exceeds maximum size"
+          }
+        }
+      }
+    },
+    "/home/day": {
+      "get": {
+        "summary": "Return typed Home day items",
+        "description": "Builds the Home / Your day read model from chat-backed activity. Items are display-ready and include `kind: task | chat` so task rows can keep task-specific controls while chat rows use chat-specific actions. The server owns bucket assignment, task-chat dedupe, sorting, and the recently-done cap.",
+        "responses": {
+          "200": {
+            "description": "Home day sections",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "refreshedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "counts": {
+                      "type": "object",
+                      "properties": {
+                        "needsInput": {
+                          "type": "integer"
+                        },
+                        "active": {
+                          "type": "integer"
+                        },
+                        "done": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "needsInput",
+                        "active",
+                        "done"
+                      ]
+                    },
+                    "sections": {
+                      "type": "object",
+                      "properties": {
+                        "needsInput": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "task",
+                                  "chat"
+                                ]
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "preview": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "needs_input",
+                                  "active",
+                                  "done"
+                                ]
+                              },
+                              "statusLabel": {
+                                "type": "string"
+                              },
+                              "updatedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "href": {
+                                "type": "string"
+                              },
+                              "room": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "color": {
+                                    "type": "string"
+                                  },
+                                  "icon": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "name",
+                                  "color",
+                                  "icon"
+                                ]
+                              },
+                              "chat": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "unread": {
+                                    "type": "boolean"
+                                  },
+                                  "running": {
+                                    "type": "boolean"
+                                  },
+                                  "failed": {
+                                    "type": "boolean"
+                                  },
+                                  "latestFailedMessageId": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "unread",
+                                  "running",
+                                  "failed",
+                                  "latestFailedMessageId"
+                                ]
+                              },
+                              "task": {
+                                "type": "object"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "id",
+                              "title",
+                              "preview",
+                              "status",
+                              "statusLabel",
+                              "updatedAt",
+                              "href",
+                              "room"
+                            ]
+                          }
+                        },
+                        "active": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "task",
+                                  "chat"
+                                ]
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "preview": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "needs_input",
+                                  "active",
+                                  "done"
+                                ]
+                              },
+                              "statusLabel": {
+                                "type": "string"
+                              },
+                              "updatedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "href": {
+                                "type": "string"
+                              },
+                              "room": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "color": {
+                                    "type": "string"
+                                  },
+                                  "icon": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "name",
+                                  "color",
+                                  "icon"
+                                ]
+                              },
+                              "chat": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "unread": {
+                                    "type": "boolean"
+                                  },
+                                  "running": {
+                                    "type": "boolean"
+                                  },
+                                  "failed": {
+                                    "type": "boolean"
+                                  },
+                                  "latestFailedMessageId": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "unread",
+                                  "running",
+                                  "failed",
+                                  "latestFailedMessageId"
+                                ]
+                              },
+                              "task": {
+                                "type": "object"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "id",
+                              "title",
+                              "preview",
+                              "status",
+                              "statusLabel",
+                              "updatedAt",
+                              "href",
+                              "room"
+                            ]
+                          }
+                        },
+                        "done": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "task",
+                                  "chat"
+                                ]
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "preview": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "needs_input",
+                                  "active",
+                                  "done"
+                                ]
+                              },
+                              "statusLabel": {
+                                "type": "string"
+                              },
+                              "updatedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "href": {
+                                "type": "string"
+                              },
+                              "room": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "color": {
+                                    "type": "string"
+                                  },
+                                  "icon": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "name",
+                                  "color",
+                                  "icon"
+                                ]
+                              },
+                              "chat": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "unread": {
+                                    "type": "boolean"
+                                  },
+                                  "running": {
+                                    "type": "boolean"
+                                  },
+                                  "failed": {
+                                    "type": "boolean"
+                                  },
+                                  "latestFailedMessageId": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "unread",
+                                  "running",
+                                  "failed",
+                                  "latestFailedMessageId"
+                                ]
+                              },
+                              "task": {
+                                "type": "object"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "id",
+                              "title",
+                              "preview",
+                              "status",
+                              "statusLabel",
+                              "updatedAt",
+                              "href",
+                              "room"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "needsInput",
+                        "active",
+                        "done"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "refreshedAt",
+                    "counts",
+                    "sections"
+                  ]
+                }
+              }
+            }
           }
         }
       }

@@ -14,6 +14,7 @@ import { installWsUpgradeHandler } from "./ws/upgrade.js";
 import { generateOpenApiSpec } from "./openapi.js";
 import { isStaticPath, resolveAppDist, serveStaticOrIndex } from "./static-app.js";
 import * as messageRoutes from "./routes/messages.js";
+import * as homeRoutes from "./routes/home.js";
 import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
 import { recordClientPerf } from "./routes/client-perf.js";
@@ -498,6 +499,13 @@ export function createApp(opts: AppOptions): Server {
     {
       const handled = await dispatchChats(req, res, method, path, segments, userId, query, dispatchCtx);
       if (handled) return;
+    }
+
+    // Home read models — display-ready aggregations for the hub-level UI.
+    if (path === "/home/day" && method === "GET") {
+      const result = await homeRoutes.getHomeDay(pool, userId);
+      sendJson(res, 200, result);
+      return;
     }
 
 

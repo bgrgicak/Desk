@@ -12,6 +12,7 @@ export function summaryRequestMessageKindsForDeveloperMode(developerMode: boolea
 
 export function isTaskListMessageForDeveloperMode(m: ServerMessage, developerMode: boolean): boolean {
   if (m.kind === "task") {
+    if (m.parentId) return false;
     if (!developerMode && m.content.type === "reflection_request") return false;
     return true;
   }

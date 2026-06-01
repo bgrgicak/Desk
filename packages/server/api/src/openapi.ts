@@ -4,6 +4,7 @@
  */
 
 import { GOAL_KEYS } from "@roomy-ai/shared";
+import { homeDayItemSchema } from "./openapi-home.js";
 
 interface OpenApiSpec {
   openapi: string;
@@ -800,6 +801,46 @@ export function generateOpenApiSpec(): OpenApiSpec {
       // Runs / scheduled-jobs endpoints are gone — execution state lives
       // on messages. See /chats/{id}/messages/{messageId}/... for the
       // replacement surface.
+      "/home/day": {
+        get: {
+          summary: "Return typed Home day items",
+          description: "Builds the Home / Your day read model from chat-backed activity. Items are display-ready and include `kind: task | chat` so task rows can keep task-specific controls while chat rows use chat-specific actions. The server owns bucket assignment, task-chat dedupe, sorting, and the recently-done cap.",
+          responses: {
+            "200": {
+              description: "Home day sections",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      refreshedAt: { type: "string", format: "date-time" },
+                      counts: {
+                        type: "object",
+                        properties: {
+                          needsInput: { type: "integer" },
+                          active: { type: "integer" },
+                          done: { type: "integer" },
+                        },
+                        required: ["needsInput", "active", "done"],
+                      },
+                      sections: {
+                        type: "object",
+                        properties: {
+                          needsInput: { type: "array", items: homeDayItemSchema },
+                          active: { type: "array", items: homeDayItemSchema },
+                          done: { type: "array", items: homeDayItemSchema },
+                        },
+                        required: ["needsInput", "active", "done"],
+                      },
+                    },
+                    required: ["refreshedAt", "counts", "sections"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
       "/messages": {
         get: {
           summary: "List messages across the caller's chats",

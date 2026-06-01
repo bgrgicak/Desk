@@ -52,6 +52,7 @@ export function TaskChatPanel({ task }: TaskChatPanelProps) {
     (m: ServerMessage) => m.id !== task.id,
     [task.id],
   )
+  const originalRequest = task.description?.trim() || task.name
 
   const handleUpload = useCallback((entries: UploadEntry[]) => {
     setPendingFiles(prev => [
@@ -124,7 +125,21 @@ export function TaskChatPanel({ task }: TaskChatPanelProps) {
           developerMode={developerMode}
           isSending={isSending}
           filterMessage={filterMessage}
-          headerSlot={chatId ? <ThreadParentChip chatId={chatId} /> : null}
+          headerSlot={(
+            <div className="shrink-0 border-b border-border/70 bg-background/80 px-6 py-4 backdrop-blur">
+              <div className={CHAT_COLUMN_CLASS}>
+                {chatId ? <ThreadParentChip chatId={chatId} /> : null}
+                <div className="mt-3 rounded-lg border border-border bg-background p-4" data-testid="task-original-request">
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Original request
+                  </div>
+                  <div className="mt-2 whitespace-pre-wrap break-words text-sm text-foreground">
+                    {originalRequest}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           innerClassName="px-6 pt-8 pb-16 space-y-3"
           messageClassName={() => CHAT_COLUMN_CLASS}
           statusClassName={CHAT_COLUMN_CLASS}

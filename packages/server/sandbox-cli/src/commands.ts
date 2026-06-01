@@ -15,6 +15,9 @@ export const COMMANDS: Record<string, () => Promise<Command>> = {
   "secret list": () => import("./commands/secret-list.js"),
   "task cancel": () => import("./commands/task-cancel.js"),
   "task complete": () => import("./commands/task-complete.js"),
+  "task create-child": () => import("./commands/task-create-child.js"),
+  "task fail": () => import("./commands/task-fail.js"),
+  "task progress": () => import("./commands/task-progress.js"),
   "task reschedule": () => import("./commands/task-reschedule.js"),
   "task schedule": () => import("./commands/task-schedule.js"),
 };

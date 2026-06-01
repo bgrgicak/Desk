@@ -34,6 +34,10 @@ interface Message {
   state?: string;
 }
 
+function escapeRegex(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 test("clicking a chat artifact file opens it in the detail view", async ({
   loggedInPage: page,
   serverUrl,
@@ -139,17 +143,16 @@ test("clicking a chat artifact file opens it in the detail view", async ({
   await expect(chatButton).toBeVisible({ timeout: 10_000 });
   await chatButton.click();
 
-  // The right panel renders the file row as a Link whose accessible
-  // name is the filename. The previous aria-label="Open <name>" wrapper
-  // went away with the panel redesign — pick the link directly.
-  const panelEntry = page.getByRole("link", { name: artifactName }).first();
-  await expect(panelEntry).toBeVisible({ timeout: 10_000 });
+  const artifactCard = page
+    .getByRole("button", { name: new RegExp(`^${escapeRegex(artifactName)}\\b`) })
+    .first();
+  await expect(artifactCard).toBeVisible({ timeout: 10_000 });
 
   // Single-click the file row — the new behaviour opens the in-chat
   // preview side panel (see `handleAttachmentClick` in App.tsx, which
   // dispatches `openArtifact` to the previewPanel slice). The chat thread
   // stays in place; the URL does NOT change.
-  await panelEntry.click();
+  await artifactCard.click();
   const previewPanel = page.getByTestId("preview-panel");
   await expect(previewPanel).toBeVisible({ timeout: 5_000 });
   // The panel header repeats the artifact filename so we can prove the

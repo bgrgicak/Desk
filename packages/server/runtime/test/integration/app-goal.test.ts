@@ -19,7 +19,6 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import {
   ensureLayout,
@@ -28,11 +27,12 @@ import {
 } from "@roomy-ai/storage";
 import {
   createOrReuse,
+  growSandboxForResourceError,
   stopSandbox,
   sandboxImage,
 } from "../../src/docker.js";
 import { detectEngine, type Engine } from "../../src/engine.js";
-import { rmTempTree } from "./helpers.js";
+import { mkdtempForDocker, rmTempTree } from "./helpers.js";
 
 let engineForSetup: Engine | null = null;
 let SKIP = false;
@@ -61,7 +61,7 @@ beforeAll(async () => {
     console.warn(`[app-goal integration] skipped: ${skipReason}`);
     return;
   }
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-app-goal-int-"));
+  home = await mkdtempForDocker("roomy-app-goal-int-");
   await ensureLayout(home);
   await ensureWorkspaceLayout(home, testWorkspaceSlug);
   process.env.ROOMY_HOME = home;
@@ -98,6 +98,7 @@ describeIf("app goal — scaffold + build", () => {
     const handle = await createOrReuse(testWorkspaceId, testWorkspaceSlug, home);
     const engine = await detectEngine();
     const chatId = "cht_app_goal_test";
+    await growSandboxForResourceError(testWorkspaceId, "memory");
 
     // Confirm the bake-in exists. Old image without /opt/roomy-template/app
     // produces a clear failure message instead of a confusing CLI error.

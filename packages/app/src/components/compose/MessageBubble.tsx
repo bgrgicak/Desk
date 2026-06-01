@@ -14,6 +14,7 @@ import { useDeleteLibraryFileMutation, useGetSummaryHistoryQuery, usePostMessage
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { openArtifact, selectIsArtifactInPanel } from '@/store/slices/previewPanelSlice'
 import { diffLines, type DiffSegment } from '@/lib/summary-diff'
+import { previewKindFrom } from '@/lib/preview-blob'
 import { buildPath, NEW_CHAT_ID } from '@/router/nav'
 import { Link } from 'react-router-dom'
 import { useChatNav } from '@/components/chats/ChatNavContext'
@@ -110,7 +111,7 @@ export const MessageBubble = memo(function MessageBubble({
   // doesn't visually duplicate the "you are in this task" affordance.
   if (message.kind === 'task') {
     if (message.threadChatId && message.threadChatId === currentChatId) {
-      return <TaskAnchorHeader message={message} />
+      return <TaskAnchorHeader message={message} workspacePath={workspacePath} workspaceId={workspaceId} />
     }
     return <TaskResultCard message={message} workspaceId={workspaceId} />
   }
@@ -754,7 +755,10 @@ function AttachmentCard({
   const canRenderAppPreview = appPreview && (
     appPreview.scope === 'global' ? !!chatId : !!effectiveWorkspaceId
   )
-  if (canRenderAppPreview) {
+  const canRenderImagePreview =
+    !!effectiveWorkspaceId &&
+    previewKindFrom(attachment.name, attachment.path, attachment.mime) === 'image'
+  if (canRenderAppPreview || canRenderImagePreview) {
     return (
       <div className={`max-w-full ${attachmentAlignmentClass(align)}`}>
         <InlineArtifactPreview
@@ -823,7 +827,15 @@ export function attachmentAlignmentClass(align: AttachmentAlignment) {
  *  No status badge, no View button, no kebab: the user is already
  *  inside the task's thread so the action surface lives on the
  *  Tasks page card and the right-panel header above the messages. */
-function TaskAnchorHeader({ message }: { message: ServerMessage }) {
+function TaskAnchorHeader({
+  message,
+  workspacePath,
+  workspaceId,
+}: {
+  message: ServerMessage
+  workspacePath?: string
+  workspaceId?: string
+}) {
   const title = message.title?.trim()
     || (message.content.type === 'text' ? message.content.text.split('\n')[0].trim() : '')
     || 'Task'
@@ -845,7 +857,12 @@ function TaskAnchorHeader({ message }: { message: ServerMessage }) {
     <div className="rounded-lg border border-foreground/10 bg-foreground/5 px-4 py-3">
       <div className="text-sm font-medium text-foreground">{title}</div>
       {body ? (
-        <div className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{body}</div>
+        <MarkdownContent
+          text={body}
+          workspacePath={workspacePath}
+          workspaceId={workspaceId}
+          className="mt-1 text-sm text-muted-foreground prose-headings:my-0 prose-headings:text-sm prose-headings:text-muted-foreground prose-p:my-0 prose-p:text-sm prose-p:text-muted-foreground prose-li:text-sm prose-li:text-muted-foreground prose-ul:my-1 prose-ol:my-1 prose-code:text-muted-foreground"
+        />
       ) : null}
     </div>
   )

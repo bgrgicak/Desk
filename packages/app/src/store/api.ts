@@ -7,6 +7,7 @@ import { getSessionToken } from "@/auth/session";
 import type {
   AttachmentRef,
   ConnectorConnection,
+  HomeDayResponse,
   ListLibraryFoldersResponse,
   ListLibraryResponse,
   ListMessagesResponse,
@@ -275,6 +276,7 @@ export const api = createApi({
     "Workspace",
     "WorkspaceAgents",
     "Chat",
+    "HomeDay",
     "Message",
     "Agent",
     "LibraryFile",
@@ -491,7 +493,7 @@ export const api = createApi({
       { name: string; description?: string; icon?: string; color?: string }
     >({
       query: (body) => ({ url: "/workspaces", method: "POST", body }),
-      invalidatesTags: [{ type: "Workspace", id: "LIST" }],
+      invalidatesTags: [{ type: "Workspace", id: "LIST" }, "HomeDay"],
     }),
     patchWorkspace: build.mutation<
       ServerWorkspace,
@@ -505,11 +507,12 @@ export const api = createApi({
       invalidatesTags: (_r, _e, { id }) => [
         { type: "Workspace", id },
         { type: "Workspace", id: "LIST" },
+        "HomeDay",
       ],
     }),
     deleteWorkspace: build.mutation<{ ok: true }, string>({
       query: (id) => ({ url: `/workspaces/${id}`, method: "DELETE" }),
-      invalidatesTags: [{ type: "Workspace", id: "LIST" }],
+      invalidatesTags: [{ type: "Workspace", id: "LIST" }, "HomeDay"],
     }),
 
     // ── Agents ────────────────────────────────────────────────────────
@@ -612,6 +615,12 @@ export const api = createApi({
       invalidatesTags: (_r, _e, { workspaceId }) => [
         { type: "WorkspaceAgents", id: workspaceId },
       ],
+    }),
+
+    // ── Home ──────────────────────────────────────────────────────────
+    getHomeDay: build.query<HomeDayResponse, void>({
+      query: () => "/home/day",
+      providesTags: ["HomeDay"],
     }),
 
     // ── Chats ─────────────────────────────────────────────────────────
@@ -719,6 +728,7 @@ export const api = createApi({
         { type: "Chat", id },
         { type: "Chat", id: "LIST" },
         { type: "Message", id: "CROSS" },
+        "HomeDay",
       ],
     }),
 
@@ -1348,6 +1358,7 @@ export const {
   useGetWorkspaceAgentsQuery,
   useAddWorkspaceAgentMutation,
   useRemoveWorkspaceAgentMutation,
+  useGetHomeDayQuery,
   useGetChatsQuery,
   useGetChatQuery,
   useCreateChatMutation,

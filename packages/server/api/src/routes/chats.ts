@@ -312,7 +312,7 @@ export async function sendMessage(
   chatId: string,
   rawData: unknown,
   emit: (event: WsEvent) => void,
-  opts?: { role?: "user" | "agent" | "system"; actorUserId?: string },
+  opts?: { role?: "user" | "agent" | "system"; actorUserId?: string; parentId?: string | null },
 ): Promise<{ userMessage: Message; triggerId: string }> {
   const parsed = SendMessageSchema.safeParse(rawData);
   if (!parsed.success) {
@@ -357,6 +357,7 @@ export async function sendMessage(
       executeAt,
       cron: data.cron ?? null,
       agentId: chat.agentId,
+      parentId: opts?.parentId ?? null,
     });
     emit({ type: "message.appended", payload: message, workspaceId: chat.workspaceId, chatTitle: chat.title, actorUserId: opts?.actorUserId });
     const decorated = await queries.messages.decorateMessageWithTaskStatus(pool, message);

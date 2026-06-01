@@ -62,7 +62,15 @@ export interface RenderPromptInput {
   chatId?: string;
   goal?: GoalKey | null;
   includeGoalAutodetect?: boolean;
-  runMode?: "chat" | "scheduled-task" | "summary" | "reflection";
+  runMode?: "chat" | "scheduled-task" | "task" | "summary" | "reflection";
+  taskContext?: {
+    taskId?: string;
+    taskRunId?: string;
+    taskThreadChatId?: string;
+    sourceChatId?: string;
+    parentTaskId?: string;
+    schedule?: string;
+  };
   /**
    * ROOMY_HOME root used to read the user / workspace memory index files.
    * When unset, memory injection is skipped (lets unit tests render the
@@ -127,15 +135,32 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
       agentName: input.agentName,
       userName: input.userName,
     }),
+  (input) =>
+    input.runMode === "summary" || input.runMode === "reflection"
+      ? null
+      : loadAndSub("learn-before-unknown.md", {}),
   // Always-loaded routing rule for chat turns. Tells the agent when
   // "as a task" / substantial project work should become a Roomy task
   // (via `roomy-agent task schedule`) instead of being implemented
   // inline. Skipped for summary and reflection runs — those have their
-  // own fixed shape and never spawn user-facing tasks.
+  // own fixed shape and never spawn user-facing tasks. Skipped for task
+  // execution too: that run is already inside a durable task and should
+  // update it, not schedule a duplicate sibling task.
   (input) =>
-    input.runMode === "summary" || input.runMode === "reflection"
+    input.runMode === "summary" || input.runMode === "reflection" || input.runMode === "task"
       ? null
       : loadAndSub("task-routing.md", {}),
+  (input) =>
+    input.runMode === "task"
+      ? loadAndSub("task-execution.md", {
+          taskId: input.taskContext?.taskId ?? "(unknown)",
+          taskRunId: input.taskContext?.taskRunId ?? "(unknown)",
+          taskThreadChatId: input.taskContext?.taskThreadChatId ?? input.chatId ?? "(unknown)",
+          sourceChatId: input.taskContext?.sourceChatId ?? "(unknown)",
+          parentTaskId: input.taskContext?.parentTaskId ?? "(none)",
+          schedule: input.taskContext?.schedule ?? "(none)",
+        })
+      : null,
   (input) => {
     if (input.runMode === "summary") {
       const chatPaths = input.chatId
@@ -176,7 +201,7 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
           userTimezone: input.userTimezone,
         })
       : loadAndSub("scheduling-tz-unknown.md", {}),
-  (input) => input.runMode === "summary" || input.runMode === "reflection" || input.includeGoalAutodetect === false ? null : loadAndSub("goal-autodetect.md", {}),
+  (input) => input.runMode === "summary" || input.runMode === "reflection" || input.runMode === "task" || input.includeGoalAutodetect === false ? null : loadAndSub("goal-autodetect.md", {}),
   (input) => input.runMode === "summary" || input.runMode === "reflection" ? null : loadAndSub("persistence.md", {}),
   // Memory rules + retrieval pointers, then the user and workspace memory
   // indexes. Order: rules → user index → workspace index. The agent
@@ -189,7 +214,12 @@ const SYSTEM_PROMPT_ORDER: Fragment[] = [
       ? null
       : workspaceMemoryFragment(input.home, input.workspaceSlug),
   (input) =>
-    input.runMode !== "summary" && input.runMode !== "reflection" && input.goal ? loadAndSub(`goal/${input.goal}.md`, {}) : null,
+    input.runMode !== "summary" &&
+    input.runMode !== "reflection" &&
+    !(input.runMode === "task" && input.goal === "task") &&
+    input.goal
+      ? loadAndSub(`goal/${input.goal}.md`, {})
+      : null,
   (input) => input.runMode === "summary" || input.runMode === "reflection" ? null : loadAndSub("roomy-skills.md", {}),
   // Hub-only section. Explains the hub's extra abilities (cross-workspace
   // FS read, cross-workspace API call, pinning, route_to_workspace

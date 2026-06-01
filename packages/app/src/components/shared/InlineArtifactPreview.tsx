@@ -62,10 +62,10 @@ type PreviewState =
 /**
  * Whether the preview hook should try to render in-place.
  *
- *   - **Inline mode** (chat stream): only **app fragments** render
- *     inline — bare, no header, no actions. Full apps + images +
- *     everything else fall through to the artifact card, which opens
- *     the side preview panel on click.
+ *   - **Inline mode** (chat stream): app fragments render inline as
+ *     bare embeds, and images render inline as bounded visual previews.
+ *     Full apps and longer/interactive file types fall through to the
+ *     artifact card, which opens the side preview panel on click.
  *   - **Panel mode** (side preview): handles every previewable kind
  *     (html / image / text / app / fragment).
  *
@@ -74,7 +74,7 @@ type PreviewState =
  * `*.app/dist/fragments/<name>/`.
  */
 function canRenderInline(kind: FileKind, isFragment: boolean): boolean {
-  return kind === 'app' && isFragment
+  return kind === 'image' || (kind === 'app' && isFragment)
 }
 
 function canRenderInPanel(kind: FileKind, _isFragment: boolean): boolean {
@@ -102,9 +102,9 @@ interface ArtifactPreviewInput {
   mime?: string | null
   params?: Record<string, string>
   /** Which surface the hook is feeding. `inline` (default) restricts
-   *  the renderer to images + apps per Phase 2's "default to panel"
-   *  routing rule. `panel` opens the gate to every kind the preview
-   *  body can render (HTML / text / markdown / image / app). */
+   *  the renderer to image previews and app fragments. `panel` opens
+   *  the gate to every kind the preview body can render (HTML / text /
+   *  markdown / image / app). */
   mode?: 'inline' | 'panel'
 }
 
@@ -291,29 +291,65 @@ export function inlineAppPreviewFor(
 
 export function InlineArtifactPreview({ workspaceId, chatId, path, name, mime, params, onOpen, openHref, actions, fallback, onSave, initiallySaved = false, onDelete }: InlineArtifactPreviewProps) {
   const { state, appPreviewRef } = useArtifactPreview({ workspaceId, chatId, path, name, mime, params })
-
-  // Caller props that are no longer surfaced inline (apps and images
-  // now route through the card → panel pattern, so the shell's Save /
-  // Open / Delete chrome doesn't render here). Touch them so eslint's
-  // no-unused-vars doesn't trip while keeping the prop API stable for
-  // callers that still pass them.
-  void onOpen
-  void openHref
-  void actions
-  void onSave
-  void initiallySaved
-  void onDelete
+  const requestedKind = appPreviewRef ? 'app' : previewKindFrom(name, path, mime)
 
   // Fallback gets rendered raw so the parent's card shows up exactly
   // as designed (no inline shell wrapping it). This is the path for
-  // every non-fragment artifactRef now — full apps, images, code,
-  // markdown, etc. all land here and the parent's card opens the
-  // preview panel on click.
+  // every non-inline artifactRef — full apps, code, markdown, etc. all
+  // land here and the parent's card opens the preview panel on click.
   if (state.status === 'fallback') return <>{fallback}</>
 
+  if (requestedKind === 'image') {
+    const body = state.status === 'ready' && state.kind === 'image' && state.blobUrl ? (
+      <img
+        src={state.blobUrl}
+        alt={name}
+        className="block max-h-[60vh] w-full bg-foreground/[0.03] object-contain"
+      />
+    ) : (
+      <div className="flex min-h-36 items-center justify-center bg-muted/20 px-4 py-8 text-xs text-muted-foreground">
+        Loading preview...
+      </div>
+    )
+    const hasDefaultActions = !!(onSave || initiallySaved || openHref || onDelete)
+    const actionControls = actions ?? (hasDefaultActions ? (
+      <>
+        {(onSave || initiallySaved) && (
+          <SaveToLibraryButton onSave={onSave} initiallySaved={initiallySaved} viewHref={openHref} />
+        )}
+        <ArtifactKebab fileName={name} openHref={openHref} onDelete={onDelete} />
+      </>
+    ) : null)
+
+    return (
+      <figure
+        className="my-3 w-full min-w-0 max-w-full overflow-hidden rounded-xl border border-foreground/10 bg-background shadow-sm sm:max-w-3xl"
+        data-testid="image-inline-preview"
+      >
+        {onOpen ? (
+          <button
+            type="button"
+            onClick={onOpen}
+            className="block w-full cursor-zoom-in text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {body}
+          </button>
+        ) : body}
+        <figcaption className="flex min-w-0 items-center gap-2 border-t border-foreground/10 px-3 py-2">
+          <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{name}</span>
+          {actionControls ? (
+            <span className="flex shrink-0 items-center gap-1">
+              {actionControls}
+            </span>
+          ) : null}
+        </figcaption>
+      </figure>
+    )
+  }
+
   // Only fragments reach this branch (canRenderInline gates inline
-  // mode to `kind === 'app' && isFragment`). Render the AppPreview
-  // iframe naked, wrapped only in the standard inline card chrome
+  // mode for apps to `kind === 'app' && isFragment`). Render the
+  // AppPreview iframe naked, wrapped only in the standard inline card chrome
   // (rounded + border + shadow + my-5 vertical breathing room) so the
   // fragment feels like a sibling of every other inline card in the
   // chat.

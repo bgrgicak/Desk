@@ -35,9 +35,9 @@ describe("roomy-agent task complete", () => {
     });
   });
 
-  it("rejects when neither --chat nor --message-id is given", async () => {
-    await expect(run([])).rejects.toThrow(/--chat .* or --message-id/);
-    expect(postJsonMock).not.toHaveBeenCalled();
+  it("posts an empty body when no id is given so the server can infer the current task", async () => {
+    await run([]);
+    expect(postJsonMock).toHaveBeenCalledWith("/sandbox/messages/complete", {});
   });
 
   it("rejects positional arguments — the outcome belongs in --message, not as positionals", async () => {

@@ -6,8 +6,9 @@ describe('chat sidebar responsive defaults', () => {
     expect(shouldOpenChatSidebarsByDefault(767)).toBe(false)
   })
 
-  it('starts chat sidebars open at the desktop breakpoint', () => {
-    expect(shouldOpenChatSidebarsByDefault(768)).toBe(true)
+  it('starts chat sidebars closed at the desktop breakpoint', () => {
+    expect(shouldOpenChatSidebarsByDefault(768)).toBe(false)
+    expect(shouldOpenChatSidebarsByDefault(1440)).toBe(false)
   })
 
   it('detects small chat viewports below the desktop breakpoint', () => {

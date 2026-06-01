@@ -1,11 +1,10 @@
 /**
  * Integration test for `POST /workspaces` auto-enrolling an agent.
  *
- * A freshly-created workspace has no agents until one is enrolled, which
- * means chat creation rejects every agentId. To keep new workspaces
- * chat-ready by default, `createWorkspace` auto-enrolls the caller's
- * active global models in order or creates a default agent when none exists.
- * Users can change the model list via global account settings afterwards.
+ * A freshly-created workspace auto-enrolls the caller's existing active
+ * global models in order. It no longer creates a default model when the
+ * user has none: onboarding owns provider setup, and showing a fake default
+ * agent would make the UI look configured before credentials exist.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as http from "node:http";
@@ -113,7 +112,7 @@ async function insertAgent(name: string): Promise<string> {
   return id;
 }
 
-describe("POST /workspaces — ensure a default workspace agent", () => {
+describe("POST /workspaces — workspace agent enrollment", () => {
   it("enrolls active agents in the global model order", async () => {
     const alphaId = await insertAgent("alpha");
     const zetaId = await insertAgent("zeta");
@@ -140,7 +139,7 @@ describe("POST /workspaces — ensure a default workspace agent", () => {
     expect(stillEnrolled[0].agentId).toBe(zetaId);
   });
 
-  it("creates and enrolls a default Anthropic agent for a user with no agents", async () => {
+  it("leaves a new workspace empty for a user with no agents", async () => {
     const otherUserId = generateId("user");
     await queries.users.insert(pool, {
       id: otherUserId,
@@ -161,42 +160,14 @@ describe("POST /workspaces — ensure a default workspace agent", () => {
     const ws = res.body as { id: string };
 
     const memberships = await queries.workspaceAgents.listForWorkspace(pool, ws.id);
-    expect(memberships).toHaveLength(1);
-
-    const agent = await queries.agents.findById(pool, memberships[0].agentId);
-    expect(agent).toMatchObject({
-      userId: otherUserId,
-      name: "Roomy",
-      model: "anthropic/claude-haiku-4-5",
-    });
+    expect(memberships).toHaveLength(0);
 
     const listRes = await request("GET", `/workspaces/${ws.id}/agents`, otherToken);
     expect(listRes.status).toBe(200);
-    expect(listRes.body).toMatchObject([
-      { id: memberships[0].agentId, model: "anthropic/claude-haiku-4-5" },
-    ]);
-
-    const patchRes = await request("PATCH", `/agents/${memberships[0].agentId}`, otherToken, {
-      model: "anthropic/claude-sonnet-4-5",
-    });
-    expect(patchRes.status).toBe(200);
-    expect(patchRes.body).toMatchObject({
-      id: memberships[0].agentId,
-      model: "anthropic/claude-sonnet-4-5",
-    });
-
-    const removeRes = await request(
-      "DELETE",
-      `/workspaces/${ws.id}/agents/${memberships[0].agentId}`,
-      otherToken,
-    );
-    expect(removeRes.status).toBe(400);
-
-    const stillEnrolled = await queries.workspaceAgents.listForWorkspace(pool, ws.id);
-    expect(stillEnrolled).toHaveLength(1);
+    expect(listRes.body).toEqual([]);
   });
 
-  it("repairs an existing workspace that has no enrolled agent", async () => {
+  it("repairs an existing workspace by enrolling existing active agents", async () => {
     const repairUserId = generateId("user");
     await queries.users.insert(pool, {
       id: repairUserId,
@@ -209,6 +180,13 @@ describe("POST /workspaces — ensure a default workspace agent", () => {
       password: "pw",
     });
     const repairToken = (login.body as { token: string }).token;
+    const repairAgentId = generateId("agent");
+    await queries.agents.insert(pool, {
+      id: repairAgentId,
+      userId: repairUserId,
+      name: "Roomy",
+      model: "anthropic/claude-haiku-4-5",
+    });
     const ws = await queries.workspaces.insert(pool, {
       id: generateId("workspace"),
       userId: repairUserId,
@@ -222,10 +200,11 @@ describe("POST /workspaces — ensure a default workspace agent", () => {
     const listRes = await request("GET", `/workspaces/${ws.id}/agents`, repairToken);
     expect(listRes.status).toBe(200);
     expect(listRes.body).toMatchObject([
-      { name: "Roomy", model: "anthropic/claude-haiku-4-5" },
+      { id: repairAgentId, name: "Roomy", model: "anthropic/claude-haiku-4-5" },
     ]);
 
     const after = await queries.workspaceAgents.listForWorkspace(pool, ws.id);
     expect(after).toHaveLength(1);
+    expect(after[0].agentId).toBe(repairAgentId);
   });
 });

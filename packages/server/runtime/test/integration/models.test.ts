@@ -11,15 +11,12 @@
  * list is published locally and doesn't require an API round-trip.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import { ensureLayout, ensureWorkspaceLayout } from "@roomy-ai/storage";
 import { createOrReuse, stopSandbox, sandboxImage } from "../../src/docker.js";
 import { listModels } from "../../src/models.js";
 import { execInSandbox } from "../../src/sandboxExec.js";
 import { detectEngine, type Engine } from "../../src/engine.js";
-import { rmTempTree } from "./helpers.js";
+import { mkdtempForDocker, rmTempTree } from "./helpers.js";
 
 let engineForSetup: Engine | null = null;
 let SKIP = false;
@@ -41,7 +38,7 @@ const testWorkspaceSlug = "models-int-test";
 
 beforeAll(async () => {
   if (SKIP) return;
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-models-int-"));
+  home = await mkdtempForDocker("roomy-models-int-");
   await ensureLayout(home);
   await ensureWorkspaceLayout(home, testWorkspaceSlug);
   process.env.ROOMY_HOME = home;

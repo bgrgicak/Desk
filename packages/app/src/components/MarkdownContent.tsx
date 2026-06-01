@@ -14,6 +14,8 @@ import { remarkSandboxPaths, sandboxToUserPath } from '@/lib/remark-sandbox-path
 
 interface MarkdownContentProps {
   text: string
+  className?: string
+  renderLinks?: boolean
   /**
    * When provided, sandbox paths (/home/agent/... or ~/...) are detected and
    * rendered as PathChip components. Should be the workspace directory name
@@ -149,7 +151,13 @@ function WorkspaceEntityChip({ id }: { id: string }) {
   return <EntityChip kind="workspace" id={id} title={title} />
 }
 
-export const MarkdownContent = memo(function MarkdownContent({ text, workspacePath, workspaceId }: MarkdownContentProps) {
+export const MarkdownContent = memo(function MarkdownContent({
+  text,
+  className,
+  renderLinks = true,
+  workspacePath,
+  workspaceId,
+}: MarkdownContentProps) {
   // The plugins array and components map used to be recreated inline on
   // every render. ReactMarkdown's internal optimizations rely on stable
   // identities for these, so churning them defeats any reuse and forces a
@@ -186,6 +194,7 @@ export const MarkdownContent = memo(function MarkdownContent({ text, workspacePa
       </code>
     ),
     a: ({ href, children }: React.ComponentProps<'a'>) => {
+      if (!renderLinks) return <>{children}</>
       if (href?.startsWith('roomy-entity:')) {
         const entity = parseEntityUrl(href)
         if (entity) {
@@ -215,10 +224,13 @@ export const MarkdownContent = memo(function MarkdownContent({ text, workspacePa
       }
       return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
     },
-  }), [workspacePath, workspaceId])
+  }), [renderLinks, workspacePath, workspaceId])
 
   return (
-    <div className="prose prose-neutral prose-sm min-w-0 max-w-none break-words text-foreground prose-headings:font-semibold prose-headings:text-foreground prose-p:text-sm prose-p:leading-relaxed prose-p:my-1 prose-li:text-sm prose-li:my-1 prose-ul:my-3 prose-ol:my-3 prose-strong:text-foreground prose-strong:font-semibold prose-code:text-sm prose-code:text-foreground prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:font-mono prose-code:font-normal prose-code:before:content-none prose-code:after:content-none prose-pre:max-w-full prose-pre:overflow-x-hidden prose-pre:whitespace-pre-wrap prose-pre:break-words prose-pre:bg-muted prose-pre:text-xs prose-pre:text-foreground prose-pre:font-normal prose-table:w-full prose-table:table-fixed prose-table:break-words prose-table:text-sm prose-th:text-left prose-th:font-medium prose-th:break-words prose-td:break-words prose-a:text-primary">
+    <div className={[
+      'prose prose-neutral prose-sm min-w-0 max-w-none break-words text-foreground prose-headings:font-semibold prose-headings:text-foreground prose-p:text-sm prose-p:leading-relaxed prose-p:my-1 prose-li:text-sm prose-li:my-1 prose-ul:my-3 prose-ol:my-3 prose-strong:text-foreground prose-strong:font-semibold prose-code:text-sm prose-code:text-foreground prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:font-mono prose-code:font-normal prose-code:before:content-none prose-code:after:content-none prose-pre:max-w-full prose-pre:overflow-x-hidden prose-pre:whitespace-pre-wrap prose-pre:break-words prose-pre:bg-muted prose-pre:text-xs prose-pre:text-foreground prose-pre:font-normal prose-table:w-full prose-table:table-fixed prose-table:break-words prose-table:text-sm prose-th:text-left prose-th:font-medium prose-th:break-words prose-td:break-words prose-a:text-primary',
+      className,
+    ].filter(Boolean).join(' ')}>
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         urlTransform={urlTransform}

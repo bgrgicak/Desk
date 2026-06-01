@@ -97,6 +97,12 @@ beforeAll(async () => {
     passwordHash: await hashPassword("pw"),
     email: "hubuser@example.com",
   });
+  await queries.agents.insert(pool, {
+    id: generateId("agent"),
+    userId,
+    name: "Roomy",
+    model: "anthropic/claude-haiku-4-5",
+  });
   // Mimic the server boot pass.
   await ensureHubsForAllUsers(pool, home);
 
@@ -156,6 +162,12 @@ describe("hub workspace boot pass", () => {
       username: "reuser",
       passwordHash: await hashPassword("pw"),
       email: "reuser@example.com",
+    });
+    await queries.agents.insert(pool, {
+      id: generateId("agent"),
+      userId: reuserId,
+      name: "Roomy",
+      model: "anthropic/claude-haiku-4-5",
     });
     const hub = await createHub(pool, home, reuserId, "reuser");
 
@@ -481,6 +493,12 @@ describe("GET /me/ask-ai-chat", () => {
       username: regUserSlug,
       passwordHash: await hashPassword("pw"),
       email: "askai-regression@example.com",
+    });
+    await queries.agents.insert(pool, {
+      id: generateId("agent"),
+      userId: regUserId,
+      name: "Roomy",
+      model: "anthropic/claude-haiku-4-5",
     });
     await createHub(pool, home, regUserId, regUserSlug);
     const regHub = await queries.workspaces.findHubByUser(pool, regUserId);

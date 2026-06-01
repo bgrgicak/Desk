@@ -7,12 +7,12 @@
 // real endpoint is a one-line change in `generateHomeDigest` with no
 // caller changes.
 
-export interface HomeTaskCounts {
-  /** Tasks awaiting the user across all rooms. */
+export interface HomeDayCounts {
+  /** Home items awaiting the user across all rooms. */
   needsInput: number
-  /** Tasks an agent is actively working on across all rooms. */
+  /** Home items with active work across all rooms. */
   active: number
-  /** Tasks completed (e.g. while the user was away). */
+  /** Recent items ready for review. */
   done: number
 }
 
@@ -40,10 +40,10 @@ export const GREETING_PROMPT = [
  * items and their impact on the user's workflow.
  */
 export const SUMMARY_PROMPT = [
-  'Write exactly two sentences summarising the current tasks. Sentence one:',
-  'how many need the user\'s input and why it matters / where to start.',
-  'Sentence two: what is in progress and what was completed while they were',
-  'away. Be specific and action-oriented; no fluff, no markdown.',
+  'Write exactly two sentences summarising the current Home items, which may',
+  'be tasks or chats. Sentence one: how many need the user\'s input and why it',
+  'matters / where to start. Sentence two: what is in progress and what is',
+  'ready to review. Be specific and action-oriented; no fluff, no markdown.',
 ].join(' ')
 
 function timeOfDay(now = new Date()): 'morning' | 'afternoon' | 'evening' {
@@ -53,7 +53,7 @@ function timeOfDay(now = new Date()): 'morning' | 'afternoon' | 'evening' {
   return 'evening'
 }
 
-/** Plain fallback greeting — used when there are no tasks to riff on. */
+/** Plain fallback greeting — used when there is no activity to riff on. */
 export function fallbackGreeting(username?: string): string {
   const part = timeOfDay()
   return username
@@ -62,7 +62,7 @@ export function fallbackGreeting(username?: string): string {
 }
 
 /** Deterministic stand-in for the AI greeting headline. */
-export function deriveGreeting(counts: HomeTaskCounts, username?: string): string {
+export function deriveGreeting(counts: HomeDayCounts, username?: string): string {
   const load = counts.needsInput + counts.active
   if (load === 0 && counts.done === 0) return fallbackGreeting(username)
   if (counts.needsInput >= 5 || load >= 8) return "You've got a busy day ahead"
@@ -72,19 +72,19 @@ export function deriveGreeting(counts: HomeTaskCounts, username?: string): strin
 }
 
 /** Deterministic stand-in for the 2-sentence AI summary. */
-export function deriveSummary(counts: HomeTaskCounts): string {
+export function deriveSummary(counts: HomeDayCounts): string {
   const { needsInput, active, done } = counts
   const s1 =
     needsInput > 0
-      ? `I found ${needsInput} task${needsInput === 1 ? '' : 's'} that need your input — I've ordered them by recency so you can start with the most pressing one.`
+      ? `I found ${needsInput} item${needsInput === 1 ? '' : 's'} that need your input — I've ordered them by recency so you can start with the most pressing one.`
       : `Nothing needs your input right now.`
   const s2Parts: string[] = []
-  if (active > 0) s2Parts.push(`${active} ${active === 1 ? 'is' : 'are'} in progress`)
-  if (done > 0) s2Parts.push(`${done} completed while you were away`)
+  if (active > 0) s2Parts.push(`${active} ${active === 1 ? 'is' : 'are'} happening now`)
+  if (done > 0) s2Parts.push(`${done} recent ${done === 1 ? 'item is' : 'items are'} ready to review`)
   const s2 =
     s2Parts.length > 0
-      ? `${s2Parts.join(' and ')}${done > 0 ? ' — review them to see the output.' : '.'}`
-      : `No tasks are currently running.`
+      ? `${s2Parts.join(' and ')}.`
+      : `Nothing is currently running.`
   return `${s1} ${s2}`
 }
 
@@ -94,11 +94,11 @@ export function deriveSummary(counts: HomeTaskCounts): string {
  * caller already awaits this.
  */
 export async function generateHomeDigest(
-  counts: HomeTaskCounts,
+  counts: HomeDayCounts,
   username?: string,
 ): Promise<HomeDigest> {
   // TODO(backend): call the digest endpoint with GREETING_PROMPT /
-  // SUMMARY_PROMPT + the task list, and return its result instead.
+  // SUMMARY_PROMPT + the Home item list, and return its result instead.
   return Promise.resolve({
     greeting: deriveGreeting(counts, username),
     summary: deriveSummary(counts),

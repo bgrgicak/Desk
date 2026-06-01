@@ -19,6 +19,7 @@
  * apology / retry / fallback after the fake POST 404s is ignored.
  *
  * Preconditions:
+ *   - Explicit opt-in via `ROOMY_RUN_AGENT_ROUTING_SMOKE=1`.
  *   - Docker available + `roomy/sandbox:v1` image present (otherwise skipped).
  *   - chat-forms.app dist built. Run once before this file:
  *       npm --workspace @roomy-ai/chat-forms-app run build
@@ -28,33 +29,39 @@
  * Budget ~5 minutes for the whole file.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import { ensureLayout, ensureWorkspaceLayout } from "@roomy-ai/storage";
 import { createOrReuse, sandboxImage } from "../../src/docker.js";
 import { createDriver, type LogEvent } from "../../src/driver.js";
 import { detectEngine, type Engine } from "../../src/engine.js";
 import { writeBuiltinApps } from "../../src/builtinApps.js";
 import { loadCodexEnv } from "../../src/localSources/codex.js";
-import { rmTempTree } from "./helpers.js";
+import { mkdtempForDocker, rmTempTree } from "./helpers.js";
 
 let engineForSetup: Engine | null = null;
 let SKIP = false;
-try {
-  engineForSetup = await detectEngine();
-  if (!(await engineForSetup.imageId(sandboxImage()))) SKIP = true;
-} catch {
+let skipReason = "";
+if (process.env.ROOMY_RUN_AGENT_ROUTING_SMOKE !== "1") {
   SKIP = true;
+  skipReason = "set ROOMY_RUN_AGENT_ROUTING_SMOKE=1 to run real-model routing smoke tests";
+} else {
+  try {
+    engineForSetup = await detectEngine();
+    if (!(await engineForSetup.imageId(sandboxImage()))) {
+      SKIP = true;
+      skipReason = `${sandboxImage()} image not present`;
+    }
+  } catch (err) {
+    SKIP = true;
+    skipReason = `engine probe failed: ${(err as Error).message}`;
+  }
 }
 const describeIf = SKIP ? describe.skip : describe;
 
 const FREE_MODEL = "anthropic/claude-haiku-4-5";
-// pi only knows the `openai` provider; `codex/<name>` is a
-// Roomy UI relabel. Use the canonical `openai/...` form so the daemon
-// doesn't have to translate (and so we don't trip the `codex/X` →
-// `anthropic/claude-haiku-4-5` fallback when something looks off about auth).
-const CODEX_MODEL = "openai/gpt-5.5";
+// Codex OAuth is exposed to pi through the `openai-codex` provider. Use
+// Roomy's `codex/<name>` label here and let the runtime translate it so the
+// auth blob loaded from ~/.codex/auth.json matches the selected provider.
+const CODEX_MODEL = "codex/gpt-5.5";
 
 // Pick a stronger model when the host has a Codex (ChatGPT) login on disk.
 // Big-pickle was observed to ignore the chat-cards routing rule no matter
@@ -78,8 +85,11 @@ const FAKE_CHAT_ID = "cht_routing_test_synthetic";
 const createdWorkspaceIds = new Set<string>();
 
 beforeAll(async () => {
-  if (SKIP) return;
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-routing-int-"));
+  if (SKIP) {
+    console.warn(`[routing-test] skipped: ${skipReason}`);
+    return;
+  }
+  home = await mkdtempForDocker("roomy-routing-int-");
   await ensureLayout(home);
   // Mirror packages/apps/ into ~/.apps/ so the sandbox mount plan
   // can bind it read-only at /opt/roomy-apps/. Without this the agent's
@@ -176,9 +186,8 @@ async function runPrompt(
   createdWorkspaceIds.add(workspaceId);
   await ensureWorkspaceLayout(home, workspaceSlug);
   // Forward the host's Codex (ChatGPT) auth into the sandbox when we
-  // have it. Without this, `codex/*` models silently rewrite to
-  // big-pickle inside the runtime fallback path, and we lose the
-  // stronger-model signal we're trying to measure.
+  // have it so the runtime can translate `codex/*` to pi's
+  // `openai-codex/*` provider without needing an OpenAI API key.
   const extraEnv = CODEX_AUTH_ENV ?? undefined;
   const handle = await createOrReuse(
     workspaceId,

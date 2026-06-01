@@ -265,6 +265,26 @@ workspace-relative path to an existing file, usually
 `message.appended`. Tokens minted for internal summary refresh runs are
 rejected so summaries cannot surface files as artifacts.
 
+### Sandbox: task callbacks
+
+Sandbox-token only (`X-Roomy-Sandbox-Token`). Called by `roomy-agent task ...`
+commands from inside task runs.
+
+- `POST /sandbox/tasks/progress` with `{ message }` appends visible progress to
+  the current task thread.
+- `POST /sandbox/tasks/fail` with `{ message }` marks the current task run and
+  task failed, then appends the failure reason to the task thread.
+- `POST /sandbox/messages/complete` may omit `chatId`/`messageId` when the
+  sandbox token is scoped to a `task_run`; the server resolves the current task
+  through `sandbox_sessions.run_id`.
+- `POST /sandbox/messages` accepts `parentTaskId` to create a child task under
+  an existing task. If `chatId` is omitted from a task-run sandbox session, the
+  current task is used as the parent.
+
+These callbacks reuse existing `messages` rows: task anchors are `kind='task'`,
+runs are `kind='task_run'`, and child task anchors set `parent_id` to the parent
+task id.
+
 ### POST /me/password
 
 Accepts `{ currentPassword, newPassword }`. Returns `401 Unauthorized`

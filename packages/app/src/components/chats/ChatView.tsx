@@ -161,8 +161,9 @@ export function ChatView({
     ? (location.state as { anchorMessage?: ServerMessage } | null)?.anchorMessage ?? null
     : null
   const rightPanelOpenKey = chat.id && chat.id !== NEW_CHAT_ID ? `roomy.chat.${chat.id}.rightPanelOpen` : null
-  // Ask AI view (chatNav provided) starts with the panel closed; room chats
-  // follow the viewport-width heuristic (open on wide screens by default).
+  // Chat right panels start closed by default; user toggles persist per chat.
+  // Ask AI view (chatNav provided) also starts closed and may hide the panel
+  // toggle entirely through the caller-provided surface policy.
   const [panelOpenRaw, setPanelOpen] = usePersistedState<boolean>(rightPanelOpenKey, chatNav !== undefined ? false : shouldOpenChatSidebarsByDefault())
   // When the surface opts out of the right panel (e.g. Ask AI), force
   // the layout to treat the panel as closed so insets, gutters, and the

@@ -5,7 +5,7 @@ runs inside the sandbox and POSTs to the host-side roomy-server REST API.
 
 ## When to use it
 
-You have seven commands:
+You have ten commands:
 - `roomy-agent app create` — clone the Roomy app scaffold into a new chat
   artifact directory so you can author a real `<name>.app/`.
 - `roomy-agent chat attach-artifact` — surface a generated file **or directory**
@@ -14,7 +14,13 @@ You have seven commands:
   LaTeX, and plain text files into agent-readable Markdown/text.
 - `roomy-agent find library` — discover reusable apps, fragments, notes, and
   docs before building or answering whether a reusable item exists.
-- `roomy-agent task schedule` — create a *new* task card.
+- `roomy-agent task progress` — append visible progress to the current task.
+- `roomy-agent task complete` — mark the current or identified task done and
+  optionally report back.
+- `roomy-agent task fail` — mark the current task failed with a visible reason.
+- `roomy-agent task create-child` — create a child task under the current task.
+- `roomy-agent task schedule` — create a task card. Inside a task, prefer
+  `--parent-task` for scheduled child work.
 - `roomy-agent task reschedule` — change the time (and optionally title/body)
   of an *existing* task in place. Use for any change/move/delay request —
   never cancel+recreate.
@@ -36,7 +42,9 @@ Reach for them when:
 2. **The user asked for a reminder, recurring report, or follow-up.**
    Schedule a task instead of saying "I'll remember to do that" — you
    won't.
-3. **A piece of work needs to live on the user's Tasks board.** Unscheduled
+3. **A piece of work needs to live on the user's Tasks board.** If you are
+   already executing a task, update the current task; create a child task only
+   when the subordinate work needs its own lifecycle. Unscheduled
    tasks (no `--at`/`--cron`) auto-fire immediately and stay Active on
    the board until you call `roomy-agent task complete`. There is no
    agent-CLI path that lands a passive TODO — the kanban composer is
@@ -56,7 +64,9 @@ Reach for them when:
    skill for the development workflow.
 
 If you just need to reply to the user *now*, write to stdout — that's the
-chat reply channel. Don't use `roomy-agent task schedule` for plain replies.
+chat reply channel. If you are inside an existing task and need the user to see
+progress in that task, use `roomy-agent task progress`. Don't use
+`roomy-agent task schedule` for plain replies or current-task progress.
 
 ## How to use it (action bias)
 
@@ -270,7 +280,7 @@ roomy-agent file to-markdown --output Reports/Q1.md Reports/Q1.docx
 
 ## roomy-agent task schedule
 
-Create a task message in a chat. The task can be:
+Create a task message in a chat or as a child of an existing task. The task can be:
 - **Scheduled** (`--at <iso8601>`): fires once at the given instant.
 - **Recurring** (`--cron <expr>`): fires on each cron tick.
 - **Unscheduled** (neither): auto-fires immediately. The card lands on
@@ -279,8 +289,11 @@ Create a task message in a chat. The task can be:
   passive TODO — the kanban composer is the user's only path to that.
 
 ```
-roomy-agent task schedule --chat <id> [--title <text>] [--at <iso> | --cron <expr>] [--kind <kind>] <content>
+roomy-agent task schedule (--chat <id> | --parent-task <task-id>) [--title <text>] [--at <iso> | --cron <expr>] [--kind <kind>] <content>
 ```
+
+Use `--parent-task` when a task run creates scheduled or recurring subordinate
+work that should appear under the current task instead of as a top-level sibling.
 
 `--at` and `--cron` are mutually exclusive. If you pass both, the command
 errors out — pick one.
@@ -313,6 +326,15 @@ immediately and the card stays Active until you call
 roomy-agent task schedule --chat ch_abc \
     --title "Summarize Q1 metrics" \
     "Pull the Q1 numbers from the deck and produce a 1-pager"
+```
+
+Scheduled child work under a parent task:
+
+```
+roomy-agent task schedule --parent-task msg_parent \
+    --title "Check RSS feeds daily" \
+    --cron "0 9 * * *" \
+    "Fetch configured feeds and report new items."
 ```
 
 ### Cron quick reference
@@ -355,6 +377,34 @@ like user-visible tasks.
   Double-check the id you're using.
 - `VALIDATION` — bad `--at` or `--cron`. Read the message and fix the
   argument; don't paper over it with a different schedule.
+
+## roomy-agent task progress
+
+Append a visible progress update to the current task thread. The current task is
+inferred from the sandbox session; do not pass a chat id for the normal case.
+
+```
+roomy-agent task progress --message "Scaffolding RSS app"
+roomy-agent task progress Running tests
+```
+
+Use this for meaningful milestones the user should see while the task is open.
+Do not use it for noisy internal narration.
+
+## roomy-agent task create-child
+
+Create a child task under the current task. The current task is inferred from
+the sandbox session. Pass `--parent-task` only when creating under a different
+known task anchor.
+
+```
+roomy-agent task create-child --title "Implement parser" \
+    "Parse RSS and Atom feeds into normalized items."
+
+roomy-agent task create-child --parent-task msg_parent \
+    --title "Verify parser" \
+    "Add parser integration tests."
+```
 
 ## roomy-agent task reschedule
 
@@ -418,6 +468,8 @@ chat (next to the task anchor) so the user / main-thread agent sees the
 outcome without having to open the task's thread chat.
 
 Identify the task with exactly one of:
+- no id — when called from inside a task run, the server infers the current
+  task from the sandbox session.
 - `--chat <thread-chat-id>` — the agent IS sitting inside the task's
   dedicated thread chat; the server walks back to the anchor via the
   thread link.
@@ -427,7 +479,7 @@ Identify the task with exactly one of:
   from outside its thread.
 
 ```
-roomy-agent task complete (--chat <thread-id> | --message-id <anchor-id>) \
+roomy-agent task complete [(--chat <thread-id> | --message-id <anchor-id>)] \
                          [--message <text>]
 ```
 
@@ -439,7 +491,7 @@ failed) cannot be completed again.
 
 Complete from inside the task's thread chat (server walks to anchor):
 ```
-roomy-agent task complete --chat ch_thread_xyz \
+roomy-agent task complete \
     --message "Audited 12 PRs. 3 need follow-up: #145, #161, #163."
 ```
 
@@ -462,6 +514,20 @@ roomy-agent task complete --message-id msg_anchor_abc \
   is on a cron. Use `task cancel` instead.
 - `VALIDATION` (`already in terminal state`) — task is already
   succeeded / cancelled / failed. No second complete.
+
+## roomy-agent task fail
+
+Mark the current task failed and append a visible reason in the task thread. The
+current task is inferred from the sandbox session.
+
+```
+roomy-agent task fail --message "Docker container is marked for removal"
+roomy-agent task fail Provider timed out
+```
+
+Use this when execution cannot continue. If you need user input instead of
+declaring failure, use `task progress` and ask for the missing decision in the
+current task thread.
 
 ## roomy-agent task cancel
 

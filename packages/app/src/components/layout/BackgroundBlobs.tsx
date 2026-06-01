@@ -1,25 +1,62 @@
-import { useState } from 'react'
+import type { CSSProperties } from 'react'
 import { cn } from '@roomy-ai/ui'
 
-// Full-viewport blob backdrop. Ellipses sit at the bottom edge of the SVG
-// viewBox so their bodies hang off the visible area; the heavily-blurred
-// fringes bleed up into the page and fade to nothing well before the top.
-// Each blob runs two animations in parallel: a slow drift / scale / rotate
-// keyframe, and a longer colour cycle that walks through the palette. The
-// colour cycle's start phase is randomised on mount so the colours aren't
-// pinned to fixed positions across loads. Animation respects
-// `prefers-reduced-motion: reduce`.
+// Full-viewport static blob backdrop. The blur is real, but it is applied to a
+// non-animated synthetic layer instead of using backdrop-filter or animating
+// filtered pixels every frame.
 
-const COLOR_CYCLE_S = 240
+const BLOB_LAYOUTS = [
+  { className: 'backgroundBlob-1', cx: 80, cy: 1000, rx: 380, ry: 260, opacity: 0.55 },
+  { className: 'backgroundBlob-2', cx: 1520, cy: 1000, rx: 380, ry: 260, opacity: 0.55 },
+  { className: 'backgroundBlob-3', cx: 800, cy: 1040, rx: 440, ry: 240, opacity: 0.4 },
+  { className: 'backgroundBlob-4', cx: 1180, cy: 1020, rx: 300, ry: 200, opacity: 0.35 },
+  { className: 'backgroundBlob-5', cx: 420, cy: 1020, rx: 300, ry: 200, opacity: 0.35 },
+] as const
+
+const PALETTE = ['#86efac', '#f9a8d4', '#c4b5fd', '#fed7aa', '#bfdbfe', '#fde68a'] as const
+
+type RandomFn = () => number
+type PageLoadBlob = (typeof BLOB_LAYOUTS)[number] & { color: string }
+
+export function createPageLoadBlobs(random: RandomFn = Math.random): PageLoadBlob[] {
+  const colors = [...PALETTE]
+
+  for (let index = colors.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.min(index, Math.floor(random() * (index + 1)))
+    const current = colors[index]
+    colors[index] = colors[swapIndex]
+    colors[swapIndex] = current
+  }
+
+  return BLOB_LAYOUTS.map((blob, index) => ({
+    ...blob,
+    color: colors[index],
+  }))
+}
+
+const PAGE_LOAD_BLOBS = createPageLoadBlobs()
+
+type BlobStyle = CSSProperties & {
+  '--blob-left': string
+  '--blob-top': string
+  '--blob-width': string
+  '--blob-height': string
+  '--blob-opacity': number
+  '--blob-color': string
+}
+
+function blobStyle(blob: PageLoadBlob): BlobStyle {
+  return {
+    '--blob-left': `${blob.cx - blob.rx}px`,
+    '--blob-top': `${blob.cy - blob.ry}px`,
+    '--blob-width': `${blob.rx * 2}px`,
+    '--blob-height': `${blob.ry * 2}px`,
+    '--blob-opacity': blob.opacity,
+    '--blob-color': blob.color,
+  }
+}
 
 export function BackgroundBlobs({ className }: { className?: string }) {
-  // Each blob starts at a random point in the colour cycle. The phases stay
-  // stable for the lifetime of the mount, so the cycle is smooth — only the
-  // initial arrangement is randomised.
-  const [colorOffsets] = useState<readonly number[]>(() =>
-    Array.from({ length: 5 }, () => -Math.floor(Math.random() * COLOR_CYCLE_S)),
-  )
-
   return (
     <div
       aria-hidden
@@ -28,71 +65,67 @@ export function BackgroundBlobs({ className }: { className?: string }) {
         className,
       )}
     >
-      <svg
-        viewBox="0 0 1600 1000"
-        preserveAspectRatio="xMidYMax slice"
-        className="absolute inset-0 h-full w-full"
-        style={{ filter: 'blur(180px)' }}
-      >
-        <ellipse cx="80"   cy="1000" rx="380" ry="260" opacity="0.55" className="blob blob-1" style={{ animationDelay: `0s, ${colorOffsets[0]}s` }} />
-        <ellipse cx="1520" cy="1000" rx="380" ry="260" opacity="0.55" className="blob blob-2" style={{ animationDelay: `0s, ${colorOffsets[1]}s` }} />
-        <ellipse cx="800"  cy="1040" rx="440" ry="240" opacity="0.40" className="blob blob-3" style={{ animationDelay: `0s, ${colorOffsets[2]}s` }} />
-        <ellipse cx="1180" cy="1020" rx="300" ry="200" opacity="0.35" className="blob blob-4" style={{ animationDelay: `0s, ${colorOffsets[3]}s` }} />
-        <ellipse cx="420"  cy="1020" rx="300" ry="200" opacity="0.35" className="blob blob-5" style={{ animationDelay: `0s, ${colorOffsets[4]}s` }} />
-      </svg>
+      <div className="backgroundBlobStage">
+        {PAGE_LOAD_BLOBS.map(blob => (
+          <div
+            key={blob.className}
+            className={cn('backgroundBlob', blob.className)}
+            style={blobStyle(blob)}
+          />
+        ))}
+      </div>
+      <div className="backgroundBlobWash" />
       <style>{`
-        @keyframes blobDrift1 {
-          0%   { transform: translate(0, 0)        scale(1)    rotate(0deg); }
-          25%  { transform: translate(180px, -60px) scale(1.15) rotate(14deg); }
-          50%  { transform: translate(80px,  40px)  scale(0.9)  rotate(-8deg); }
-          75%  { transform: translate(-120px, -30px) scale(1.05) rotate(20deg); }
-          100% { transform: translate(0, 0)        scale(1)    rotate(0deg); }
+        .backgroundBlobStage {
+          position: absolute;
+          left: 50%;
+          bottom: 0;
+          width: max(100%, 160dvh);
+          aspect-ratio: 16 / 10;
+          transform: translateX(-50%);
+          filter: blur(120px);
+          overflow: visible;
         }
-        @keyframes blobDrift2 {
-          0%   { transform: translate(0, 0)         scale(1)    rotate(0deg); }
-          25%  { transform: translate(-160px, -50px) scale(0.92) rotate(-12deg); }
-          50%  { transform: translate(-60px, 50px)   scale(1.18) rotate(6deg); }
-          75%  { transform: translate(140px, -20px)  scale(1.04) rotate(-18deg); }
-          100% { transform: translate(0, 0)         scale(1)    rotate(0deg); }
+        .backgroundBlobWash {
+          position: absolute;
+          inset: 0;
+          background:
+            linear-gradient(
+              to bottom,
+              oklch(1 0 0 / 0.68) 0%,
+              oklch(1 0 0 / 0.24) 48%,
+              oklch(1 0 0 / 0.04) 100%
+            ),
+            radial-gradient(
+              ellipse at 50% 100%,
+              oklch(0.98 0.03 120 / 0.16) 0%,
+              transparent 64%
+            );
         }
-        @keyframes blobDrift3 {
-          0%   { transform: translate(0, 0)         scale(1)    rotate(0deg); }
-          25%  { transform: translate(140px, -40px)  scale(1.1)  rotate(10deg); }
-          50%  { transform: translate(-100px, 30px)  scale(1.22) rotate(-12deg); }
-          75%  { transform: translate(60px, -50px)   scale(0.88) rotate(16deg); }
-          100% { transform: translate(0, 0)         scale(1)    rotate(0deg); }
+        .dark .backgroundBlobWash {
+          background:
+            linear-gradient(
+              to bottom,
+              oklch(0.14 0.006 286 / 0.56) 0%,
+              oklch(0.14 0.006 286 / 0.2) 48%,
+              oklch(0.14 0.006 286 / 0.04) 100%
+            ),
+            radial-gradient(
+              ellipse at 50% 100%,
+              oklch(0.38 0.055 165 / 0.18) 0%,
+              transparent 64%
+            );
         }
-        @keyframes blobDrift4 {
-          0%   { transform: translate(0, 0)         scale(1)    rotate(0deg); }
-          25%  { transform: translate(-120px, 30px)  scale(1.12) rotate(-14deg); }
-          50%  { transform: translate(80px, -50px)   scale(0.85) rotate(10deg); }
-          75%  { transform: translate(-50px, 40px)   scale(1.06) rotate(-20deg); }
-          100% { transform: translate(0, 0)         scale(1)    rotate(0deg); }
-        }
-        @keyframes blobDrift5 {
-          0%   { transform: translate(0, 0)         scale(1)    rotate(0deg); }
-          25%  { transform: translate(140px, 20px)   scale(0.9)  rotate(18deg); }
-          50%  { transform: translate(60px, -40px)   scale(1.15) rotate(-10deg); }
-          75%  { transform: translate(-80px, 30px)   scale(1.08) rotate(14deg); }
-          100% { transform: translate(0, 0)         scale(1)    rotate(0deg); }
-        }
-        @keyframes blobColor {
-          0%    { fill: #86efac; }
-          16.7% { fill: #f9a8d4; }
-          33.3% { fill: #c4b5fd; }
-          50%   { fill: #fed7aa; }
-          66.7% { fill: #bfdbfe; }
-          83.3% { fill: #fde68a; }
-          100%  { fill: #86efac; }
-        }
-        .blob { transform-origin: center; transform-box: fill-box; will-change: transform, fill; }
-        .blob-1 { animation: blobDrift1 56s ease-in-out infinite, blobColor 240s ease-in-out infinite; }
-        .blob-2 { animation: blobDrift2 72s ease-in-out infinite, blobColor 240s ease-in-out infinite; }
-        .blob-3 { animation: blobDrift3 64s ease-in-out infinite, blobColor 240s ease-in-out infinite; }
-        .blob-4 { animation: blobDrift4 88s ease-in-out infinite, blobColor 240s ease-in-out infinite; }
-        .blob-5 { animation: blobDrift5 80s ease-in-out infinite, blobColor 240s ease-in-out infinite; }
-        @media (prefers-reduced-motion: reduce) {
-          .blob { animation: none !important; }
+        .backgroundBlob {
+          position: absolute;
+          left: var(--blob-left);
+          top: var(--blob-top);
+          width: var(--blob-width);
+          height: var(--blob-height);
+          opacity: var(--blob-opacity);
+          border-radius: 50%;
+          background: var(--blob-color);
+          contain: layout paint style;
         }
       `}</style>
     </div>
