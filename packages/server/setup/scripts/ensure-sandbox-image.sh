@@ -28,6 +28,10 @@ if [ "${existing_label}" = "${FINGERPRINT}" ] && [ -n "${existing_label}" ]; the
 fi
 
 if ! command -v docker >/dev/null 2>&1; then
+  if [ "${ROOMY_SANDBOX_STRICT:-}" = "1" ]; then
+    echo "ERROR: sandbox image: docker not found; cannot build required image ${IMAGE}." >&2
+    exit 1
+  fi
   echo "==> sandbox image: docker not found; skipping rebuild (image=${IMAGE})." >&2
   exit 0
 fi

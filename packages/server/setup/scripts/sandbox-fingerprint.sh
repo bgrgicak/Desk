@@ -41,6 +41,14 @@ done < <(
     if [ -f "${REPO_ROOT}/packages/server/runtime/Dockerfile.sandbox" ]; then
       printf '%s\0' "${REPO_ROOT}/packages/server/runtime/Dockerfile.sandbox"
     fi
+    if [ -f "${REPO_ROOT}/packages/server/runtime/sandbox-entrypoint.sh" ]; then
+      printf '%s\0' "${REPO_ROOT}/packages/server/runtime/sandbox-entrypoint.sh"
+    fi
+    if [ -d "${REPO_ROOT}/packages/server/runtime/pi-extensions/roomy-mcp-bridge" ]; then
+      find "${REPO_ROOT}/packages/server/runtime/pi-extensions/roomy-mcp-bridge" \
+        -type d \( -name node_modules -o -name dist -o -name coverage \) -prune -o \
+        -type f -print0
+    fi
     if [ -d "${REPO_ROOT}/packages/ui" ]; then
       find "${REPO_ROOT}/packages/ui" \
         -type d \( -name node_modules -o -name dist -o -name coverage \) -prune -o \
