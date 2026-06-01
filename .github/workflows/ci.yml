@@ -197,6 +197,35 @@ jobs:
         # repo root.
         run: npx knip --no-progress --no-exit-code
 
+  source-update-smoke:
+    name: Source update smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "23"
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Run local source update
+        run: |
+          set -euo pipefail
+          export ROOMY_HOME="$RUNNER_TEMP/roomy-source-home"
+          node packages/cli/src/roomy.mjs update --source "$PWD" --skip-restart
+          test -L "$ROOMY_HOME/current"
+          test -f "$ROOMY_HOME/current/packages/server/api/dist/main.js"
+          test -f "$ROOMY_HOME/current/packages/app/dist/index.html"
+          test -f "$ROOMY_HOME/.source-release.json"
+          IMAGE="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.env.ROOMY_HOME+"/.source-release.json", "utf8")).sandboxImage)')"
+          test -n "$IMAGE"
+          docker image inspect "$IMAGE" > /dev/null
+
   vitest:
     name: Vitest (unit suite)
     runs-on: ubuntu-24.04
@@ -379,6 +408,7 @@ jobs:
       - prepare-server-dist
       - prepare-sandbox-image
       - typecheck
+      - source-update-smoke
       - vitest
       - vitest-integration
       - playwright
@@ -391,6 +421,7 @@ jobs:
           TYPECHECK_RESULT: ${{ needs.typecheck.result }}
           PREPARE_SERVER_DIST_RESULT: ${{ needs.prepare-server-dist.result }}
           PREPARE_SANDBOX_IMAGE_RESULT: ${{ needs.prepare-sandbox-image.result }}
+          SOURCE_UPDATE_SMOKE_RESULT: ${{ needs.source-update-smoke.result }}
           VITEST_RESULT: ${{ needs.vitest.result }}
           VITEST_INTEGRATION_RESULT: ${{ needs.vitest-integration.result }}
           PLAYWRIGHT_RESULT: ${{ needs.playwright.result }}
@@ -406,6 +437,10 @@ jobs:
           fi
           if [ "$TYPECHECK_RESULT" != "success" ]; then
             echo "Typecheck did not pass: $TYPECHECK_RESULT"
+            exit 1
+          fi
+          if [ "$SOURCE_UPDATE_SMOKE_RESULT" != "success" ]; then
+            echo "Source update smoke did not pass: $SOURCE_UPDATE_SMOKE_RESULT"
             exit 1
           fi
           if [ "$VITEST_RESULT" != "success" ]; then

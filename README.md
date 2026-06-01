@@ -69,6 +69,14 @@ roomy service stop           # stop without removing
 roomy service uninstall      # remove the service entry
 ```
 
+Update an installed service from npm, or build a local checkout into a staged
+`ROOMY_HOME/current` release before restarting:
+
+```sh
+roomy service update --tag=latest
+roomy service update --source /opt/roomy-dev
+```
+
 **Uninstall everything:**
 
 ```sh

@@ -36,6 +36,7 @@ const require = createRequire(import.meta.url);
 
 const PORT = parseInt(process.env.PORT ?? "35138", 10);
 const APP_PORT = parseInt(process.env.ROOMY_APP_PORT ?? "5173", 10);
+const SOURCE_RELEASE_CONFIG = ".source-release.json";
 
 function log(msg) {
   process.stdout.write(`==> ${msg}\n`);
@@ -110,6 +111,132 @@ export function defaultSandboxImage(pkgRoot = PKG_ROOT) {
   return `bgrgicak/roomy-ai:${packageVersion(pkgRoot)}`;
 }
 
+function sourceReleaseConfigPath(home) {
+  return path.join(home, SOURCE_RELEASE_CONFIG);
+}
+
+function currentLinkForHome(home) {
+  return process.env.ROOMY_CURRENT_LINK ?? path.join(home, "current");
+}
+
+function releasesDirForHome(home) {
+  return process.env.ROOMY_RELEASES_DIR ?? path.join(home, "releases");
+}
+
+function assertExists(file, label) {
+  if (!fs.existsSync(file)) {
+    throw new Error(`${label} is missing: ${file}`);
+  }
+}
+
+export function validateSourceRoot(source) {
+  const root = path.resolve(source);
+  const pkgPath = path.join(root, "package.json");
+  if (!fs.existsSync(pkgPath)) {
+    throw new Error(`${root} is not a Roomy workspace root: missing package.json`);
+  }
+  let pkg;
+  try {
+    pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+  } catch (err) {
+    throw new Error(`${root} is not a Roomy workspace root: invalid package.json (${err.message})`);
+  }
+  if (pkg.name !== "roomy" || !Array.isArray(pkg.workspaces)) {
+    throw new Error(`${root} is not a Roomy workspace root`);
+  }
+  assertExists(path.join(root, "package-lock.json"), "root package lockfile");
+  assertExists(path.join(root, "packages", "server", "api", "package.json"), "server package");
+  assertExists(path.join(root, "packages", "app", "package.json"), "app package");
+  assertExists(path.join(root, "packages", "server", "runtime", "Dockerfile.sandbox"), "sandbox Dockerfile");
+  return root;
+}
+
+export function resolveSourceReleaseConfig(home) {
+  const configPath = sourceReleaseConfigPath(home);
+  if (!fs.existsSync(configPath)) return null;
+
+  let config;
+  try {
+    config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+  } catch (err) {
+    throw new Error(`Invalid source release config at ${configPath}: ${err.message}`);
+  }
+
+  const currentLink = config.currentLink ?? currentLinkForHome(home);
+  if (!fs.existsSync(currentLink)) {
+    throw new Error(`Configured source release current link is missing: ${currentLink}`);
+  }
+  const releaseDir = fs.realpathSync(currentLink);
+  const apiEntry = path.join(releaseDir, "packages", "server", "api", "dist", "main.js");
+  const appDist = path.join(releaseDir, "packages", "app", "dist");
+  assertExists(apiEntry, "source release API entry");
+  assertExists(path.join(appDist, "index.html"), "source release app bundle");
+
+  return {
+    ...config,
+    currentLink,
+    releaseDir,
+    apiEntry,
+    appDist,
+  };
+}
+
+export function parseUpdateArgs(args) {
+  const opts = {
+    mode: "npm",
+    tag: "latest",
+    tagSpecified: false,
+    source: null,
+    skipDocker: false,
+    skipRestart: false,
+  };
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--skip-docker") {
+      opts.skipDocker = true;
+    } else if (arg === "--skip-restart") {
+      opts.skipRestart = true;
+    } else if (arg === "--source") {
+      const value = args[i + 1];
+      if (!value || value.startsWith("--")) throw new Error("--source requires a path");
+      opts.source = value;
+      opts.mode = "source";
+      i += 1;
+    } else if (arg.startsWith("--source=")) {
+      const value = arg.slice("--source=".length);
+      if (!value) throw new Error("--source requires a path");
+      opts.source = value;
+      opts.mode = "source";
+    } else if (arg.startsWith("--tag=")) {
+      opts.tag = arg.slice("--tag=".length) || "latest";
+      opts.tagSpecified = true;
+    } else {
+      throw new Error(`unknown update option: ${arg}`);
+    }
+  }
+
+  if (opts.source && opts.tagSpecified) {
+    throw new Error("--source and --tag are mutually exclusive");
+  }
+
+  if (opts.mode === "source") {
+    return {
+      mode: "source",
+      source: opts.source,
+      skipDocker: opts.skipDocker,
+      skipRestart: opts.skipRestart,
+    };
+  }
+
+  return {
+    mode: "npm",
+    tag: opts.tag,
+    skipDocker: opts.skipDocker,
+    skipRestart: opts.skipRestart,
+  };
+}
+
 /**
  * Resolves the Roomy data root and ensures it exists. Mirrors the storage
  * layer's `resolveRoomyHome`: an explicit `ROOMY_HOME` env var is treated as
@@ -178,11 +305,15 @@ async function cmdStart() {
   if (monorepoRoot) {
     return cmdStartDev({ monorepoRoot, home });
   }
+  const sourceRelease = resolveSourceReleaseConfig(home);
   // macOS has no container runtime by default — auto-install Colima with
   // containerd and create ~/Roomy/bin/nerdctl wrapper.
   // Linux uses Docker natively; engine.ts auto-detects Docker Desktop's socket.
   if (process.platform === "darwin") {
     await ensureColima(home);
+  }
+  if (sourceRelease) {
+    return cmdStartSourceRelease({ home, release: sourceRelease });
   }
   return cmdStartPublished({ home });
 }
@@ -243,6 +374,29 @@ async function cmdStartPublished({ home }) {
   // we were launched with (e.g. nvm-managed), and `spawn("node", ...)`
   // hits ENOENT.
   const server = spawnInherit(process.execPath, [apiEntry], { env, cwd: home });
+  attachStopHandlers(server);
+}
+
+async function cmdStartSourceRelease({ home, release }) {
+  const env = {
+    ROOMY_HOME: home,
+    PORT: String(PORT),
+    ROOMY_API_URL: `http://127.0.0.1:${PORT}`,
+    ROOMY_SERVE_APP: "1",
+    ROOMY_APP_DIST: release.appDist,
+    PATH: `${roomyBinDir(home)}:${augmentPath(process.env.PATH)}`,
+  };
+  const sandboxImage = process.env.ROOMY_SANDBOX_IMAGE ?? release.sandboxImage;
+  if (sandboxImage) env.ROOMY_SANDBOX_IMAGE = sandboxImage;
+
+  log(`roomy-server → http://127.0.0.1:${PORT}/  (source release ${release.releaseId ?? "local"})`);
+  log(`release     → ${release.releaseDir}`);
+  log(`app dist    → ${release.appDist}`);
+
+  const server = spawnInherit(process.execPath, [release.apiEntry], {
+    env,
+    cwd: release.releaseDir,
+  });
   attachStopHandlers(server);
 }
 
@@ -497,6 +651,159 @@ async function cmdUninstall(args) {
   log("  • If used via npx:        npx clear-npx-cache  (or just stop calling it)");
 }
 
+function sanitizeReleaseId(value) {
+  const cleaned = String(value).replace(/[^0-9A-Za-z_.-]+/g, "-").replace(/^-+|-+$/g, "");
+  return cleaned.slice(0, 96) || "source";
+}
+
+function defaultSourceReleaseId(sourceRoot, now = () => new Date().toISOString()) {
+  const stamp = now().replace(/[^0-9A-Za-z]+/g, "");
+  const result = spawnSync("git", ["-C", sourceRoot, "rev-parse", "--short=12", "HEAD"], {
+    encoding: "utf-8",
+  });
+  const sha = result.status === 0 ? result.stdout.trim() : "source";
+  return sanitizeReleaseId(`${stamp}-${process.pid}-${sha}`);
+}
+
+async function copySourceToStaging(sourceRoot, stagingDir) {
+  await fsp.rm(stagingDir, { recursive: true, force: true });
+  await fsp.mkdir(path.dirname(stagingDir), { recursive: true });
+  await fsp.cp(sourceRoot, stagingDir, {
+    recursive: true,
+    verbatimSymlinks: true,
+    filter(src) {
+      const rel = path.relative(sourceRoot, src);
+      if (!rel) return true;
+      const parts = rel.split(path.sep);
+      const name = parts[parts.length - 1];
+      if (parts.includes(".git") || parts.includes("node_modules") || parts.includes("dist")) return false;
+      if (name === ".env" || name === ".env.local") return false;
+      if (parts[0] === ".nx" || parts[0] === "coverage") return false;
+      return true;
+    },
+  });
+}
+
+function runChecked(runSync, command, args, options, label) {
+  const result = runSync(command, args, {
+    stdio: "inherit",
+    ...options,
+    env: { ...process.env, ...(options?.env ?? {}) },
+  });
+  if (result.status !== 0) {
+    throw new Error(`${label} failed (exit ${result.status ?? 1})`);
+  }
+}
+
+async function switchCurrentLink(currentLink, releaseDir) {
+  await fsp.mkdir(path.dirname(currentLink), { recursive: true });
+  const nextLink = `${currentLink}.next-${process.pid}`;
+  await fsp.rm(nextLink, { recursive: true, force: true });
+  await fsp.symlink(releaseDir, nextLink, "dir");
+  try {
+    await fsp.rename(nextLink, currentLink);
+  } catch (err) {
+    if (err?.code !== "EEXIST" && err?.code !== "ENOTEMPTY" && err?.code !== "EPERM") {
+      throw err;
+    }
+    await fsp.rm(currentLink, { recursive: true, force: true });
+    await fsp.rename(nextLink, currentLink);
+  }
+}
+
+async function writeSourceReleaseConfig(home, manifest) {
+  await fsp.writeFile(sourceReleaseConfigPath(home), `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+async function clearSourceReleaseConfig(home) {
+  await fsp.rm(sourceReleaseConfigPath(home), { force: true });
+}
+
+export async function updateFromSource(options) {
+  const sourceRoot = validateSourceRoot(options.source);
+  const home = options.home ?? (process.env.ROOMY_HOME ?? path.join(os.homedir(), "Roomy"));
+  const releaseId = sanitizeReleaseId(options.releaseId ?? defaultSourceReleaseId(sourceRoot, options.now));
+  const releasesDir = options.releasesDir ?? releasesDirForHome(home);
+  const currentLink = options.currentLink ?? currentLinkForHome(home);
+  const releaseDir = path.join(releasesDir, releaseId);
+  const stagingDir = path.join(releasesDir, `.staging-${releaseId}-${process.pid}`);
+  const sandboxImage = options.sandboxImage ?? `roomy/source:${releaseId}`;
+  const runSyncFn = options.runSync ?? spawnSync;
+  const restartService = options.restartService ?? (() => serviceControl("restart"));
+  const serviceInstalled = options.serviceInstalled ?? isServiceInstalled();
+  const now = options.now ?? (() => new Date().toISOString());
+
+  await fsp.mkdir(home, { recursive: true });
+  await fsp.mkdir(releasesDir, { recursive: true });
+
+  log(`Building source release from ${sourceRoot}…`);
+  log(`Staging release ${releaseId} under ${releasesDir}…`);
+  await copySourceToStaging(sourceRoot, stagingDir);
+  // The root prepare script installs a git hook. Releases do not need git
+  // history, but npm install still expects this hook directory to exist.
+  await fsp.mkdir(path.join(stagingDir, ".git", "hooks"), { recursive: true });
+
+  try {
+    runChecked(
+      runSyncFn,
+      "npm",
+      ["ci", "--include=optional", "--no-audit", "--no-fund"],
+      { cwd: stagingDir },
+      "npm ci",
+    );
+    runChecked(runSyncFn, "npm", ["run", "build"], { cwd: stagingDir }, "npm run build");
+
+    if (options.skipDocker) {
+      log("Skipping source sandbox image build (--skip-docker).");
+    } else {
+      runChecked(
+        runSyncFn,
+        "bash",
+        [path.join(stagingDir, "packages", "server", "setup", "scripts", "ensure-sandbox-image.sh")],
+        { cwd: stagingDir, env: { ROOMY_SANDBOX_IMAGE: sandboxImage, ROOMY_SANDBOX_STRICT: "1" } },
+        "sandbox image build",
+      );
+    }
+
+    const apiEntry = path.join(stagingDir, "packages", "server", "api", "dist", "main.js");
+    const appIndex = path.join(stagingDir, "packages", "app", "dist", "index.html");
+    assertExists(apiEntry, "built API entry");
+    assertExists(appIndex, "built app bundle");
+
+    await fsp.rm(releaseDir, { recursive: true, force: true });
+    await fsp.rename(stagingDir, releaseDir);
+    await switchCurrentLink(currentLink, releaseDir);
+    await writeSourceReleaseConfig(home, {
+      mode: "source",
+      sourceRoot,
+      releaseId,
+      releaseDir,
+      currentLink,
+      sandboxImage: options.skipDocker ? null : sandboxImage,
+      updatedAt: now(),
+    });
+
+    log(`Source release ready: ${releaseDir}`);
+    log(`Current release → ${releaseDir}`);
+  } catch (err) {
+    await fsp.rm(stagingDir, { recursive: true, force: true });
+    throw err;
+  }
+
+  if (options.skipRestart) {
+    log("Skipping service restart (--skip-restart).");
+    log("Restart whatever is running `roomy start` to pick up the source release.");
+    return;
+  }
+  if (!serviceInstalled) {
+    log("No `roomy service` installation found.");
+    log("Restart whatever is running `roomy start` to pick up the source release.");
+    return;
+  }
+  log("Restarting roomy service…");
+  restartService();
+}
+
 /**
  * Pull the latest published CLI + sandbox image and restart the service.
  *
@@ -517,6 +824,11 @@ async function cmdUninstall(args) {
  * `git pull && npm install` and the npm-global path doesn't apply.
  */
 async function cmdUpdate(args) {
+  const parsed = parseUpdateArgs(args);
+  if (parsed.mode === "source") {
+    return updateFromSource(parsed);
+  }
+
   if (detectMonorepo()) {
     process.stderr.write(
       "roomy update: this command updates a published install. " +
@@ -525,10 +837,8 @@ async function cmdUpdate(args) {
     process.exit(2);
   }
 
-  const skipDocker = args.includes("--skip-docker");
-  const skipRestart = args.includes("--skip-restart");
-  const tagArg = args.find((a) => a.startsWith("--tag="));
-  const tag = tagArg ? tagArg.slice("--tag=".length) : "latest";
+  const { skipDocker, skipRestart, tag } = parsed;
+  const home = process.env.ROOMY_HOME ?? path.join(os.homedir(), "Roomy");
 
   log(`Updating @roomy-ai/cli to ${tag}…`);
   const npmResult = spawnSync(
@@ -546,7 +856,6 @@ async function cmdUpdate(args) {
   if (skipDocker) {
     log("Skipping docker pull (--skip-docker).");
   } else {
-    const home = process.env.ROOMY_HOME ?? path.join(os.homedir(), "Roomy");
     const image = process.env.ROOMY_SANDBOX_IMAGE ?? defaultSandboxImage();
     // On macOS we use the nerdctl wrapper (Colima/containerd); fall back to
     // docker on Linux or if the wrapper isn't installed yet.
@@ -566,6 +875,8 @@ async function cmdUpdate(args) {
       );
     }
   }
+
+  await clearSourceReleaseConfig(home);
 
   if (skipRestart) {
     log("Skipping service restart (--skip-restart).");
@@ -631,9 +942,11 @@ async function main() {
         "  init                               create ~/Roomy without starting\n" +
         "  service install|uninstall          register/unregister Roomy as a system service\n" +
         "  service start|stop|restart|status  control the installed system service\n" +
-        "  service update [--tag=<tag>]        update to latest version and restart the service\n" +
-        "  update [--tag=<tag>]                pull the latest @roomy-ai/cli + sandbox image\n" +
-        "         [--skip-docker]              and restart the service.\n" +
+        "  service update [--tag=<tag>]        update from npm and restart the service\n" +
+        "  service update --source <repo>      build a local checkout into ROOMY_HOME/current\n" +
+        "  update [--tag=<tag>]                pull @roomy-ai/cli + sandbox image from npm\n" +
+        "  update --source <repo>              build a local checkout into ROOMY_HOME/current\n" +
+        "         [--skip-docker]              skip sandbox image pull/build.\n" +
         "         [--skip-restart]             --tag defaults to `latest`.\n" +
         "  uninstall [--remove-roomy-files]    remove the service + roomy/* docker images;\n" +
         "                                     pass --remove-roomy-files to also delete ~/Roomy\n" +

@@ -15,7 +15,9 @@ const FINGERPRINT_SCRIPT = resolve(
 function makeFixtureRepo(): string {
   const root = mkdtempSync(join(tmpdir(), "roomy-fp-"));
   mkdirSync(join(root, "packages/server/sandbox-cli/src"), { recursive: true });
-  mkdirSync(join(root, "packages/server/runtime"), { recursive: true });
+  mkdirSync(join(root, "packages/server/runtime/pi-extensions/roomy-mcp-bridge"), {
+    recursive: true,
+  });
   mkdirSync(join(root, "packages/ui/src"), { recursive: true });
   mkdirSync(join(root, "packages/app-scaffold/fragments/example"), {
     recursive: true,
@@ -36,6 +38,14 @@ function makeFixtureRepo(): string {
   writeFileSync(
     join(root, "packages/server/runtime/Dockerfile.sandbox"),
     "FROM node:23-slim\n",
+  );
+  writeFileSync(
+    join(root, "packages/server/runtime/sandbox-entrypoint.sh"),
+    "#!/usr/bin/env bash\nexec \"$@\"\n",
+  );
+  writeFileSync(
+    join(root, "packages/server/runtime/pi-extensions/roomy-mcp-bridge/index.ts"),
+    "export const bridge = true;\n",
   );
   writeFileSync(
     join(root, "packages/ui/package.json"),
@@ -100,6 +110,24 @@ describe("sandbox-fingerprint.sh", () => {
     writeFileSync(
       join(root, "packages/server/runtime/Dockerfile.sandbox"),
       "FROM node:23-slim\nRUN echo hi\n",
+    );
+    expect(fingerprint(root)).not.toBe(before);
+  });
+
+  it("changes when the sandbox entrypoint changes", () => {
+    const before = fingerprint(root);
+    writeFileSync(
+      join(root, "packages/server/runtime/sandbox-entrypoint.sh"),
+      "#!/usr/bin/env bash\necho boot\nexec \"$@\"\n",
+    );
+    expect(fingerprint(root)).not.toBe(before);
+  });
+
+  it("changes when the bundled MCP bridge changes", () => {
+    const before = fingerprint(root);
+    writeFileSync(
+      join(root, "packages/server/runtime/pi-extensions/roomy-mcp-bridge/index.ts"),
+      "export const bridge = false;\n",
     );
     expect(fingerprint(root)).not.toBe(before);
   });
