@@ -2,45 +2,45 @@
 
 An AI that knows you, stays with you, and is yours to make.
 
-Roomy is a personal AI platform for people who use AI every day to do real work — and who want their tools to fit them, not the other way around. It runs alongside you, gets better at helping you the longer you spend with it, and stays yours no matter what changes underneath.
+Roomy is not a productivity tool. It is a personal AI partner for people who want one place to chat, keep context, hand off background work, and build the small interfaces they wish existed. It runs with your data, grows around the way you work, and stays useful even as models, providers, machines, and projects change underneath.
 
 ![Roomy Ask AI answering across Launch Room and Product Research](docs/screenshots/ask-ai.png)
 
-## How it works
+## Meet Roomy
 
-**Your conversations, files, and context live with you.** Everything Roomy learns about your work — the projects you're running, the people you talk about, the way you write — is stored on your machine, in a place you can see and control. Back it up, move it to a new computer, take it with you to a different deployment. The relationship doesn't restart when the environment changes.
+Ask Roomy anything, like you would ask a capable coworker. The default **Ask AI** chat is a single, long-running thread that can see across your rooms, files, chats, tasks, and apps, so you can ask “what needs my attention?” without remembering where the work happened.
 
-**Roomy works across AI providers.** When one provider is down, slow, or no longer the best fit for what you're doing, your work continues. The same conversations, the same context, the same Roomy — just on a different model underneath. You bring the API keys; Roomy handles the routing.
+When a conversation gets too broad, fork a thread. Threads let you pull one question out of a busy chat, give it just the context it needs, and keep the main conversation readable.
 
-**The AI parts stay out of your way.** Context windows, model selection, agent orchestration, token budgets — these are implementation details. Roomy handles them. You focus on the work.
+![Roomy chat with a focused pricing-risk thread in the side panel](docs/screenshots/thread.png)
 
-## What you can do
+When plain chat is not the right shape, Roomy creates interfaces as you talk. It can ask short focused questions in forms, show cards or dashboards instead of walls of text, and open app fragments directly inside the chat so you can act without switching tools.
 
-- **Ask AI across everything.** Ask AI is one global thread that can reason across your rooms, files, chats, and tasks, so you can ask what needs attention without remembering where the work happened.
-- **Chat with an AI that knows your work.** The longer you spend with it, the more it picks up about your projects, the people in them, and the way you like things done. What you talked about months ago is still there, still searchable, still part of what shapes today's answer.
-- **Organize your life into workspaces.** Separate spaces for separate parts of life — client work, personal projects, research — each with its own context.
-- **Fork conversations into threads.** Spin a focused question out of a busy chat so the main conversation stays readable and the thread gets only the context it needs.
+![Roomy chat showing an actionable launch checklist fragment](docs/screenshots/app-fragment.png)
 
-  ![Roomy chat with a focused pricing-risk thread in the side panel](docs/screenshots/thread.png)
+## What Roomy helps with
 
-- **Keep your reference material in one place.** Upload files, save links, take notes. Roomy uses them as context for everything else.
-- **Stay on top of what's running.** A Today view collects everything waiting on you — agent questions, failed runs, and scheduled tasks — so you don't have to hunt through chats.
+- **Work across your whole life from one Ask AI thread.** Ask AI can connect information from different rooms and give you a single answer about what changed, what needs a decision, and what to do next.
+- **Separate work into rooms.** Create rooms for projects, clients, research, or parts of your life. Each room has its own chats, files, tasks, apps, and context.
+- **Keep your Library close.** Files, notes, links, generated artifacts, and app data live where Roomy can use them. You can work with Library items directly instead of treating them as passive uploads.
+- **Fork context with threads.** Turn a specific question into a focused thread so the parent chat stays clean and the thread can move independently.
+- **Hand work to agents.** Ask Roomy to turn something into a task, work on it in the background, or schedule recurring work while you sleep.
+- **Review your day in one place.** Roomy surfaces what needs your input, what is running, and what finished, so you do not have to hunt through chats.
 
-  ![Roomy Tasks screen showing launch work across open, scheduled, and done states](docs/screenshots/tasks.png)
+![Roomy Tasks screen showing launch work across open, scheduled, and done states](docs/screenshots/tasks.png)
 
-- **Pick up where you left off.** Documents, plans, and apps the AI produces stay attached to the conversation that made them — easy to return to, easy to keep building on.
-- **Build small apps inside Roomy.** Pin them to your workspace, hand them to the AI as tools, and shape the surface into something only you would have built. Apps are made from fragments, so agents can give you focused interfaces — and you can act from the chat instead of switching tools.
+- **Build apps that fit you.** Roomy apps are made from fragments: small focused surfaces that can be shown in chat, opened as full apps, used by agents, and backed by your Library. If the best next step is an app, Roomy can build it and then interact with the exact fragment you need.
+- **Run work in sandboxes.** Agents work in isolated environments, install missing tools, write scripts when needed, and focus on getting the work done without constantly asking for permissions.
+- **Remember and reflect.** When you ask Roomy to remember something, it keeps it available for future work. Roomy can also reflect on your day and adapt room-by-room over time.
+- **Connect the tools you already use.** As connectors grow, Roomy can read the context it needs and take trusted actions across the systems you already depend on.
 
-  ![Roomy chat showing an actionable launch checklist fragment](docs/screenshots/app-fragment.png)
-- **Connect the tools you already use.** GitHub, Notion, Slack, Linear, Figma — Roomy reads them for context and acts on them when you ask.
+## Where it runs
+
+Roomy is open source software you run yourself — on your laptop, desktop, or a server you control. Your conversations, Library, tasks, apps, and vault live with you, so you can back them up, move them, and keep using the same Roomy even when the environment changes.
 
 ## Screenshots
 
 The README screenshots live in [`docs/screenshots/`](docs/screenshots/). They are checked in PNGs used by this page; if the UI changes, refresh those files in place so the links above stay valid.
-
-## Where it runs
-
-Roomy is open source software you run yourself — on your own laptop, or on a server you control if you want it reachable from anywhere. No accounts to sign up for, no vendor in the middle. Where Roomy lives, your data lives.
 
 ## Install
 
@@ -115,8 +115,8 @@ Only needed if you want to contribute or hack on Roomy itself. End users should 
 ### Quick start
 
 ```bash
-git clone git@github.com:bgrgicak/Desk.git
-cd Desk
+git clone git@github.com:bgrgicak/Roomy.git
+cd Roomy
 npm install --include=optional
 npm run dev
 ```
