@@ -701,6 +701,30 @@ export const api = createApi({
         };
         const undos: Array<{ undo(): void }> = [];
         undos.push(dispatch(api.util.updateQueryData("getChats", undefined, patchFn)));
+        if (patch.unread === false) {
+          undos.push(dispatch(api.util.updateQueryData("getHomeDay", undefined, (draft) => {
+            let removedNeedsInput = 0;
+            draft.sections.needsInput = draft.sections.needsInput.flatMap((item) => {
+              if (item.kind !== "chat" || item.chat.id !== id) return [item];
+              const next = { ...item, chat: { ...item.chat, unread: false } };
+              if (!next.chat.failed && !next.chat.running) {
+                removedNeedsInput += 1;
+                return [];
+              }
+              return [next];
+            });
+            if (removedNeedsInput > 0) {
+              draft.counts.needsInput = Math.max(0, draft.counts.needsInput - removedNeedsInput);
+            }
+            for (const bucket of ["active", "done"] as const) {
+              draft.sections[bucket] = draft.sections[bucket].map((item) => (
+                item.kind === "chat" && item.chat.id === id
+                  ? { ...item, chat: { ...item.chat, unread: false } }
+                  : item
+              ));
+            }
+          })));
+        }
 
         const state = getState() as Record<string, unknown>;
         const apiState = state[api.reducerPath] as { queries?: Record<string, { data?: ServerChat[] }> } | undefined;
@@ -717,6 +741,7 @@ export const api = createApi({
         }
         try {
           await queryFulfilled;
+          if (patch.unread === false) dispatch(api.util.invalidateTags(["HomeDay"]));
         } catch {
           for (const u of undos) u.undo();
         }

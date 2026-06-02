@@ -377,6 +377,10 @@ async function cmdStartPublished({ home }) {
   attachStopHandlers(server);
 }
 
+export function resolveSourceReleaseSandboxImage(release, env = process.env) {
+  return release.sandboxImage ?? env.ROOMY_SANDBOX_IMAGE;
+}
+
 async function cmdStartSourceRelease({ home, release }) {
   const env = {
     ROOMY_HOME: home,
@@ -386,7 +390,7 @@ async function cmdStartSourceRelease({ home, release }) {
     ROOMY_APP_DIST: release.appDist,
     PATH: `${roomyBinDir(home)}:${augmentPath(process.env.PATH)}`,
   };
-  const sandboxImage = process.env.ROOMY_SANDBOX_IMAGE ?? release.sandboxImage;
+  const sandboxImage = resolveSourceReleaseSandboxImage(release);
   if (sandboxImage) env.ROOMY_SANDBOX_IMAGE = sandboxImage;
 
   log(`roomy-server → http://127.0.0.1:${PORT}/  (source release ${release.releaseId ?? "local"})`);

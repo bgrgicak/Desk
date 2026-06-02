@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest'
-import { previewBlobFor, previewKindFrom } from './preview-blob'
+import { describe, expect, it, vi } from 'vitest'
+import { isHeicPreview, previewBlobFor, previewKindFrom } from './preview-blob'
+
+vi.mock('heic2any', () => ({
+  default: vi.fn(async () => new Blob(['jpeg'], { type: 'image/jpeg' })),
+}))
 
 describe('previewKindFrom', () => {
   it('detects SVG images from the file path when the display name has no extension', () => {
@@ -20,6 +24,12 @@ describe('previewKindFrom', () => {
 
   it('classifies .app directory by path basename even without mime', () => {
     expect(previewKindFrom('My Todos App', '.chats/cht_abc/artifacts/my-todos.app', undefined)).toBe('app')
+  })
+
+  it('detects HEIC/HEIF images even when the browser reports an unhelpful mime', () => {
+    expect(previewKindFrom('IMG_9707.heic', '.chats/1/attachments/IMG_9707.heic', 'application/octet-stream')).toBe('image')
+    expect(isHeicPreview('IMG_9707.HEIC', '.chats/1/attachments/IMG_9707.HEIC', undefined)).toBe(true)
+    expect(isHeicPreview('IMG_9707', '.chats/1/attachments/IMG_9707', 'image/heif')).toBe(true)
   })
 
   it('detects pdf, docx, video, and audio previews', () => {
@@ -55,6 +65,15 @@ describe('previewBlobFor', () => {
 
     expect(previewBlob.type).toBe('image/svg+xml')
     expect(await previewBlob.text()).toBe(svg)
+  })
+
+  it('converts HEIC image previews to browser-renderable JPEG blobs', async () => {
+    const blob = new Blob(['heic'], { type: 'image/heic' })
+
+    const previewBlob = await previewBlobFor('image', blob, 'IMG_9707.heic', 'IMG_9707.heic', blob.type)
+
+    expect(previewBlob.type).toBe('image/jpeg')
+    expect(await previewBlob.text()).toBe('jpeg')
   })
 
   it('leaves non-SVG image blobs unchanged', async () => {

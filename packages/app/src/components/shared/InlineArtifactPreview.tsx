@@ -599,7 +599,7 @@ export function UnsupportedFileCard({
   // mode (it knows how to fetch images and create a blob URL); for
   // non-images we pass `undefined` workspaceId so the hook
   // short-circuits without fetching.
-  const isImage = (mime ?? '').toLowerCase().startsWith('image/')
+  const isImage = previewKindFrom(name, path, mime) === 'image'
   const thumbnailInput = useMemo(() => ({
     workspaceId: isImage ? workspaceId : undefined,
     path,

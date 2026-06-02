@@ -1,5 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { PassThrough } from "node:stream";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type {
   Engine,
   ExecHandle,
@@ -18,6 +21,14 @@ import type {
  * first just created and takes the reuse path; chat sends to *different*
  * workspaces remain independent.
  */
+
+const tempHomes: string[] = [];
+
+async function isolatedRoomyHome(): Promise<string> {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-runtime-mutex-"));
+  tempHomes.push(home);
+  return home;
+}
 
 const fakeEngineState = {
   inspectCount: 0,
@@ -143,6 +154,12 @@ beforeEach(async () => {
   _resetGrowthStateForTest();
 });
 
+afterEach(async () => {
+  await Promise.all(
+    tempHomes.splice(0).map((home) => fs.rm(home, { recursive: true, force: true })),
+  );
+});
+
 describe("createOrReuse mutex", () => {
   it("serializes concurrent calls for the same workspace", async () => {
     // Two rapid sends to the same workspace must not both run engine.create
@@ -151,10 +168,11 @@ describe("createOrReuse mutex", () => {
     // returned null in parallel and both raced to engine.create, with one
     // call's drift-recreate removing the other's mid-poll container.
     const { createOrReuse } = await import("../src/docker.js");
+    const home = await isolatedRoomyHome();
 
     const settled = await Promise.all([
-      createOrReuse("wks_race", "wks_race_slug"),
-      createOrReuse("wks_race", "wks_race_slug"),
+      createOrReuse("wks_race", "wks_race_slug", home),
+      createOrReuse("wks_race", "wks_race_slug", home),
     ]);
 
     expect(settled).toHaveLength(2);
@@ -183,11 +201,12 @@ describe("createOrReuse mutex", () => {
     // still run in parallel. If they didn't, a busy workspace would
     // stall a quiet one's first send.
     const { createOrReuse } = await import("../src/docker.js");
+    const home = await isolatedRoomyHome();
 
     const start = Date.now();
     await Promise.all([
-      createOrReuse("wks_a", "wks_a_slug"),
-      createOrReuse("wks_b", "wks_b_slug"),
+      createOrReuse("wks_a", "wks_a_slug", home),
+      createOrReuse("wks_b", "wks_b_slug", home),
     ]);
     const elapsed = Date.now() - start;
 
@@ -223,13 +242,15 @@ describe("createOrReuse mutex", () => {
       return wrapped;
     });
 
-    await expect(createOrReuse("wks_recover", "wks_recover_slug")).rejects.toThrow(
+    const home = await isolatedRoomyHome();
+
+    await expect(createOrReuse("wks_recover", "wks_recover_slug", home)).rejects.toThrow(
       /engine\.inspect blew up/,
     );
 
     // Second call must complete on the same workspace without being
     // wedged behind the dead lock entry.
-    const handle = await createOrReuse("wks_recover", "wks_recover_slug");
+    const handle = await createOrReuse("wks_recover", "wks_recover_slug", home);
     expect(handle.workspaceId).toBe("wks_recover");
   });
 });

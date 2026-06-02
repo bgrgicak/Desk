@@ -28,6 +28,43 @@ function resolveIconPath(name: string): string {
   return path.join(base, name);
 }
 
+function shouldOpenInExternalBrowser(url: string, appUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    return ["mailto:", "tel:"].includes(parsed.protocol);
+  }
+
+  try {
+    return parsed.origin !== new URL(appUrl).origin;
+  } catch {
+    return true;
+  }
+}
+
+function wireExternalLinkHandling(window: BrowserWindow, appUrl: string): void {
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (shouldOpenInExternalBrowser(url, appUrl)) {
+      void shell.openExternal(url);
+      return { action: "deny" };
+    }
+
+    return { action: "allow" };
+  });
+
+  window.webContents.on("will-navigate", (event, url) => {
+    if (!shouldOpenInExternalBrowser(url, appUrl)) return;
+
+    event.preventDefault();
+    void shell.openExternal(url);
+  });
+}
+
 function createAppMenu(serverUrl: string): void {
   const template = [
     ...(process.platform === "darwin" ? [{
@@ -121,6 +158,7 @@ function createMainWindow(serverUrl: string): void {
     },
   });
 
+  wireExternalLinkHandling(mainWindow, serverUrl);
   mainWindow.loadURL(serverUrl);
 
   const saveBounds = () => {

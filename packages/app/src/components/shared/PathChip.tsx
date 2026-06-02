@@ -43,6 +43,18 @@ export function pathChipHref(workspaceId: string | undefined, sandboxPath: strin
     : buildPath(workspaceId, 'context', { item: isAppDir ? normalizedRel : rel })
 }
 
+export function looksLikeDirectoryPath(path: string): boolean {
+  const name = displayBasename(path)
+  if (!name || name === '/') return false
+  if (name.endsWith('.app')) return true
+  // Agent messages often mention directories without a trailing slash
+  // (`/home/agent/roomy`). Until `/library/meta` returns, treat a basename
+  // without an extension as a directory so plain clicks do not open the right
+  // preview panel with an unpreviewable folder. Once metadata is available it
+  // wins, so extensionless files like LICENSE still open in the sidebar.
+  return !name.includes('.')
+}
+
 export function PathChip({ sandboxPath, displayPath, workspaceId }: PathChipProps) {
   const dispatch = useAppDispatch()
   // Per-path metadata lookup. Replaced the previous workspace-wide
@@ -55,16 +67,17 @@ export function PathChip({ sandboxPath, displayPath, workspaceId }: PathChipProp
     { workspaceId: workspaceId ?? '', path: rel },
     { skip: skipMeta },
   )
-  const isDir = sandboxPath.endsWith('/') || !rel || !!meta?.isDir
+  const isKnownDir = sandboxPath.endsWith('/') || !rel || !!meta?.isDir
+  const isDir = isKnownDir || (!meta && looksLikeDirectoryPath(rel))
   const isAppDir = isAppDirectory(displayBasename(rel))
   const Icon = isAppDir ? Zap : isDir ? Folder : File
   const href = pathChipHref(workspaceId, sandboxPath, isDir)
   // A file chip opens the in-chat preview panel on plain click rather
-  // than navigating to the Library detail page. Directories keep the
-  // folder-browser navigation; modifier clicks fall through to the
-  // <Link> so the detail page can still open in a new tab.
+  // than navigating to the Library detail page. Directories keep Library
+  // navigation; modifier clicks fall through to the <Link> so the detail
+  // page can still open in a new tab.
   const handleClick = (e: MouseEvent<HTMLAnchorElement>) => {
-    if ((isDir && !isAppDir) || !workspaceId) return
+    if (isDir || !workspaceId) return
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
     e.preventDefault()
     dispatch(openArtifact({ workspaceId, path: rel, name: displayBasename(displayPath), mime: meta?.mime }))

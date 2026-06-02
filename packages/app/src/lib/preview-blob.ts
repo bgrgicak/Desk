@@ -1,12 +1,31 @@
 import { fileKindFrom, isAppDirectory, type FileKind } from '@/data/file-kind'
 
+function normalizedPathish(value: string): string {
+  return value.toLowerCase().split(/[?#]/, 1)[0]
+}
+
 function hasSvgExtension(value: string): boolean {
-  return value.toLowerCase().split(/[?#]/, 1)[0].endsWith('.svg')
+  return normalizedPathish(value).endsWith('.svg')
+}
+
+function hasHeicExtension(value: string): boolean {
+  const normalized = normalizedPathish(value)
+  return normalized.endsWith('.heic') || normalized.endsWith('.heif')
 }
 
 export function isSvgPreview(name: string, path: string, mime?: string | null): boolean {
   const normalizedMime = (mime ?? '').toLowerCase()
   return normalizedMime === 'image/svg+xml' || hasSvgExtension(name) || hasSvgExtension(path)
+}
+
+export function isHeicPreview(name: string, path: string, mime?: string | null): boolean {
+  const normalizedMime = (mime ?? '').toLowerCase()
+  return normalizedMime === 'image/heic'
+    || normalizedMime === 'image/heif'
+    || normalizedMime === 'image/heic-sequence'
+    || normalizedMime === 'image/heif-sequence'
+    || hasHeicExtension(name)
+    || hasHeicExtension(path)
 }
 
 export async function previewBlobFor(kind: FileKind, blob: Blob, name: string, path: string, mime?: string | null): Promise<Blob> {
@@ -17,7 +36,15 @@ export async function previewBlobFor(kind: FileKind, blob: Blob, name: string, p
     return new Blob([resizeScript + html], { type: 'text/html' })
   }
 
-  if (kind !== 'image' || !isSvgPreview(name, path, mime)) return blob
+  if (kind !== 'image') return blob
+
+  if (isHeicPreview(name, path, mime)) {
+    const { default: heic2any } = await import('heic2any')
+    const converted = await heic2any({ blob, toType: 'image/jpeg', quality: 0.92 })
+    return Array.isArray(converted) ? converted[0] : converted
+  }
+
+  if (!isSvgPreview(name, path, mime)) return blob
   if (blob.type.toLowerCase() === 'image/svg+xml') return blob
   return new Blob([await blob.text()], { type: 'image/svg+xml' })
 }

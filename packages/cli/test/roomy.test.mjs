@@ -15,6 +15,7 @@ import {
   resolveAppDist,
   resolvePublishedApiEntry,
   resolveSourceReleaseConfig,
+  resolveSourceReleaseSandboxImage,
   updateFromSource,
   validateSourceRoot,
 } from "../src/roomy.mjs";
@@ -171,6 +172,22 @@ describe("augmentPath", () => {
     const parts = result.split(":");
     expect(parts.filter((p) => p === "/opt/homebrew/bin").length).toBe(1);
     expect(parts).toContain("/usr/local/bin");
+  });
+});
+
+describe("resolveSourceReleaseSandboxImage", () => {
+  it("prefers the recorded source-release sandbox image over environment overrides", () => {
+    expect(resolveSourceReleaseSandboxImage(
+      { sandboxImage: "roomy/source:release-123" },
+      { ROOMY_SANDBOX_IMAGE: "roomy/sandbox:v1" },
+    )).toBe("roomy/source:release-123");
+  });
+
+  it("falls back to the environment override when source release has no sandbox image", () => {
+    expect(resolveSourceReleaseSandboxImage(
+      {},
+      { ROOMY_SANDBOX_IMAGE: "custom/sandbox:test" },
+    )).toBe("custom/sandbox:test");
   });
 });
 

@@ -2,40 +2,45 @@
 
 An AI that knows you, stays with you, and is yours to make.
 
-Roomy is a personal AI platform for people who use AI every day to do real work — and who want their tools to fit them, not the other way around. It runs alongside you, gets better at helping you the longer you spend with it, and stays yours no matter what changes underneath.
+Roomy is not a productivity tool. It is a personal AI partner for people who want one place to chat, keep context, hand off background work, and build the small interfaces they wish existed. It runs with your data, grows around the way you work, and stays useful even as models, providers, machines, and projects change underneath.
 
-![Roomy workspace](docs/screenshots/workspace.png)
+![Roomy Ask AI answering across Launch Room and Product Research](docs/screenshots/ask-ai.png)
 
-## How it works
+## Meet Roomy
 
-**Your conversations, files, and context live with you.** Everything Roomy learns about your work — the projects you're running, the people you talk about, the way you write — is stored on your machine, in a place you can see and control. Back it up, move it to a new computer, take it with you to a different deployment. The relationship doesn't restart when the environment changes.
+Ask Roomy anything, like you would ask a capable coworker. The default **Ask AI** chat is a single, long-running thread that can see across your rooms, files, chats, tasks, and apps, so you can ask “what needs my attention?” without remembering where the work happened.
 
-**Roomy works across AI providers.** When one provider is down, slow, or no longer the best fit for what you're doing, your work continues. The same conversations, the same context, the same Roomy — just on a different model underneath. You bring the API keys; Roomy handles the routing.
+When a conversation gets too broad, fork a thread. Threads let you pull one question out of a busy chat, give it just the context it needs, and keep the main conversation readable.
 
-**The AI parts stay out of your way.** Context windows, model selection, agent orchestration, token budgets — these are implementation details. Roomy handles them. You focus on the work.
+![Roomy chat with a focused pricing-risk thread in the side panel](docs/screenshots/thread.png)
 
-## What you can do
+When plain chat is not the right shape, Roomy creates interfaces as you talk. It can ask short focused questions in forms, show cards or dashboards instead of walls of text, and open app fragments directly inside the chat so you can act without switching tools.
 
-- **Chat with an AI that knows your work.** The longer you spend with it, the more it picks up about your projects, the people in them, and the way you like things done. What you talked about months ago is still there, still searchable, still part of what shapes today's answer.
+![Roomy chat showing an actionable launch checklist fragment](docs/screenshots/app-fragment.png)
 
-  ![Active chat with thread](docs/screenshots/chat-active.png)
+## What Roomy helps with
 
-- **Organize your life into workspaces.** Separate spaces for separate parts of life — client work, personal projects, research — each with its own context.
-- **Keep your reference material in one place.** Upload files, save links, take notes. Roomy uses them as context for everything else.
+- **Work across your whole life from one Ask AI thread.** Ask AI can connect information from different rooms and give you a single answer about what changed, what needs a decision, and what to do next.
+- **Separate work into rooms.** Create rooms for projects, clients, research, or parts of your life. Each room has its own chats, files, tasks, apps, and context.
+- **Keep your Library close.** Files, notes, links, generated artifacts, and app data live where Roomy can use them. You can work with Library items directly instead of treating them as passive uploads.
+- **Fork context with threads.** Turn a specific question into a focused thread so the parent chat stays clean and the thread can move independently.
+- **Hand work to agents.** Ask Roomy to turn something into a task, work on it in the background, or schedule recurring work while you sleep.
+- **Review your day in one place.** Roomy surfaces what needs your input, what is running, and what finished, so you do not have to hunt through chats.
 
-  ![Library](docs/screenshots/library.png)
+![Roomy Tasks screen showing launch work across open, scheduled, and done states](docs/screenshots/tasks.png)
 
-- **Stay on top of what's running.** A Today view collects everything waiting on you — agent questions, failed runs, and scheduled tasks — so you don't have to hunt through chats.
-
-  ![Tasks board](docs/screenshots/tasks.png)
-
-- **Pick up where you left off.** Documents, plans, and apps the AI produces stay attached to the conversation that made them — easy to return to, easy to keep building on.
-- **Build small apps inside Roomy.** Pin them to your workspace, hand them to the AI as tools, and shape the surface into something only you would have built.
-- **Connect the tools you already use.** GitHub, Notion, Slack, Linear, Figma — Roomy reads them for context and acts on them when you ask.
+- **Build apps that fit you.** Roomy apps are made from fragments: small focused surfaces that can be shown in chat, opened as full apps, used by agents, and backed by your Library. If the best next step is an app, Roomy can build it and then interact with the exact fragment you need.
+- **Run work in sandboxes.** Agents work in isolated environments, install missing tools, write scripts when needed, and focus on getting the work done without constantly asking for permissions.
+- **Remember and reflect.** When you ask Roomy to remember something, it keeps it available for future work. Roomy can also reflect on your day and adapt room-by-room over time.
+- **Connect the tools you already use.** As connectors grow, Roomy can read the context it needs and take trusted actions across the systems you already depend on.
 
 ## Where it runs
 
-Roomy is open source software you run yourself — on your own laptop, or on a server you control if you want it reachable from anywhere. No accounts to sign up for, no vendor in the middle. Where Roomy lives, your data lives.
+Roomy is open source software you run yourself — on your laptop, desktop, or a server you control. Your conversations, Library, tasks, apps, and vault live with you, so you can back them up, move them, and keep using the same Roomy even when the environment changes.
+
+## Screenshots
+
+The README screenshots live in [`docs/screenshots/`](docs/screenshots/). They are checked in PNGs used by this page; if the UI changes, refresh those files in place so the links above stay valid.
 
 ## Install
 
@@ -46,7 +51,7 @@ Two ways to run Roomy. Pick one — you don't need both.
 One command, no clone:
 
 ```sh
-npx @roomy-ai/cli@alpha
+npx @roomy-ai/cli
 ```
 
 This downloads the [`@roomy-ai/cli`](https://www.npmjs.com/package/@roomy-ai/cli) package, boots `roomy-server` in the foreground, and opens the UI at <http://127.0.0.1:35138/>. Stop it with `Ctrl+C`.
@@ -54,11 +59,11 @@ This downloads the [`@roomy-ai/cli`](https://www.npmjs.com/package/@roomy-ai/cli
 Prefer a persistent install:
 
 ```sh
-npm install -g @roomy-ai/cli@alpha
+npm install -g @roomy-ai/cli
 roomy            # same as `roomy start`
 ```
 
-**Requirements:** Node.js ≥ 22 and Docker (or nerdctl) running locally — Roomy uses a sandboxed container to run AI agents.
+**Requirements:** Node.js ≥ 22. On Linux, have Docker or nerdctl running locally. On macOS, the CLI can bootstrap Colima/nerdctl on first start if Docker Desktop is not available. Roomy uses a sandboxed container to run AI agents.
 
 **Run in the background** as a system service (launchd on macOS, systemd-user on Linux, Task Scheduler on Windows):
 
@@ -89,7 +94,7 @@ Your conversations, files, and vault live in `~/Roomy/` — back that up to move
 
 ### Option 2 — macOS desktop app
 
-Pre-built DMG releases (Apple Silicon · arm64) are on the [releases page](https://github.com/bgrgicak/Desk/releases/tag/desktop-latest). New builds are published weekly. Same data directory (`~/Roomy/`), same server underneath — just wrapped in an Electron shell.
+Pre-built DMG releases are published from GitHub Releases when release tags are cut. The desktop app uses the same data directory (`~/Roomy/`) and the same server underneath — just wrapped in an Electron shell.
 
 ### First-run setup
 
@@ -110,20 +115,20 @@ Only needed if you want to contribute or hack on Roomy itself. End users should 
 ### Quick start
 
 ```bash
-git clone git@github.com:bgrgicak/Desk.git
+git clone git@github.com:bgrgicak/Roomy.git
 cd Roomy
-npm install
+npm install --include=optional
 npm run dev
 ```
 
-`npm run dev` boots `roomy-server` (tsx watch) and Vite together, and rebuilds the `roomy/sandbox:v1` Docker image when its inputs change; one `Ctrl+C` stops both. Open <http://localhost:5173/>.
+`npm run dev` boots `roomy-server` (tsx watch) and Vite together, builds any missing built-in app bundles, and rebuilds the `roomy/sandbox:v1` Docker image when its inputs change; one `Ctrl+C` stops both. Dev defaults to API <http://127.0.0.1:35139/> and app <http://127.0.0.1:5174/> so it can run beside a published install on port 35138.
 
 ### Prerequisites
 
 | Tool | macOS | Linux |
 | --- | --- | --- |
-| Node.js 23 + npm (pinned by `.nvmrc` + `engines`) | use [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf | use [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf |
-| Docker | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | rootful or rootless — both auto-detected |
+| Node.js 23.x + npm (pinned by `.nvmrc` + `engines`) | use [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf | use [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf |
+| Container runtime | Docker Desktop or Colima/nerdctl | Docker rootful/rootless or nerdctl/containerd — auto-detected |
 
 API keys are configured per-user via Settings after the first sign-in. The per-user secrets vault is created and unlocked through the signup wizard (first run) and the in-app VaultDialog (returning users); on every server restart, the vault locks and the user re-enters their vault password through the dialog.
 
@@ -133,10 +138,10 @@ Run from the repo root.
 
 | Command | What it does |
 | --- | --- |
-| `npm run dev` | Boot `roomy-server` + Vite. |
+| `npm run dev` | Boot `roomy-server` on `:35139` + Vite on `:5174`; also prepares missing built-in app bundles and the sandbox image. |
 | `npm run dev:app` | Vite only — useful when `roomy-server` runs elsewhere. |
-| `npm run dev:desktop` | Build server + app, then launch the Electron desktop app (`cd packages/desktop && npm run dev`). Requires the server packages to be built first (`npm run build:server`). |
-| `npm run build` | Build all workspace packages (Nx). |
+| `npm run dev:desktop` | Launch the Electron desktop app from `packages/desktop`. First run: `cd packages/desktop && npm install`, and build server packages first with `npm run build:server`. |
+| `npm run build` | Build server packages, the app scaffold package, and the web app. |
 | `npm run typecheck` | Run tsc on all workspaces. |
 | `npm run test:host` | Vitest unit + integration tests. |
 | `npm run test:e2e` | Playwright against a spawned `roomy-server` + Vite preview. |
@@ -172,13 +177,13 @@ npm run release
 The script walks you through it interactively:
 
 1. Pre-flight checks (clean tree, on `trunk`, all four logins above present).
-2. Pick a version — next alpha bump, next minor + `alpha.0`, or a custom string. Default tag is `alpha`.
+2. Pick a version — next patch, next minor, next major, or a custom string. Packages publish under the `latest` dist-tag.
 3. Bumps every public workspace (`packages/app`, `packages/cli`, `packages/ui`, `packages/server/*`) plus `packages/desktop` to the new version.
 4. Runs `npm install`, `npm run build`, and a `npm pack` smoke test.
 5. **Final confirm** — last chance to bail before anything is published.
 6. Commits `chore(release): vX.Y.Z`.
-7. `npm publish --workspaces --access public` (publishes under the `alpha` dist-tag).
-8. Builds and pushes the `roomy/sandbox` Docker image to Docker Hub as `:vX.Y.Z` and `:alpha`.
+7. `npm publish --workspaces --access public` (publishes under the `latest` dist-tag).
+8. Builds and pushes the sandbox Docker image to Docker Hub as `bgrgicak/roomy-ai:vX.Y.Z` and `bgrgicak/roomy-ai:latest` by default (override with `ROOMY_DOCKER_REPO`).
 9. Creates the `vX.Y.Z` git tag and pushes `trunk` + tag to `origin`. The tag push triggers [`.github/workflows/desktop-release.yml`](.github/workflows/desktop-release.yml), which builds the macOS DMG on a `macos-latest` runner and uploads it to the GitHub Release.
 10. Optionally `gh run watch`es the desktop workflow.
 

@@ -501,6 +501,7 @@ export function ChatView({
           agentName={agentName}
           developerMode={developerMode}
           isSending={postMessageState.isLoading}
+          isRunning={chat.running === true}
           highlightMessageId={highlightMessageId}
           headerSlot={
             !isNewChat ? <ThreadParentChip chatId={chat.id} /> : null
