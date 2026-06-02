@@ -147,6 +147,35 @@ describe("chats queries", () => {
     expect(entry?.lastMessage).toBe("");
   });
 
+  it("marks a chat running while its latest task_run is running", async () => {
+    const chatId = generateId("chat");
+    await chats.insert(pool, { id: chatId, workspaceId: wsId, agentId, title: "Task run loader" });
+    const taskId = generateId("message");
+    await messages.insert(pool, {
+      id: taskId,
+      chatId,
+      role: "user",
+      content: { type: "text", text: "do the thing" },
+      kind: "task",
+    });
+    const run = await messages.startTaskRun(pool, {
+      runId: generateId("message"),
+      taskId,
+      chatId,
+      role: "user",
+      content: { type: "text", text: "do the thing" },
+      agentId,
+    });
+    expect(run).not.toBeNull();
+
+    const found = await chats.findById(pool, chatId);
+    expect(found?.running).toBe(true);
+
+    const list = await chats.listWithLatestMessage(pool, wsId);
+    const entry = list.find((c) => c.id === chatId);
+    expect(entry?.running).toBe(true);
+  });
+
   it("lastMessage truncates at 200 chars with an ellipsis", async () => {
     const chatId = generateId("chat");
     await chats.insert(pool, { id: chatId, workspaceId: wsId, agentId, title: "Long preview" });

@@ -1,7 +1,7 @@
 import { configureStore } from '@reduxjs/toolkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, buildChatMessagesQuery, buildMessagesQuery, shouldForceRefetchChatMessages } from './api'
-import type { ServerFile } from './types'
+import type { HomeDayResponse, ServerFile } from './types'
 
 describe('message query builders', () => {
   it('requests full chat payloads when developer mode is enabled', () => {
@@ -81,6 +81,82 @@ describe('postChatMessage cache activity', () => {
     const entry = api.endpoints.getChats.select({ workspaceId: 'wks_1' })(store.getState())
     expect(entry.data?.map((chat) => chat.id)).toEqual(['cht_buried', 'cht_top'])
     expect(Date.parse(entry.data?.[0]?.updatedAt ?? '')).toBeGreaterThan(Date.parse('2099-01-01T00:00:00.000Z'))
+  })
+})
+
+describe('patchChat HomeDay cache', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  function makeStore() {
+    return configureStore({
+      reducer: { [api.reducerPath]: api.reducer },
+      middleware: (getDefault) => getDefault().concat(api.middleware),
+    })
+  }
+
+  function stubAbsoluteRequest() {
+    const NativeRequest = globalThis.Request
+    class AbsoluteRequest extends NativeRequest {
+      constructor(input: RequestInfo | URL, init?: RequestInit) {
+        super(typeof input === 'string' && input.startsWith('/') ? `http://localhost${input}` : input, init)
+      }
+    }
+    vi.stubGlobal('Request', AbsoluteRequest)
+  }
+
+  const homeDayWithUnreadChat = (): HomeDayResponse => ({
+    refreshedAt: '2026-06-02T08:00:00.000Z',
+    counts: { needsInput: 1, active: 0, done: 0 },
+    sections: {
+      needsInput: [{
+        kind: 'chat',
+        id: 'cht_1',
+        title: 'Read me',
+        preview: 'Unread preview',
+        status: 'needs_input',
+        statusLabel: 'Needs input',
+        updatedAt: '2026-06-02T08:00:00.000Z',
+        href: '/w/wks_1/pinned?chat=cht_1',
+        room: { id: 'wks_1', name: 'Room', color: 'blue', icon: '' },
+        chat: { id: 'cht_1', unread: true, running: false, failed: false, latestFailedMessageId: null },
+      }],
+      active: [],
+      done: [],
+    },
+  })
+
+  it('removes a read non-failed chat from Needs input immediately', async () => {
+    const store = makeStore()
+    await store.dispatch(api.util.upsertQueryData('getHomeDay', undefined, homeDayWithUnreadChat()))
+    stubAbsoluteRequest()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      id: 'cht_1', workspaceId: 'wks_1', agentId: 'agt_1', title: 'Read me',
+      createdAt: '2026-06-02T07:00:00.000Z', updatedAt: '2026-06-02T08:00:00.000Z',
+      unread: false, kind: 'chat', running: false, failed: false,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    const promise = store.dispatch(api.endpoints.patchChat.initiate({ id: 'cht_1', patch: { unread: false } }))
+    const entry = api.endpoints.getHomeDay.select()(store.getState())
+    expect(entry.data?.sections.needsInput).toEqual([])
+    expect(entry.data?.counts.needsInput).toBe(0)
+    await promise
+  })
+
+  it('restores the HomeDay card when mark-read fails', async () => {
+    const store = makeStore()
+    await store.dispatch(api.util.upsertQueryData('getHomeDay', undefined, homeDayWithUnreadChat()))
+    stubAbsoluteRequest()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('nope', { status: 500 }))
+
+    const promise = store.dispatch(api.endpoints.patchChat.initiate({ id: 'cht_1', patch: { unread: false } }))
+    expect(api.endpoints.getHomeDay.select()(store.getState()).data?.sections.needsInput).toEqual([])
+    await promise
+    await new Promise((r) => setTimeout(r, 0))
+    expect(api.endpoints.getHomeDay.select()(store.getState()).data?.sections.needsInput).toHaveLength(1)
+    expect(api.endpoints.getHomeDay.select()(store.getState()).data?.counts.needsInput).toBe(1)
   })
 })
 

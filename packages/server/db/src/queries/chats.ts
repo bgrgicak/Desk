@@ -43,23 +43,25 @@ function rowToChat(row: Record<string, unknown>): Chat {
 }
 
 /**
- * SQL fragment that yields 1 when the chat's most recent agent_turn
- * is `pending` or `running`, 0 otherwise. Inlined so callers can pick
- * up the live signal without depending on a denormalized column —
- * dropping the trigger removed the only place that maintained it.
+ * SQL fragment that yields 1 when the chat's most recent execution row
+ * (`agent_turn` for normal chat replies, `task_run` for task threads) is
+ * in one of the supplied states, 0 otherwise. Inlined so callers can pick
+ * up the live signal without depending on a denormalized column.
  *
  * Tie-break order matches the obsolete trigger (created_at DESC,
- * rowid DESC) so a same-millisecond agent_turn retry is read as
- * newer than the failed turn it replaced.
+ * rowid DESC) so a same-millisecond retry is read as newer than the
+ * failed turn it replaced.
  */
-function latestAgentTurnStateMatchesSql(states: readonly string[]): string {
+function latestExecutionStateMatchesSql(states: readonly string[]): string {
   const list = states.map((s) => `'${s}'`).join(", ");
   return `COALESCE((
     SELECT m.state IN (${list})
     FROM messages m
     WHERE m.chat_id = c.id
-      AND json_valid(m.content)
-      AND json_extract(m.content, '$.type') = 'agent_turn'
+      AND (
+        (json_valid(m.content) AND json_extract(m.content, '$.type') = 'agent_turn')
+        OR m.kind = 'task_run'
+      )
     ORDER BY m.created_at DESC, m.rowid DESC
     LIMIT 1
   ), 0)`;
@@ -174,8 +176,8 @@ export async function listWithLatestMessage(
   const { rows } = await db.query(
     `SELECT c.*,
             c.list_kind AS kind,
-            ${latestAgentTurnStateMatchesSql(["pending", "running"])} AS is_running,
-            ${latestAgentTurnStateMatchesSql(["failed"])} AS is_failed,
+            ${latestExecutionStateMatchesSql(["pending", "running"])} AS is_running,
+            ${latestExecutionStateMatchesSql(["failed"])} AS is_failed,
             (cp.chat_id IS NOT NULL) AS is_pinned,
             ${lastVisibleContentSubquerySql()}
       FROM chats c
@@ -183,6 +185,12 @@ export async function listWithLatestMessage(
         ON cp.workspace_id = c.workspace_id AND cp.chat_id = c.id
       WHERE c.workspace_id = ?
         AND c.list_internal = 0
+        AND NOT EXISTS (
+          SELECT 1
+          FROM messages anchor
+          WHERE anchor.thread_chat_id = c.id
+            AND anchor.kind IN ('task', 'task_run')
+        )
       ORDER BY c.updated_at DESC`,
     [workspaceId],
   );
@@ -209,8 +217,8 @@ export async function findByWorkspaceAndTitle(
 ): Promise<Chat | null> {
   const { rows } = await db.query(
     `SELECT c.*,
-            ${latestAgentTurnStateMatchesSql(["pending", "running"])} AS is_running,
-            ${latestAgentTurnStateMatchesSql(["failed"])} AS is_failed,
+            ${latestExecutionStateMatchesSql(["pending", "running"])} AS is_running,
+            ${latestExecutionStateMatchesSql(["failed"])} AS is_failed,
             (cp.chat_id IS NOT NULL) AS is_pinned
        FROM chats c
        LEFT JOIN chat_pins cp
@@ -231,8 +239,8 @@ export async function findById(db: Pool, id: string): Promise<Chat | null> {
   // has to infer it from message-state events.
   const { rows } = await db.query(
     `SELECT c.*,
-            ${latestAgentTurnStateMatchesSql(["pending", "running"])} AS is_running,
-            ${latestAgentTurnStateMatchesSql(["failed"])} AS is_failed,
+            ${latestExecutionStateMatchesSql(["pending", "running"])} AS is_running,
+            ${latestExecutionStateMatchesSql(["failed"])} AS is_failed,
             (cp.chat_id IS NOT NULL) AS is_pinned
        FROM chats c
        LEFT JOIN chat_pins cp

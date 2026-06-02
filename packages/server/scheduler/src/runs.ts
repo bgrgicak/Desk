@@ -262,6 +262,8 @@ export function createRunManager(opts: RunManagerOptions) {
     });
     if (!run) return null;
     emit({ type: "message.appended", payload: run, workspaceId });
+    const chat = await queries.chats.findById(pool, executionChatId);
+    if (chat) emit({ type: "chat.updated", payload: chat });
     return run;
   }
 
@@ -354,6 +356,8 @@ export function createRunManager(opts: RunManagerOptions) {
         if (!run) return { fired: false, childIds: [] };
         runId = run.id;
         emit({ type: "message.appended", payload: run, workspaceId: eventWorkspaceId });
+        const chatAfterRunStart = await queries.chats.findById(pool, executionChatId);
+        if (chatAfterRunStart) emit({ type: "chat.updated", payload: chatAfterRunStart });
         // The task_run child is the authoritative agent-owned Active signal.
         // For agent-authored unscheduled tasks (sandbox sub-tasks), also flip
         // the parent state to `running` so the kanban badge stays Active past

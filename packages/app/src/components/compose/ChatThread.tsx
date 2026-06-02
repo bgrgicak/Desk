@@ -380,6 +380,9 @@ export interface ChatThreadProps {
   developerMode?: boolean
   /** Additional "sending" state from the parent's mutation (POST /messages). */
   isSending?: boolean
+  /** Chat-level active signal from the server. Covers task runs whose
+   *  in-flight row is hidden from the normal timeline. */
+  isRunning?: boolean
   highlightMessageId?: string
   /** CSS classes for the inner message list container. */
   innerClassName?: string
@@ -419,6 +422,7 @@ export function ChatThread({
   agentName,
   developerMode = false,
   isSending = false,
+  isRunning = false,
   highlightMessageId,
   innerClassName = 'space-y-6 p-4 pb-12',
   messageClassName,
@@ -520,7 +524,7 @@ export function ChatThread({
     [activeData],
   )
   const hasPendingTrigger = activeAgentTurn !== null
-  const isTyping = hasPendingTrigger || isSending
+  const isTyping = hasPendingTrigger || isSending || isRunning
 
   const statusText = useMemo(() => {
     return progressTextFromLog(activeAgentTurn?.progressLog)

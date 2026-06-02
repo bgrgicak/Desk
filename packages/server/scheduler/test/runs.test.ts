@@ -885,11 +885,27 @@ describe("fireMessage on kind='task'", () => {
     });
   });
 
+  it("beginTaskRun emits a chat.updated active signal for the task thread", async () => {
+    const events: WsEvent[] = [];
+    const mgr = createRunManager({
+      pool,
+      emit: (evt) => events.push(evt),
+      execRunFn: async () => ({ exitCode: 0 }),
+    });
+    const taskId = await insertTask({ content: { type: "text", text: "show loader" } });
+
+    const run = await mgr.beginTaskRun(taskId);
+
+    expect(run).not.toBeNull();
+    expect(events.some((evt) => evt.type === "message.appended" && evt.payload.id === run!.id)).toBe(true);
+    expect(events.some((evt) => evt.type === "chat.updated" && evt.payload.id === chatId && evt.payload.running === true)).toBe(true);
+  });
+
   it("each fire creates a task_run child; the task definition is not mutated", async () => {
     const events: WsEvent[] = [];
     const mgr = createRunManager({
       pool,
-emit: (evt) => events.push(evt),
+      emit: (evt) => events.push(evt),
       execRunFn: async (_id, _agentId, _prompt, onLog) => {
         onLog({ runId: _id, seq: 0, kind: "stdout", payload: "ok" });
         return { exitCode: 0 };
@@ -905,6 +921,8 @@ emit: (evt) => events.push(evt),
     expect(a.fired).toBe(true);
     const b = await mgr.fireMessage(taskId);
     expect(b.fired).toBe(true);
+
+    expect(events.some((evt) => evt.type === "chat.updated" && evt.payload.id === chatId && evt.payload.running === true)).toBe(true);
 
     // After both runs complete, parent task is back to pending with no
     // started_at — runs hold per-fire state, parent tracks schedule status.

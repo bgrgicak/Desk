@@ -7,7 +7,32 @@ import { describe, expect, it } from 'vitest'
 import { api } from '@/store/api'
 import type { ServerFile } from '@/store/types'
 import { PathChip } from './PathChip'
-import { displayBasename, pathChipHref, workspaceRelativePath } from './PathChip'
+import { displayBasename, looksLikeDirectoryPath, pathChipHref, workspaceRelativePath } from './PathChip'
+
+function renderPathChipWithoutMeta(sandboxPath: string): string {
+  const store = configureStore({
+    reducer: { [api.reducerPath]: api.reducer },
+    middleware: getDefault => getDefault().concat(api.middleware),
+  })
+
+  return renderToStaticMarkup(
+    createElement(
+      Provider,
+      {
+        store,
+        children: createElement(
+          MemoryRouter,
+          null,
+          createElement(PathChip, {
+            sandboxPath,
+            displayPath: `~/Roomy/demo/${workspaceRelativePath(sandboxPath)}`,
+            workspaceId: 'wks_123',
+          }),
+        ),
+      },
+    ),
+  )
+}
 
 async function renderPathChipWithMeta(file: ServerFile): Promise<string> {
   const store = configureStore({
@@ -66,6 +91,18 @@ describe('displayBasename', () => {
   })
 })
 
+describe('looksLikeDirectoryPath', () => {
+  it('treats extensionless paths as likely directories until metadata loads', () => {
+    expect(looksLikeDirectoryPath('roomy')).toBe(true)
+    expect(looksLikeDirectoryPath('Projects/Alpha')).toBe(true)
+  })
+
+  it('does not treat extension-bearing files as likely directories', () => {
+    expect(looksLikeDirectoryPath('README.md')).toBe(false)
+    expect(looksLikeDirectoryPath('src/App.tsx')).toBe(false)
+  })
+})
+
 describe('pathChipHref', () => {
   it('builds real library links for files', () => {
     expect(pathChipHref('wks_123', '/home/agent/report.md', false)).toBe('/w/wks_123/context?item=report.md')
@@ -86,6 +123,18 @@ describe('pathChipHref', () => {
 })
 
 describe('PathChip', () => {
+  it('optimistically opens extensionless inline paths as library folders before metadata loads', () => {
+    const markup = renderPathChipWithoutMeta('/home/agent/roomy')
+
+    expect(markup).toContain('href="/w/wks_123/context?folder=roomy"')
+  })
+
+  it('keeps extension-bearing inline file paths on item routes before metadata loads', () => {
+    const markup = renderPathChipWithoutMeta('/home/agent/README.md')
+
+    expect(markup).toContain('href="/w/wks_123/context?item=README.md"')
+  })
+
   it('keeps inline app links on the app item route after directory metadata loads', async () => {
     const markup = await renderPathChipWithMeta({
       path: '.chats/cht_123/artifacts/rss-news-feed.app',
