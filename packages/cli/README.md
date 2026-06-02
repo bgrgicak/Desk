@@ -5,7 +5,7 @@ Host CLI for Roomy — boots the full server stack locally.
 ## Usage
 
 ```sh
-npx @roomy-ai/cli@alpha
+npx @roomy-ai/cli
 ```
 
 Opens the Roomy UI at `http://127.0.0.1:35138/` and keeps it running in the foreground.

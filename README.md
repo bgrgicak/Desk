@@ -33,6 +33,10 @@ Roomy is a personal AI platform for people who use AI every day to do real work 
 - **Build small apps inside Roomy.** Pin them to your workspace, hand them to the AI as tools, and shape the surface into something only you would have built.
 - **Connect the tools you already use.** GitHub, Notion, Slack, Linear, Figma — Roomy reads them for context and acts on them when you ask.
 
+## Screenshots
+
+The README screenshots live in [`docs/screenshots/`](docs/screenshots/). They are checked in PNGs used by this page; if the UI changes, refresh those files in place so the links above stay valid.
+
 ## Where it runs
 
 Roomy is open source software you run yourself — on your own laptop, or on a server you control if you want it reachable from anywhere. No accounts to sign up for, no vendor in the middle. Where Roomy lives, your data lives.
@@ -46,7 +50,7 @@ Two ways to run Roomy. Pick one — you don't need both.
 One command, no clone:
 
 ```sh
-npx @roomy-ai/cli@alpha
+npx @roomy-ai/cli
 ```
 
 This downloads the [`@roomy-ai/cli`](https://www.npmjs.com/package/@roomy-ai/cli) package, boots `roomy-server` in the foreground, and opens the UI at <http://127.0.0.1:35138/>. Stop it with `Ctrl+C`.
@@ -54,11 +58,11 @@ This downloads the [`@roomy-ai/cli`](https://www.npmjs.com/package/@roomy-ai/cli
 Prefer a persistent install:
 
 ```sh
-npm install -g @roomy-ai/cli@alpha
+npm install -g @roomy-ai/cli
 roomy            # same as `roomy start`
 ```
 
-**Requirements:** Node.js ≥ 22 and Docker (or nerdctl) running locally — Roomy uses a sandboxed container to run AI agents.
+**Requirements:** Node.js ≥ 22. On Linux, have Docker or nerdctl running locally. On macOS, the CLI can bootstrap Colima/nerdctl on first start if Docker Desktop is not available. Roomy uses a sandboxed container to run AI agents.
 
 **Run in the background** as a system service (launchd on macOS, systemd-user on Linux, Task Scheduler on Windows):
 
@@ -89,7 +93,7 @@ Your conversations, files, and vault live in `~/Roomy/` — back that up to move
 
 ### Option 2 — macOS desktop app
 
-Pre-built DMG releases (Apple Silicon · arm64) are on the [releases page](https://github.com/bgrgicak/Desk/releases/tag/desktop-latest). New builds are published weekly. Same data directory (`~/Roomy/`), same server underneath — just wrapped in an Electron shell.
+Pre-built DMG releases are published from GitHub Releases when release tags are cut. The desktop app uses the same data directory (`~/Roomy/`) and the same server underneath — just wrapped in an Electron shell.
 
 ### First-run setup
 
@@ -111,19 +115,19 @@ Only needed if you want to contribute or hack on Roomy itself. End users should 
 
 ```bash
 git clone git@github.com:bgrgicak/Desk.git
-cd Roomy
-npm install
+cd Desk
+npm install --include=optional
 npm run dev
 ```
 
-`npm run dev` boots `roomy-server` (tsx watch) and Vite together, and rebuilds the `roomy/sandbox:v1` Docker image when its inputs change; one `Ctrl+C` stops both. Open <http://localhost:5173/>.
+`npm run dev` boots `roomy-server` (tsx watch) and Vite together, builds any missing built-in app bundles, and rebuilds the `roomy/sandbox:v1` Docker image when its inputs change; one `Ctrl+C` stops both. Dev defaults to API <http://127.0.0.1:35139/> and app <http://127.0.0.1:5174/> so it can run beside a published install on port 35138.
 
 ### Prerequisites
 
 | Tool | macOS | Linux |
 | --- | --- | --- |
-| Node.js 23 + npm (pinned by `.nvmrc` + `engines`) | use [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf | use [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf |
-| Docker | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | rootful or rootless — both auto-detected |
+| Node.js 23.x + npm (pinned by `.nvmrc` + `engines`) | use [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf | use [volta](https://volta.sh/), [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), mise, or asdf |
+| Container runtime | Docker Desktop or Colima/nerdctl | Docker rootful/rootless or nerdctl/containerd — auto-detected |
 
 API keys are configured per-user via Settings after the first sign-in. The per-user secrets vault is created and unlocked through the signup wizard (first run) and the in-app VaultDialog (returning users); on every server restart, the vault locks and the user re-enters their vault password through the dialog.
 
@@ -133,10 +137,10 @@ Run from the repo root.
 
 | Command | What it does |
 | --- | --- |
-| `npm run dev` | Boot `roomy-server` + Vite. |
+| `npm run dev` | Boot `roomy-server` on `:35139` + Vite on `:5174`; also prepares missing built-in app bundles and the sandbox image. |
 | `npm run dev:app` | Vite only — useful when `roomy-server` runs elsewhere. |
-| `npm run dev:desktop` | Build server + app, then launch the Electron desktop app (`cd packages/desktop && npm run dev`). Requires the server packages to be built first (`npm run build:server`). |
-| `npm run build` | Build all workspace packages (Nx). |
+| `npm run dev:desktop` | Launch the Electron desktop app from `packages/desktop`. First run: `cd packages/desktop && npm install`, and build server packages first with `npm run build:server`. |
+| `npm run build` | Build server packages, the app scaffold package, and the web app. |
 | `npm run typecheck` | Run tsc on all workspaces. |
 | `npm run test:host` | Vitest unit + integration tests. |
 | `npm run test:e2e` | Playwright against a spawned `roomy-server` + Vite preview. |
@@ -172,13 +176,13 @@ npm run release
 The script walks you through it interactively:
 
 1. Pre-flight checks (clean tree, on `trunk`, all four logins above present).
-2. Pick a version — next alpha bump, next minor + `alpha.0`, or a custom string. Default tag is `alpha`.
+2. Pick a version — next patch, next minor, next major, or a custom string. Packages publish under the `latest` dist-tag.
 3. Bumps every public workspace (`packages/app`, `packages/cli`, `packages/ui`, `packages/server/*`) plus `packages/desktop` to the new version.
 4. Runs `npm install`, `npm run build`, and a `npm pack` smoke test.
 5. **Final confirm** — last chance to bail before anything is published.
 6. Commits `chore(release): vX.Y.Z`.
-7. `npm publish --workspaces --access public` (publishes under the `alpha` dist-tag).
-8. Builds and pushes the `roomy/sandbox` Docker image to Docker Hub as `:vX.Y.Z` and `:alpha`.
+7. `npm publish --workspaces --access public` (publishes under the `latest` dist-tag).
+8. Builds and pushes the sandbox Docker image to Docker Hub as `bgrgicak/roomy-ai:vX.Y.Z` and `bgrgicak/roomy-ai:latest` by default (override with `ROOMY_DOCKER_REPO`).
 9. Creates the `vX.Y.Z` git tag and pushes `trunk` + tag to `origin`. The tag push triggers [`.github/workflows/desktop-release.yml`](.github/workflows/desktop-release.yml), which builds the macOS DMG on a `macos-latest` runner and uploads it to the GitHub Release.
 10. Optionally `gh run watch`es the desktop workflow.
 

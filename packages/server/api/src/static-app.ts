@@ -63,6 +63,7 @@ export function resolveAppDist(): string | null {
  */
 export function isStaticPath(reqPath: string): boolean {
   if (reqPath === "/ws") return false;
+  if (reqPath === "/feed.xml") return false;
   if (reqPath.startsWith("/api/")) return false;
   if (reqPath.startsWith("/internal/")) return false;
   if (reqPath.startsWith("/sandbox/")) return false;

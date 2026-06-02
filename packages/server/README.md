@@ -7,8 +7,8 @@ Monorepo for the Roomy personal AI assistant.
 - **`packages/cli/`** — host CLI (`roomy` binary).
 
 The full stack runs on the host — no VM, no systemd. The roomy-server
-process serves the API on `:35138`; the Vite dev server proxies `/api/*`
-calls to it on `:5173`. Sandbox containers spawn through the host's
+process serves the API on `:35139`; the Vite dev server proxies `/api/*`
+calls to it on `:5174`. A published install serves API + app together on `:35138`. Sandbox containers spawn through the host's
 container runtime — `docker` if present, otherwise `nerdctl`
 (containerd) — both detected. State lives under `~/Roomy/`.
 
@@ -27,23 +27,18 @@ container runtime — `docker` if present, otherwise `nerdctl`
 ## First-time setup
 
 ```bash
-npm install
+npm install --include=optional
+npm run dev
 
-# Build the sandbox image. The build context is the repo root so the
-# Dockerfile can reach packages/ui and packages/app-scaffold (baked into
-# /opt/roomy-template/) alongside packages/server/runtime and sandbox-cli.
-docker build -f packages/server/runtime/Dockerfile.sandbox \
-  -t roomy/sandbox:v1 .
-# OR (nerdctl with buildkit available):
-nerdctl build -f packages/server/runtime/Dockerfile.sandbox \
-  -t roomy/sandbox:v1 .
+# npm run dev builds or refreshes the roomy/sandbox:v1 image when needed.
+# To force-skip that step, set ROOMY_SKIP_SANDBOX_BUILD=1.
 ```
 
 ## Day-to-day commands
 
 | Command | What it does |
 | --- | --- |
-| `npm run dev` | Boot roomy-server (tsx watch) + Vite. Ctrl+C stops both. |
+| `npm run dev` | Boot roomy-server (tsx watch) on `:35139` + Vite on `:5174`; also prepares missing built-in app bundles and refreshes the sandbox image when needed. Ctrl+C stops both. |
 | `npm run dev:app` | Vite only — useful when roomy-server is running elsewhere. |
 | `npm run build` | All workspace packages via Nx. |
 | `npm run typecheck` | tsc on all workspaces. |
