@@ -18,7 +18,6 @@ import * as homeRoutes from "./routes/home.js";
 import * as searchRoutes from "./routes/search.js";
 import * as toolRoutes from "./routes/tools.js";
 import { recordClientPerf } from "./routes/client-perf.js";
-import { sendRssFeed } from "./routes/rss.js";
 import { VaultStore } from "./vault/store.js";
 import { withModule } from "@roomy-ai/shared/logger";
 import { defaultBackupPath, parseBody, sendJson } from "./http/io.js";
@@ -328,13 +327,6 @@ export function createApp(opts: AppOptions): Server {
         : rawPath === "/api"
           ? "/"
           : rawPath;
-
-      // RSS is public. static-app excludes /feed.xml so production
-      // static-serve does not turn the feed into the SPA index.
-      if (method === "GET" && path === "/feed.xml") {
-        await sendRssFeed(res);
-        return;
-      }
 
       // Auth
       let userId: string;

@@ -3,18 +3,6 @@
 All endpoints require Bearer token authentication unless noted otherwise.
 The full OpenAPI 3.1.0 spec is served at `GET /openapi.json`.
 
-## Public endpoints
-
-| Method | Path      | Auth | Description |
-|--------|-----------|------|-------------|
-| GET    | /health   | No   | Liveness probe |
-| GET    | /ready    | No   | Readiness probe with dependency checks |
-| GET    | /feed.xml | No   | RSS 2.0 feed for Roomy product/documentation updates |
-
-`GET /api/feed.xml` is also accepted for clients that route through the API
-prefix. Feed metadata uses `ROOMY_PUBLIC_URL` or `PUBLIC_URL` when set, falling
-back to `https://roomy.ai`.
-
 ### Multi-user scoping
 
 Every route that resolves a workspace, agent, chat, or message id verifies

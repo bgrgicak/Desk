@@ -193,17 +193,6 @@ describe("static-serve when ROOMY_SERVE_APP=1", () => {
     expect(JSON.parse(res.body).name).toBe("Roomy");
   });
 
-  it("GET /feed.xml serves RSS instead of the SPA fallback", async () => {
-    process.env.ROOMY_SERVE_APP = "1";
-    process.env.ROOMY_APP_DIST = distRoot;
-    const server = await startServer();
-    const res = await fetchRaw(getServerPort(server), "/feed.xml");
-    expect(res.status).toBe(200);
-    expect(res.contentType).toMatch(/application\/rss\+xml/);
-    expect(res.body).toContain("<rss version=\"2.0\">");
-    expect(res.body).not.toContain("roomy-app-spa");
-  });
-
   it("path traversal attempts (/../) cannot escape distRoot", async () => {
     process.env.ROOMY_SERVE_APP = "1";
     process.env.ROOMY_APP_DIST = distRoot;
