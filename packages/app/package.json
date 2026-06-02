@@ -1,6 +1,6 @@
 {
   "name": "@roomy-ai/app",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "license": "MIT",
   "type": "module",
   "files": [
@@ -37,8 +37,8 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@reduxjs/toolkit": "^2.3.0",
-    "@roomy-ai/shared": "0.2.5",
-    "@roomy-ai/ui": "0.2.5",
+    "@roomy-ai/shared": "0.2.6",
+    "@roomy-ai/ui": "0.2.6",
     "@tailwindcss/typography": "^0.5.19",
     "@uiw/react-codemirror": "^4.25.9",
     "date-fns": "^4.1.0",
@@ -63,7 +63,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.4",
     "@playwright/test": "^1.49.0",
-    "@roomy-ai/db": "0.2.5",
+    "@roomy-ai/db": "0.2.6",
     "@tailwindcss/vite": "^4.2.2",
     "@types/mdast": "^4.0.4",
     "@types/node": "^24.12.2",
