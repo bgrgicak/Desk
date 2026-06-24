@@ -52,6 +52,7 @@ type SearchKind =
 
 const FILE_KINDS: SearchKind[] = ["library_file", "attachment", "artifact"];
 const CHAT_KINDS: SearchKind[] = ["chat", "message", "summary"];
+const FILE_INDEX_REFRESH_TTL_MS = 30_000;
 const INDEXED_TEXT_EXTENSIONS = new Set([
   ".txt", ".md", ".markdown", ".json", ".html", ".css", ".js", ".jsx",
   ".ts", ".tsx", ".mjs", ".cjs", ".yml", ".yaml", ".csv", ".xml", ".svg",
@@ -59,6 +60,20 @@ const INDEXED_TEXT_EXTENSIONS = new Set([
 ]);
 const EXCLUDED_INDEX_SEGMENTS = new Set([".git", ".storage", ".trash", "node_modules", "dist", "build"]);
 const MAX_INDEXED_FILE_BYTES = 128 * 1024;
+const fileIndexRefreshState = new Map<string, { refreshedAt: number; promise?: Promise<void> }>();
+
+function fileIndexRefreshKey(workspaceSlug: string, showHidden: boolean): string {
+  return `${workspaceSlug}:${showHidden ? "hidden" : "visible"}`;
+}
+
+export function resetWorkspaceFileIndexRefreshCacheForTests(): void {
+  fileIndexRefreshState.clear();
+}
+
+export function invalidateWorkspaceFileIndexRefreshCache(workspaceSlug: string): void {
+  fileIndexRefreshState.delete(fileIndexRefreshKey(workspaceSlug, false));
+  fileIndexRefreshState.delete(fileIndexRefreshKey(workspaceSlug, true));
+}
 
 /**
  * Recursively walks a directory, collecting files. By default dot-prefixed
@@ -249,6 +264,33 @@ async function refreshWorkspaceFileIndex(
   }
 }
 
+async function refreshWorkspaceFileIndexIfStale(
+  pool: Pool,
+  storage: StorageContext,
+  workspaceSlug: string,
+  opts: { showHidden: boolean },
+): Promise<void> {
+  const key = fileIndexRefreshKey(workspaceSlug, opts.showHidden);
+  const state = fileIndexRefreshState.get(key);
+  const now = Date.now();
+  if (state?.promise) {
+    await state.promise;
+    return;
+  }
+  if (state && now - state.refreshedAt < FILE_INDEX_REFRESH_TTL_MS) return;
+
+  const promise = refreshWorkspaceFileIndex(pool, storage, workspaceSlug, opts)
+    .then(() => {
+      fileIndexRefreshState.set(key, { refreshedAt: Date.now() });
+    })
+    .catch((err: unknown) => {
+      fileIndexRefreshState.delete(key);
+      throw err;
+    });
+  fileIndexRefreshState.set(key, { refreshedAt: state?.refreshedAt ?? 0, promise });
+  await promise;
+}
+
 function kindsForScope(scope: "artifacts" | "chats" | "library" | "all" | "files"): SearchKind[] {
   switch (scope) {
     case "chats": return CHAT_KINDS;
@@ -402,7 +444,9 @@ export async function findLibraryItems(
       })
     : await queries.workspaces.listByUser(pool, userId);
 
-  for (const ws of workspaces) await refreshWorkspaceFileIndex(pool, storage, ws.path, { showHidden: false });
+  for (const ws of workspaces) {
+    await refreshWorkspaceFileIndexIfStale(pool, storage, ws.path, { showHidden: false });
+  }
 
   const workspaceSlugs = workspaces.map((ws) => ws.path);
   const rawLimit = Math.min(500, Math.max(limit * 20, 100));

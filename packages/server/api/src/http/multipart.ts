@@ -1,30 +1,7 @@
 import { type IncomingMessage } from "node:http";
 import { type Readable } from "node:stream";
 import Busboy from "busboy";
-import { MAX_UPLOAD_BYTES, ValidationError } from "@roomy-ai/shared";
-import { readRawBody } from "./io.js";
-
-/**
- * Parses a multipart/form-data body using Node's built-in Fetch API.
- * Returns a FormData instance; callers pull out parts by field name.
- */
-export async function parseMultipart(req: IncomingMessage): Promise<FormData> {
-  const contentType = req.headers["content-type"] ?? "";
-  if (!contentType.toLowerCase().startsWith("multipart/form-data")) {
-    throw new ValidationError("Expected multipart/form-data body");
-  }
-  const body = await readRawBody(req, { limitBytes: MAX_UPLOAD_BYTES });
-  const r = new Request("http://localhost/", {
-    method: "POST",
-    headers: { "content-type": contentType },
-    body: new Blob([new Uint8Array(body)]),
-  });
-  try {
-    return await r.formData();
-  } catch {
-    throw new ValidationError("Malformed multipart body");
-  }
-}
+import { ValidationError } from "@roomy-ai/shared";
 
 /**
  * Streaming multipart parser for single-file uploads. Text fields must

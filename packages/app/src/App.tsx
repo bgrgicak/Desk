@@ -615,13 +615,6 @@ function AppInner() {
     }
   }, [selectedChatId])
 
-  const handleSidebarChatClick = useCallback((chat: { id: string; unread?: boolean }) => {
-    if (chat.unread) {
-      markChatReadQuietly(chat.id, dispatch, appStore.getState)
-    }
-    goTo({ chat: chat.id })
-  }, [dispatch, appStore, goTo])
-
   const handleNewChatFirstMessage = useCallback(async (
     message: string,
     agentId?: string,
@@ -902,15 +895,11 @@ function AppInner() {
         activeView={activeView}
         chats={chats}
         isChatsLoading={chatsListLoading}
-        artifacts={[]}
         selectedChatId={selectedChatId}
-        onChatClick={handleSidebarChatClick}
         onDeleteChat={handleDeleteChat}
         isDetailOpen={!!selectedContextItem}
-        onArtifactClick={(artifact) => handleArtifactClick(artifact)}
         activeWorkspaceId={activeWorkspaceId}
         onSelectWorkspace={handleSelectWorkspace}
-        getWorkspaceHref={(id) => getLastWorkspaceUrl(id) ?? buildDefaultViewPath(id, defaultView)}
         onSignOut={() => void logout()}
         pinnedEntries={pinnedEntries}
         isPinnedLoading={!!activeWorkspaceId && !pinnedResp && (pinnedLoading || pinnedFetching || pinnedUninitialized)}

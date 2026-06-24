@@ -2,17 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { FileText, MessageSquare } from 'lucide-react'
 import {
   SidebarInset,
   SidebarProvider,
-  CommandDialog,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-  CommandSeparator,
   useIsMobile,
 } from '@roomy-ai/ui'
 import { BackgroundBlobs } from '@/components/layout/BackgroundBlobs'
@@ -24,16 +16,14 @@ import { useSplitResize } from '@/components/shared/splitPane'
 import type { WorkspaceInfo } from '@/components/layout/WorkspaceBar'
 import { SettingsModal } from '@/components/settings/SettingsModal'
 import { MyAccountModal } from '@/components/account/MyAccountModal'
-import type { Chat, Artifact } from '@/data/ui-types'
+import type { Chat } from '@/data/ui-types'
 import { useChatHierarchy } from '@/store/selectors/threads'
-import { getArtifactIcon } from '@/data/ui-types'
 import { DRAG_TYPE_PINNED_ITEM } from '@/components/library/LibraryCard'
 import {
   useGetMeQuery,
   useGetWorkspacesQuery,
   usePatchWorkspaceMutation,
   useDeleteWorkspaceMutation,
-  useSearchQuery,
 } from '@/store/api'
 import { useAvatarUrl } from '@/hooks/use-avatar'
 import { toWorkspaceInfo } from '@/store/selectors/workspaces'
@@ -178,17 +168,13 @@ interface AppShellProps {
   activeView: RouteView
   chats: Chat[]
   isChatsLoading?: boolean
-  artifacts: Artifact[]
   selectedChatId?: string | null
-  onChatClick: (chat: Chat) => void
   onDeleteChat: (chatId: string) => void
 
   isDetailOpen?: boolean
-  onArtifactClick?: (artifact: Artifact) => void
   // ── Active room ──
   activeWorkspaceId: string
   onSelectWorkspace: (id: string) => void
-  getWorkspaceHref?: (id: string) => string
   onSignOut?: () => void
   pinnedEntries?: PinnedSidebarEntry[]
   isPinnedLoading?: boolean
@@ -207,13 +193,10 @@ export function AppShell({
   activeView,
   chats,
   isChatsLoading = false,
-  artifacts,
   selectedChatId,
-  onChatClick,
   onDeleteChat,
 
   isDetailOpen = false,
-  onArtifactClick,
   activeWorkspaceId,
   onSelectWorkspace,
   onSignOut,
@@ -225,16 +208,6 @@ export function AppShell({
   selectedItemId,
   libraryFileName,
 }: AppShellProps) {
-  // Chat search command palette (global keyboard-shortcut surface).
-  const [chatSearchOpen, setChatSearchOpen] = useState(false)
-  const [chatSearchQuery, setChatSearchQuery] = useState('')
-  const [chatSearchValue, setChatSearchValue] = useState('')
-  const searchEnabled = chatSearchQuery.trim().length >= 2
-  const { data: searchResults } = useSearchQuery(
-    { q: chatSearchQuery.trim(), scope: 'all', workspaceId: activeWorkspaceId },
-    { skip: !searchEnabled },
-  )
-
   // Drag-onto-inset to unpin a pinned item — separate from the sidebar drop
   // zone which handles library → pinned. This one handles pinned → unpin.
   const [isInsetDropOver, setIsInsetDropOver] = useState(false)
@@ -711,96 +684,6 @@ export function AppShell({
           setAccountSettings({ section: 'models', modelsFocus: focus })
         }
       />
-
-      {/* ── Chat search command palette ── */}
-      <CommandDialog
-        open={chatSearchOpen}
-        onOpenChange={(open) => { setChatSearchOpen(open); if (!open) { setChatSearchQuery(''); setChatSearchValue('') } }}
-        showCloseButton={false}
-        className="top-[20%] translate-y-0"
-        value={chatSearchValue}
-        onValueChange={setChatSearchValue}
-        shouldFilter={false}
-      >
-        <CommandInput
-          placeholder="Search chats and artifacts…"
-          value={chatSearchQuery}
-          onValueChange={(v) => { setChatSearchQuery(v); setChatSearchValue('') }}
-        />
-        <CommandList>
-          <CommandEmpty>No results found.</CommandEmpty>
-
-          {!chatSearchQuery.trim() && (
-            <CommandGroup heading="Recent chats">
-              {chats.slice(0, 5).map(chat => (
-                <CommandItem
-                  key={chat.id}
-                  value={chat.id}
-                  onSelect={() => { onChatClick(chat); setChatSearchOpen(false); setChatSearchQuery(''); setChatSearchValue('') }}
-                >
-                  <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                  <span className="truncate">{chat.title}</span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          )}
-
-          {chatSearchQuery.trim() && (
-            <>
-              <CommandGroup heading="Chats">
-                {(searchResults ?? [])
-                  .filter(r => r.type === 'chat' || r.type === 'message')
-                  .map(r => (
-                    <CommandItem
-                      key={r.messageId ?? r.id}
-                      value={r.messageId ?? r.id}
-                      onSelect={() => {
-                        const chat = chats.find(c => c.id === r.id)
-                        if (chat) onChatClick(chat)
-                        setChatSearchOpen(false)
-                        setChatSearchQuery('')
-                        setChatSearchValue('')
-                      }}
-                    >
-                      <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                      <span className="min-w-0 truncate">
-                        <span className="block truncate">{r.title}</span>
-                        {r.snippet && (
-                          <span className="block truncate text-xs text-muted-foreground">{r.snippet.replace(/<\/?mark>/g, '')}</span>
-                        )}
-                      </span>
-                    </CommandItem>
-                  ))}
-              </CommandGroup>
-              <CommandSeparator />
-              <CommandGroup heading="Artifacts">
-                {(searchResults ?? [])
-                  .filter(r => r.type === 'file')
-                  .map(r => {
-                    const artifact = artifacts.find(a => a.id === r.id)
-                    if (!artifact) return (
-                      <CommandItem key={r.id} value={r.id}>
-                        <FileText className="h-4 w-4 text-muted-foreground" />
-                        <span className="truncate">{r.title}</span>
-                      </CommandItem>
-                    )
-                    const ArtifactIcon = getArtifactIcon(artifact.type)
-                    return (
-                      <CommandItem
-                        key={artifact.id}
-                        value={artifact.id}
-                        onSelect={() => { onArtifactClick?.(artifact); setChatSearchOpen(false); setChatSearchQuery(''); setChatSearchValue('') }}
-                      >
-                        <ArtifactIcon className="h-4 w-4 text-muted-foreground" />
-                        <span className="truncate">{artifact.name}</span>
-                      </CommandItem>
-                    )
-                  })}
-              </CommandGroup>
-            </>
-          )}
-        </CommandList>
-      </CommandDialog>
     </div>
   )
 }

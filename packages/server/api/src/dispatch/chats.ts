@@ -10,7 +10,6 @@ import {
   requireOwnedWorkspace,
 } from "../auth/ownership.js";
 import { parseBody, sendJson } from "../http/io.js";
-import { parseMultipart } from "../http/multipart.js";
 import { resolveWorkspaceId } from "../workspace-scope.js";
 import type { DispatchContext } from "./context.js";
 
@@ -117,7 +116,7 @@ export async function dispatchChats(
     await requireOwnedChat(pool, segments[1], userId);
     const ct = (req.headers["content-type"] ?? "").toLowerCase();
     const body = ct.startsWith("multipart/form-data")
-      ? await chatRoutes.buildSendMessageBodyFromForm(storage, segments[1], await parseMultipart(req))
+      ? await chatRoutes.buildSendMessageBodyFromMultipartRequest(storage, segments[1], req)
       : await parseBody(req);
 
     // Preempt any in-flight chat agent_turn before firing the new one.

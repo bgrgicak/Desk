@@ -10,12 +10,14 @@ import {
   CommandSeparator,
 } from '@roomy-ai/ui'
 import { useGetWorkspacesQuery, useSearchQuery } from '@/store/api'
+import { useDebouncedValue } from '@/hooks/use-debounced-value'
 import { useGlobalPalette } from './GlobalPaletteProvider'
 import {
   filterSettingsTargets, filterWorkspaceTargets,
   SETTINGS_TARGETS, WORKSPACE_TARGETS,
   type NavTarget, type SearchTarget, type SettingsTarget,
 } from './searchTargets'
+import { GLOBAL_SEARCH_DEBOUNCE_MS, shouldRunGlobalSearch } from './searchTiming'
 import type { ServerFile } from '@/store/types'
 
 interface GlobalPaletteSearchProps {
@@ -53,13 +55,17 @@ export function GlobalPaletteSearch({
   const { query, setQuery } = useGlobalPalette()
   const trimmed = query.trim()
   const isSearching = trimmed.length > 0
+  const debouncedQuery = useDebouncedValue(trimmed, GLOBAL_SEARCH_DEBOUNCE_MS)
+  const currentQueryCanSearchServer = shouldRunGlobalSearch(trimmed)
+  const canSearchServer = shouldRunGlobalSearch(debouncedQuery)
 
   const { data: workspaces = [] } = useGetWorkspacesQuery()
 
   const { data: searchResults = [] } = useSearchQuery(
-    { q: trimmed, scope: 'all' },
-    { skip: !isSearching || trimmed.length < 2 },
+    { q: debouncedQuery, scope: 'all' },
+    { skip: !isSearching || !currentQueryCanSearchServer || !canSearchServer },
   )
+  const visibleSearchResults = debouncedQuery === trimmed ? searchResults : []
 
   // "Recently viewed" used to cross-reference the workspace-wide library
   // listing against locally-marked savedArtifactIds. That listing is no
@@ -79,8 +85,8 @@ export function GlobalPaletteSearch({
     return workspaces.filter(w => w.kind !== 'hub' && w.name.toLowerCase().includes(needle))
   }, [isSearching, workspaces, trimmed])
 
-  const chatResults = useMemo(() => searchResults.filter(r => r.type === 'chat' || r.type === 'message'), [searchResults])
-  const fileResults = useMemo(() => searchResults.filter(r => r.type === 'file'), [searchResults])
+  const chatResults = useMemo(() => visibleSearchResults.filter(r => r.type === 'chat' || r.type === 'message'), [visibleSearchResults])
+  const fileResults = useMemo(() => visibleSearchResults.filter(r => r.type === 'file'), [visibleSearchResults])
 
   const renderTarget = (t: SearchTarget) => {
     const onSelect = t.kind === 'page'

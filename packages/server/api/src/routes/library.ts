@@ -23,6 +23,7 @@ import {
   type FolderRef,
   type VirtualLibraryMount,
 } from "@roomy-ai/storage";
+import { invalidateWorkspaceFileIndexRefreshCache } from "./search.js";
 
 /**
  * Resolves a workspace's on-disk slug. Used by every library route handler
@@ -251,6 +252,7 @@ export async function upload(
     stream: data.stream,
     subpath: data.subpath,
   });
+  invalidateWorkspaceFileIndexRefreshCache(slug);
 
   emit({
     type: "library.changed",
@@ -300,6 +302,7 @@ export async function saveContent(
     }
   }
   const file = await overwriteFile(ctx, slug, relPath, stream, virtualMounts);
+  invalidateWorkspaceFileIndexRefreshCache(slug);
   emit({
     type: "library.changed",
     payload: { workspaceId, path: file.path, op: "updated" },
@@ -338,6 +341,7 @@ export async function createLink(
     url: input.url,
     subpath: input.subpath,
   });
+  invalidateWorkspaceFileIndexRefreshCache(slug);
   emit({
     type: "library.changed",
     payload: { workspaceId, path: file.path, op: "added" },
@@ -379,6 +383,7 @@ export async function move(
 ): Promise<{ kind: "file" | "folder"; path: string }> {
   const slug = await resolveSlug(ctx, workspaceId);
   const result = await moveLibraryEntry(ctx, slug, from, to);
+  invalidateWorkspaceFileIndexRefreshCache(slug);
   if (result.kind === "file") {
     await queries.libraryPins.updatePinPath(ctx.pool, workspaceId, from, to);
   } else {
@@ -421,6 +426,7 @@ export async function remove(
 ): Promise<void> {
   const slug = await resolveSlug(ctx, workspaceId);
   await deleteLibraryEntry(ctx, slug, relPath);
+  invalidateWorkspaceFileIndexRefreshCache(slug);
   emit({
     type: "library.changed",
     payload: { workspaceId, path: relPath, op: "removed" },

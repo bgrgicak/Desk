@@ -158,7 +158,9 @@ export function AppPreview(props: AppPreviewProps) {
       if (!iframeWindow || event.source !== iframeWindow) return
       if (isAppBridgeResize(event.data)) {
         if (event.data.key !== session.bridgeKey) return
-        setFrameHeight(Math.min(Math.max(0, Math.ceil(event.data.height)), getMaxFrameHeight()))
+        const nextHeight = Math.ceil(event.data.height)
+        if (nextHeight <= 0) return
+        setFrameHeight(Math.min(nextHeight, getMaxFrameHeight()))
         return
       }
       if (!isAppBridgeRequest(event.data)) return
