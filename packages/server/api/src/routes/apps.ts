@@ -53,6 +53,12 @@ import {
   setSecurityHeaders,
   type BridgeContext,
 } from "./app-response.js";
+import {
+  findLibraryCookieEntry,
+  libraryCookieNameFor,
+  libraryCookieWorkspaceId,
+  librarySessionAppKey,
+} from "./app-cookies.js";
 
 export { BRIDGE_SCRIPT_BODY } from "./app-response.js";
 
@@ -180,10 +186,6 @@ function cookieNameFor(chatId: string, appName: string): string {
   return `roomy_app_${chatId}_${appName}`;
 }
 
-function libraryCookieNameFor(workspaceId: string, appName: string): string {
-  return `roomy_libapp_${workspaceId}_${appName}`;
-}
-
 function globalCookieNameFor(chatId: string, appName: string): string {
   return `roomy_globalapp_${chatId}_${appName}`;
 }
@@ -191,10 +193,6 @@ function globalCookieNameFor(chatId: string, appName: string): string {
 function isInsidePath(root: string, candidate: string): boolean {
   const rel = path.relative(root, candidate);
   return rel === "" || (!!rel && !rel.startsWith("..") && !path.isAbsolute(rel));
-}
-
-function librarySessionAppKey(appPath: string): string {
-  return appPath.endsWith(".app") ? appPath.slice(0, -".app".length) : appPath;
 }
 
 function chatAssetBaseHref(chatId: string, assetToken: string, appName: string): string {
@@ -276,11 +274,11 @@ async function ensureUserOwnsChat(
  * Symlink defense: `realpath` resolves the entire path including any
  * symlinks anywhere in the chain (the artifacts dir, the `<name>.app/`
  * dir itself, the `dist/` dir, or any of their parents). The post-resolve
- * `startsWith(wsRoot + path.sep)` check then ensures the final inode lives
- * under the workspace root — so a symlink pointing at /etc or another
- * workspace's data still gets rejected. We only serve out of the realpath,
- * never the symlinked path, so subsequent `path.join`s can't reintroduce
- * a `..`-style escape.
+ * containment checks then ensure the artifacts root stays under the
+ * workspace, the app root stays under that chat's artifacts directory, and
+ * `dist/` stays under the app root. That rejects symlinked artifact roots,
+ * app roots, and `dist/` directories that point at sibling workspace data
+ * or another location.
  */
 export async function resolveChatAppDist(
   pool: Pool,
@@ -296,17 +294,25 @@ export async function resolveChatAppDist(
   const artifactsRoot = chatArtifactsDir(storage.home, ws.slug, chatId);
   const appRoot = path.join(artifactsRoot, `${appName}.app`);
   const distDir = path.join(appRoot, "dist");
-  const wsRoot = await realpath(workspaceRootPath(storage.home, ws.slug)).catch(() => workspaceRootPath(storage.home, ws.slug));
-  let real: string;
+  const wsRoot = workspaceRootPath(storage.home, ws.slug);
+  const wsRootReal = await realpath(wsRoot).catch(() => wsRoot);
+  const artifactsRootReal = await realpath(artifactsRoot).catch(() => artifactsRoot);
+  let appRootReal: string;
+  let distReal: string;
   try {
-    real = await realpath(distDir);
+    appRootReal = await realpath(appRoot);
+    distReal = await realpath(distDir);
   } catch {
     throw new NotFoundError(`App dist not found: ${appName}.app/dist`);
   }
-  if (!real.startsWith(wsRoot + path.sep) && real !== wsRoot) {
+  if (
+    !isInsidePath(wsRootReal, artifactsRootReal)
+    || !isInsidePath(artifactsRootReal, appRootReal)
+    || !isInsidePath(appRootReal, distReal)
+  ) {
     throw new NotFoundError(`App dist not found: ${appName}.app/dist`);
   }
-  return { distDir: real, workspaceId: ws.workspaceId, slug: ws.slug };
+  return { distDir: distReal, workspaceId: ws.workspaceId, slug: ws.slug };
 }
 
 export interface IssueResult {
@@ -730,18 +736,21 @@ async function resolveGlobalAppDist(
     throw new NotFoundError(`Unknown app: ${appName}`);
   }
   const appsRoot = path.join(storage.home, ".apps");
-  const distDir = path.join(appsRoot, `${appName}.app`, "dist");
-  let real: string;
+  const appRoot = path.join(appsRoot, `${appName}.app`);
+  const distDir = path.join(appRoot, "dist");
+  const appsRootReal = await realpath(appsRoot).catch(() => appsRoot);
+  let appRootReal: string;
+  let distReal: string;
   try {
-    real = await realpath(distDir);
+    appRootReal = await realpath(appRoot);
+    distReal = await realpath(distDir);
   } catch {
     throw new NotFoundError(`Built-in app dist not found: ${appName}.app/dist`);
   }
-  const appsRootReal = await realpath(appsRoot).catch(() => appsRoot);
-  if (!real.startsWith(appsRootReal + path.sep) && real !== appsRootReal) {
+  if (!isInsidePath(appsRootReal, appRootReal) || !isInsidePath(appRootReal, distReal)) {
     throw new NotFoundError(`Built-in app dist not found: ${appName}.app/dist`);
   }
-  return { distDir: real };
+  return { distDir: distReal };
 }
 
 export async function issueGlobalAppSession(
@@ -984,16 +993,18 @@ export async function resolveLibraryAppDist(
   const appRoot = path.join(wsRoot, appPath);
   const distDir = path.join(appRoot, "dist");
   const fsp = await import("node:fs/promises");
-  let real: string;
+  let appRootReal: string;
+  let distReal: string;
   try {
-    real = await fsp.realpath(distDir);
+    appRootReal = await fsp.realpath(appRoot);
+    distReal = await fsp.realpath(distDir);
   } catch {
     throw new NotFoundError(`App dist not found: ${appPath}/dist`);
   }
-  if (!real.startsWith(wsRoot + path.sep) && real !== wsRoot) {
+  if (!isInsidePath(wsRoot, appRootReal) || !isInsidePath(appRootReal, distReal)) {
     throw new NotFoundError(`App dist not found: ${appPath}/dist`);
   }
-  return { distDir: real, appPath, appName };
+  return { distDir: distReal, appPath, appName };
 }
 
 export async function issueLibraryAppSession(
@@ -1045,7 +1056,7 @@ export async function issueLibraryAppSession(
     token,
     expiresAt: expiresAt.toISOString(),
     url,
-    cookieName: libraryCookieNameFor(ws.id, appName),
+    cookieName: libraryCookieNameFor(ws.id, appPath),
     bridgeKey: bridgeKeyFor(token),
     capabilities,
   };
@@ -1144,9 +1155,11 @@ export async function handleStaticLibraryAppRequest(
   // active) cookie that matches our prefix; the verify call then enforces
   // the workspace match.
   const cookies = parseCookies(req);
-  const cookieEntry = Object.entries(cookies).find(
-    ([k]) => k.startsWith("roomy_libapp_") && k.endsWith(`_${appName}`),
-  );
+  const cookieEntry = findLibraryCookieEntry(cookies, {
+    workspaceId: routeWorkspaceId,
+    appPath,
+    appName,
+  });
   const cookieToken = cookieEntry ? cookieEntry[1] : undefined;
 
   let session: VerifiedSession | null = null;
@@ -1181,7 +1194,7 @@ export async function handleStaticLibraryAppRequest(
     }
     // The cookie name we matched on encodes the workspaceId — re-check
     // against the session row (defense in depth).
-    const cookieWs = cookieEntry![0].slice("roomy_libapp_".length, -1 - appName.length);
+    const cookieWs = libraryCookieWorkspaceId(cookieEntry![0], appName);
     if (ses.workspaceId !== cookieWs) {
       throw new UnauthorizedError("Invalid app token");
     }
@@ -1204,7 +1217,7 @@ export async function handleStaticLibraryAppRequest(
   const cookiePath = routeWorkspaceId
     ? `/apps/library/${encodeURIComponent(routeWorkspaceId)}/${encodeURIComponent(routeAssetToken ?? hashToken(queryToken ?? cookieToken ?? ""))}/${encodeAppPathForUrl(appPath)}`
     : `/apps/library/${encodeURIComponent(appName)}`;
-  const cookieName = libraryCookieNameFor(workspaceId!, appName);
+  const cookieName = libraryCookieNameFor(workspaceId!, appPath);
 
   // Bootstrap (query token present): see the chat handler — we set the
   // cookie and serve inline. The previous 302 redirect carried any

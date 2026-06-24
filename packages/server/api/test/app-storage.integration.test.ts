@@ -207,10 +207,17 @@ async function appCookie(appName: string): Promise<string> {
   return cookie;
 }
 
-async function libraryAppCookie(appName: string): Promise<{ cookie: string; setCookie: string; appBasePath: string; assetToken: string }> {
+async function libraryAppCookie(
+  appName: string,
+  opts: { appPath?: string; workspaceId?: string } = {},
+): Promise<{ cookie: string; setCookie: string; appBasePath: string; assetToken: string }> {
+  const qs = new URLSearchParams();
+  if (opts.workspaceId) qs.set("workspaceId", opts.workspaceId);
+  if (opts.appPath) qs.set("path", opts.appPath);
+  const suffix = qs.size > 0 ? `?${qs}` : "";
   const issue = await httpRaw(
     "POST",
-    `/apps/library/${appName}/issue`,
+    `/apps/library/${appName}/issue${suffix}`,
     { bearer: authToken },
   );
   expect(issue.status).toBe(201);
@@ -415,6 +422,42 @@ describe("per-app storage CRUD (PR-H)", () => {
     );
     expect(crossWrite.status).toBe(401);
     await expect(fs.stat(path.join(nestedRoot, ".storage", "data.sqlite"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("uses the path-specific library cookie when same-basename apps both have browser cookies", async () => {
+    const root = await libraryAppCookie(LIBRARY_APP);
+    const nestedAppPath = `NestedDuplicate/${LIBRARY_APP}.app`;
+    const nestedRoot = path.join(workspaceRootPath(home, workspaceSlug), nestedAppPath);
+    await fs.mkdir(path.join(nestedRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(nestedRoot, "roomy.app.json"),
+      JSON.stringify({ name: LIBRARY_APP, capabilities: ["storage.read", "storage.write"] }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(nestedRoot, "dist", "index.html"),
+      "<!doctype html><html><head></head><body>nested duplicate</body></html>",
+      "utf8",
+    );
+    const nested = await libraryAppCookie(LIBRARY_APP, {
+      workspaceId,
+      appPath: nestedAppPath,
+    });
+
+    expect(nested.cookie.split("=")[0]).not.toBe(root.cookie.split("=")[0]);
+    const write = await httpRaw(
+      "POST",
+      `${nested.appBasePath}/storage/items`,
+      {
+        // Browsers send longer-path cookies first. This order made the old
+        // same-name parser keep the root cookie and reject the nested app.
+        headers: { Cookie: `${nested.cookie}; ${root.cookie}` },
+        body: { title: "nested app doc" },
+      },
+    );
+
+    expect(write.status).toBe(201);
+    await expect(fs.stat(path.join(nestedRoot, ".storage", "data.sqlite"))).resolves.toBeTruthy();
   });
 
   it("rejects symlinked library app assets that resolve outside dist/", async () => {

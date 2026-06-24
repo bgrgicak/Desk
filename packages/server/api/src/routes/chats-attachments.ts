@@ -28,11 +28,20 @@ import {
 } from "@roomy-ai/storage";
 import { writeBuiltinApps } from "@roomy-ai/runtime";
 import { workspaceSlugForChat } from "./chats-shared.js";
+import {
+  requireExistingLibraryPathForRoute,
+  requireLibraryDestinationForRoute,
+} from "../workspace-scope-fs.js";
 
 const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
 const APP_DIR_MIME = "application/vnd.roomy.app+directory";
 /** In-sandbox mount path for built-in apps (matches `APPS_SANDBOX_MOUNT_DIR` in @roomy-ai/runtime). */
 const GLOBAL_APP_SANDBOX_PREFIX = "/opt/roomy-apps/";
+
+function libraryTargetPath(name: string, destSubpath: string | undefined): string {
+  const sub = validateLibrarySubpath(destSubpath);
+  return sub ? `${sub}/${name}` : name;
+}
 
 /** Built-in apps live outside the workspace tree. The agent attaches them via their in-sandbox path. */
 function isGlobalAppArtifactPath(raw: string): boolean {
@@ -414,6 +423,12 @@ export async function saveAttachmentToLibrary(
   if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
   const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+  await requireLibraryDestinationForRoute(
+    storage.pool,
+    storage,
+    libraryTargetPath(attachmentName, destSubpath),
+    chat.workspaceId,
+  );
 
   const file = await saveChatAttachmentToLibrary(
     storage,
@@ -448,6 +463,12 @@ export async function saveArtifactToLibrary(
   if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
   const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+  await requireLibraryDestinationForRoute(
+    storage.pool,
+    storage,
+    libraryTargetPath(artifactName, destSubpath),
+    chat.workspaceId,
+  );
 
   const file = await saveChatArtifactToLibrary(
     storage,
@@ -480,6 +501,12 @@ export async function copyAppFromLibrary(
   if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
   const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+  await requireExistingLibraryPathForRoute(
+    storage.pool,
+    storage,
+    libraryPath,
+    chat.workspaceId,
+  );
 
   const ref = await copyLibraryAppToChat(storage, ws.path, chatId, libraryPath);
   emit({
@@ -516,6 +543,12 @@ export async function replaceLibraryAppWithChatArtifact(
   if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
   const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
+  await requireLibraryDestinationForRoute(
+    storage.pool,
+    storage,
+    targetPath,
+    chat.workspaceId,
+  );
 
   const ref = await replaceLibraryAppFromChat(
     storage,

@@ -26,6 +26,7 @@ import {
   chatArtifactsDir,
   ensureLayout,
   ensureWorkspaceLayout,
+  workspaceRootPath,
 } from "@roomy-ai/storage";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
@@ -431,6 +432,74 @@ describe("static-app route + capability bridge", () => {
     );
     expect(leaked.status).toBe(404);
     expect(leaked.body).not.toContain("SYMLINK-SECRET");
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
+  it("rejects a chat app whose dist directory is a symlink outside the app root", async () => {
+    const appName = "linked-dist";
+    const appRoot = path.join(
+      chatArtifactsDir(home, workspaceSlug, chatId),
+      `${appName}.app`,
+    );
+    const siblingDist = path.join(workspaceRootPath(home, workspaceSlug), "linked-chat-dist-target");
+    await fs.mkdir(siblingDist, { recursive: true });
+    await fs.writeFile(path.join(siblingDist, "secret.txt"), "CHAT-DIST-ROOT-SYMLINK-SECRET", "utf8");
+    await fs.mkdir(appRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(appRoot, "roomy.app.json"),
+      JSON.stringify({ name: appName, capabilities: [] }),
+      "utf8",
+    );
+    await fs.symlink(siblingDist, path.join(appRoot, "dist"), "dir");
+
+    const issue = await httpRaw(
+      "POST",
+      `/apps/chat/${chatId}/${appName}/issue`,
+      { bearer: authToken },
+    );
+
+    expect(issue.status).toBe(404);
+    expect(issue.body).not.toContain("CHAT-DIST-ROOT-SYMLINK-SECRET");
+  });
+
+  it("rejects a chat app whose artifacts directory is a symlink outside the workspace", async () => {
+    const { rows: wsRows } = await pool.query<{ id: string }>(
+      "SELECT id FROM workspaces LIMIT 1",
+    );
+    const { rows: agentRows } = await pool.query<{ id: string }>(
+      "SELECT id FROM agents LIMIT 1",
+    );
+    const symlinkChatId = generateId("chat");
+    await pool.query(
+      "INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)",
+      [symlinkChatId, wsRows[0].id, agentRows[0].id, "Linked Artifacts Chat"],
+    );
+    const appName = "linked-artifacts";
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-chat-artifacts-outside-"));
+    const outsideAppRoot = path.join(outside, `${appName}.app`);
+    await fs.mkdir(path.join(outsideAppRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(outsideAppRoot, "roomy.app.json"),
+      JSON.stringify({ name: appName, capabilities: [] }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(outsideAppRoot, "dist", "index.html"),
+      "<!doctype html><html><body>ARTIFACTS-ROOT-SYMLINK-SECRET</body></html>",
+      "utf8",
+    );
+    const chatDir = path.join(workspaceRootPath(home, workspaceSlug), ".chats", symlinkChatId);
+    await fs.mkdir(chatDir, { recursive: true });
+    await fs.symlink(outside, path.join(chatDir, "artifacts"), "dir");
+
+    const issue = await httpRaw(
+      "POST",
+      `/apps/chat/${symlinkChatId}/${appName}/issue`,
+      { bearer: authToken },
+    );
+
+    expect(issue.status).toBe(404);
+    expect(issue.body).not.toContain("ARTIFACTS-ROOT-SYMLINK-SECRET");
     await fs.rm(outside, { recursive: true, force: true });
   });
 
