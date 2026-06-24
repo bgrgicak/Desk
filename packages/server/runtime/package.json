@@ -31,6 +31,21 @@
     "test": "vitest run --passWithNoTests",
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
+  "nx": {
+    "targets": {
+      "build": {
+        "inputs": [
+          "production",
+          "^production",
+          "{workspaceRoot}/packages/apps/**/*",
+          "!{workspaceRoot}/packages/apps/**/*.app/node_modules/**/*"
+        ],
+        "outputs": [
+          "{projectRoot}/dist"
+        ]
+      }
+    }
+  },
   "dependencies": {
     "@roomy-ai/shared": "0.2.6",
     "@roomy-ai/db": "0.2.6",

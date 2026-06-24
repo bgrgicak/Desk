@@ -1,11 +1,16 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Readable } from "node:stream";
 import { Pool, runMigrations } from "@roomy-ai/db";
 import { generateId } from "@roomy-ai/shared";
 import { ensureLayout, ensureWorkspaceLayout, workspaceRootPath } from "@roomy-ai/storage";
-import { findLibraryItems } from "../src/routes/search.js";
+import {
+  findLibraryItems,
+  resetWorkspaceFileIndexRefreshCacheForTests,
+} from "../src/routes/search.js";
+import { upload } from "../src/routes/library.js";
 
 let pool: Pool;
 let home: string;
@@ -40,6 +45,11 @@ afterAll(async () => {
   if (pool) await pool.end();
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbDir) await fs.rm(dbDir, { recursive: true, force: true });
+});
+
+beforeEach(() => {
+  resetWorkspaceFileIndexRefreshCacheForTests();
+  vi.restoreAllMocks();
 });
 
 async function writeWorkspaceFile(relPath: string, body: string): Promise<void> {
@@ -78,6 +88,44 @@ describe("findLibraryItems", () => {
     await writeWorkspaceFile("notes/kanban.md", "Kanban setup notes");
     const hits = await findLibraryItems(pool, { pool, home }, userId, { workspaceId });
     expect(hits.some((hit) => hit.kind === "note" && hit.path === "notes/kanban.md")).toBe(true);
+  });
+
+  it("reuses a fresh library index for repeated lookups", async () => {
+    await writeWorkspaceFile("notes/reuse-index.md", "Reusable index notes");
+    const querySpy = vi.spyOn(pool, "query");
+
+    await findLibraryItems(pool, { pool, home }, userId, { workspaceId, query: "Reusable" });
+    await findLibraryItems(pool, { pool, home }, userId, { workspaceId, query: "Reusable" });
+
+    const deleteRefreshes = querySpy.mock.calls.filter(([sql]) => (
+      typeof sql === "string" && sql.includes("DELETE FROM chat_search_index")
+    ));
+    expect(deleteRefreshes).toHaveLength(1);
+  });
+
+  it("refreshes the library index after route-level file writes", async () => {
+    await writeWorkspaceFile("notes/pre-upload.md", "Pre upload notes");
+    const querySpy = vi.spyOn(pool, "query");
+
+    await findLibraryItems(pool, { pool, home }, userId, { workspaceId, query: "Pre upload" });
+    await upload(
+      { pool, home },
+      workspaceId,
+      {
+        name: "post-upload.md",
+        mime: "text/markdown",
+        stream: Readable.from(["Post upload notes"]),
+      },
+      () => {},
+    );
+
+    const hits = await findLibraryItems(pool, { pool, home }, userId, { workspaceId, query: "Post upload" });
+
+    expect(hits.some((hit) => hit.path === "post-upload.md")).toBe(true);
+    const deleteRefreshes = querySpy.mock.calls.filter(([sql]) => (
+      typeof sql === "string" && sql.includes("DELETE FROM chat_search_index")
+    ));
+    expect(deleteRefreshes).toHaveLength(2);
   });
 
   it("surfaces Roomy-shipped global apps in every workspace's library", async () => {

@@ -3,19 +3,21 @@
  *
  * Real Postgres (well, real SQLite via the same Pool harness used by the
  * chat-delete test). Exercises both the JSON path (`sendMessage`) and
- * the multipart path (`buildSendMessageBodyFromForm`) since both have to
+ * the streaming multipart path since both have to
  * write to `chats.goal` for the column to be the source of truth used
  * by the scheduler in Task 4.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { type IncomingHttpHeaders, type IncomingMessage } from "node:http";
+import { Readable } from "node:stream";
 import { Pool, runMigrations, queries, hashPassword } from "@roomy-ai/db";
 import { ensureLayout, type StorageContext } from "@roomy-ai/storage";
 import { generateId } from "@roomy-ai/shared";
 import {
-  buildSendMessageBodyFromForm,
+  buildSendMessageBodyFromMultipartRequest,
   sendMessage,
 } from "../src/routes/chats.js";
 
@@ -24,6 +26,7 @@ let home: string;
 let dbPath: string;
 let userId: string;
 let workspaceId: string;
+let workspaceSlug: string;
 let agentId: string;
 let storage: StorageContext;
 
@@ -46,14 +49,17 @@ beforeAll(async () => {
     email: "goals@example.com",
   });
 
-  workspaceId = generateId("workspace");
-  await queries.workspaces.insert(pool, {
-    id: workspaceId,
+  const workspace = await queries.workspaces.insert(pool, {
+    id: generateId("workspace"),
     userId,
     name: "ws-goals",
     description: "",
     icon: "",
   });
+  workspaceId = workspace.id;
+  workspaceSlug = workspace.path;
+
+  await fs.mkdir(path.join(home, workspaceSlug), { recursive: true });
 
   agentId = generateId("agent");
   await queries.agents.insert(pool, {
@@ -84,6 +90,18 @@ async function freshChat(): Promise<string> {
     title: "goal test",
   });
   return chatId;
+}
+
+async function multipartRequestFromForm(form: FormData): Promise<IncomingMessage> {
+  const request = new Request("http://localhost/chats/test/messages", {
+    method: "POST",
+    body: form,
+  });
+  const req = Readable.from(Buffer.from(await request.arrayBuffer())) as IncomingMessage & {
+    headers: IncomingHttpHeaders;
+  };
+  req.headers = Object.fromEntries(request.headers.entries());
+  return req;
 }
 
 describe("goal persistence on send", () => {
@@ -206,13 +224,13 @@ describe("goal persistence on send", () => {
     expect(userMessage.content).toEqual({ type: "text", text: "hello" });
   });
 
-  it("multipart path: FormData with goal field is propagated and persisted", async () => {
+  it("multipart path: form fields with goal are propagated and persisted", async () => {
     const chatId = await freshChat();
     const form = new FormData();
     form.set("content", "via multipart");
     form.set("goal", "data");
 
-    const body = await buildSendMessageBodyFromForm(storage, chatId, form);
+    const body = await buildSendMessageBodyFromMultipartRequest(storage, chatId, await multipartRequestFromForm(form));
     expect(body).toMatchObject({ content: "via multipart", goal: "data" });
 
     await sendMessage(pool, chatId, body, () => {});
@@ -220,12 +238,40 @@ describe("goal persistence on send", () => {
     expect(chat?.goal).toBe("data");
   });
 
-  it("multipart path: FormData without goal leaves chats.goal empty", async () => {
+  it("multipart path: streams file uploads and keeps fields that arrive after file parts", async () => {
+    const chatId = await freshChat();
+    const form = new FormData();
+    form.set("content", "with upload");
+    form.set("attachments", JSON.stringify([{ path: "notes/source.md", name: "source.md" }]));
+    form.append("attachment", new Blob(["streamed body"], { type: "text/plain" }), "upload.txt");
+    form.set("kind", "task");
+    form.set("goal", "data");
+
+    const body = await buildSendMessageBodyFromMultipartRequest(storage, chatId, await multipartRequestFromForm(form));
+    expect(body).toMatchObject({
+      content: "with upload",
+      kind: "task",
+      goal: "data",
+    });
+    const attachments = (body as { attachments?: Array<{ path: string; name: string; mime?: string; size?: number }> }).attachments;
+    expect(attachments).toHaveLength(2);
+    expect(attachments?.[0]).toMatchObject({ path: "notes/source.md", name: "source.md" });
+    expect(attachments?.[1]).toMatchObject({
+      path: `.chats/${chatId}/attachments/upload.txt`,
+      name: "upload.txt",
+      mime: "text/plain",
+      size: "streamed body".length,
+    });
+    await expect(fs.readFile(path.join(home, workspaceSlug, attachments?.[1]?.path ?? ""), "utf8"))
+      .resolves.toBe("streamed body");
+  });
+
+  it("multipart path: form without goal leaves chats.goal empty", async () => {
     const chatId = await freshChat();
     const form = new FormData();
     form.set("content", "show me a portfolio site");
 
-    const body = await buildSendMessageBodyFromForm(storage, chatId, form);
+    const body = await buildSendMessageBodyFromMultipartRequest(storage, chatId, await multipartRequestFromForm(form));
     expect(body).toMatchObject({ content: "show me a portfolio site" });
 
     await sendMessage(pool, chatId, body, () => {});
@@ -245,7 +291,7 @@ describe("goal persistence on send", () => {
     form.set("content", "build me an app");
     form.set("goal", "");
 
-    const body = await buildSendMessageBodyFromForm(storage, chatId, form);
+    const body = await buildSendMessageBodyFromMultipartRequest(storage, chatId, await multipartRequestFromForm(form));
     expect(body).toMatchObject({ content: "build me an app", goal: null });
 
     await sendMessage(pool, chatId, body, () => {});

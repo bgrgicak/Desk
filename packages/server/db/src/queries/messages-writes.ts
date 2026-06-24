@@ -515,10 +515,10 @@ export async function retargetAttachmentPaths(
     const next = parsed.map((att) => {
       const p = (att as { path?: unknown })?.path;
       if (typeof p !== "string") return att;
-      // Rewrite the displayed `name` alongside the path: chat attachments
-      // are sent with `name = basename(path)` (see buildSendMessageBodyFromForm
-      // and addStagedFromLibrary), and the message-bubble chip shows it as
-      // the primary title. Leaving it stale produces the "Hello.txt" /
+      // Rewrite the displayed `name` alongside the path: chat attachment
+      // sends and addStagedFromLibrary use `name = basename(path)`, and
+      // the message-bubble chip shows it as the primary title.
+      // Leaving it stale produces the "Hello.txt" /
       // "Hello3.txt" split visible in the UI after a rename.
       if (p === fromPath) {
         changed = true;

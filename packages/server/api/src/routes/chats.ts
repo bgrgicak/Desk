@@ -1,11 +1,13 @@
 import { type Pool } from "@roomy-ai/db";
-import { Readable } from "node:stream";
+import { type IncomingMessage } from "node:http";
+import { Transform } from "node:stream";
 import * as fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import * as path from "node:path";
+import Busboy from "busboy";
 import { Cron } from "croner";
 import { queries } from "@roomy-ai/db";
-import { generateId, ConflictError, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, MessageContentSchema, messageTextPreview, type AttachmentRef, type Chat, type Message, type MessageKind, type WsEvent } from "@roomy-ai/shared";
+import { generateId, ConflictError, MAX_UPLOAD_BYTES, NotFoundError, ValidationError, AttachmentRefSchema, MESSAGE_KINDS, MessageContentSchema, messageTextPreview, type AttachmentRef, type Chat, type Message, type MessageKind, type WsEvent } from "@roomy-ai/shared";
 import { z } from "zod";
 import {
   listSummaryHistory,
@@ -235,76 +237,139 @@ export function validateSendMessageBody(rawData: unknown): void {
   }
 }
 
+function parseAttachmentRefs(raw: string | undefined): AttachmentRef[] {
+  if (!raw) return [];
+
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(raw);
+  } catch {
+    throw new ValidationError("Invalid 'attachments' JSON");
+  }
+
+  const parsed = z.array(AttachmentRefSchema).safeParse(parsedJson);
+  if (!parsed.success) {
+    throw new ValidationError(`Invalid 'attachments' JSON: ${parsed.error.message}`);
+  }
+  return parsed.data;
+}
+
+function bodyFromMultipartFields(
+  fields: Record<string, string>,
+  uploaded: AttachmentRef[],
+  attachmentRefs: AttachmentRef[],
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    content: fields.content ?? "",
+    attachments: [...attachmentRefs, ...uploaded],
+  };
+  for (const k of ["kind", "title", "executeAt", "cron"] as const) {
+    const v = fields[k];
+    if (v !== undefined && v !== "") body[k] = v;
+  }
+  if (fields.goal !== undefined) body.goal = fields.goal === "" ? null : fields.goal;
+  return body;
+}
+
+function createMultipartBodyLimitStream(): Transform {
+  let size = 0;
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      size += chunk.length;
+      if (size > MAX_UPLOAD_BYTES) {
+        callback(new ValidationError(`Request body exceeds maximum size of ${MAX_UPLOAD_BYTES} bytes`));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+}
+
 /**
- * Translates a multipart `POST /chats/{id}/messages` form into the JSON
- * body shape `sendMessage` expects. Files land under
- * `.chats/{id}/attachments/` (the canonical chat-attachment home);
- * `uploadArtifact` handles same-name collisions by appending `-N`.
- *
- * Form fields:
- *   content           — message text (required, may be empty)
- *   attachment        — file part(s); repeated for multi-attachment sends
- *   attachments       — JSON array of AttachmentRef for refs without a
- *                       file body (library mentions)
- *   kind/title/executeAt/cron — optional, same semantics as the JSON path
+ * Translates a multipart `POST /chats/{id}/messages` request into the JSON
+ * body shape `sendMessage` expects. File parts stream directly to
+ * `.chats/{id}/attachments/`; fields may arrive before or after file parts.
  */
-export async function buildSendMessageBodyFromForm(
+export async function buildSendMessageBodyFromMultipartRequest(
   storage: StorageContext,
   chatId: string,
-  form: FormData,
+  req: IncomingMessage,
 ): Promise<unknown> {
+  const contentType = req.headers["content-type"] ?? "";
+  if (!contentType.toLowerCase().startsWith("multipart/form-data")) {
+    throw new ValidationError("Expected multipart/form-data body");
+  }
+
   const chat = await queries.chats.findById(storage.pool, chatId);
   if (!chat) throw new NotFoundError(`Chat not found: ${chatId}`);
   const ws = await queries.workspaces.findById(storage.pool, chat.workspaceId);
   if (!ws) throw new NotFoundError(`Workspace not found: ${chat.workspaceId}`);
 
-  const content = typeof form.get("content") === "string" ? (form.get("content") as string) : "";
+  return new Promise((resolve, reject) => {
+    const bb = Busboy({ headers: req.headers });
+    const bodyLimit = createMultipartBodyLimitStream();
+    const fields: Record<string, string> = {};
+    const uploads: Promise<AttachmentRef>[] = [];
+    let attachmentRefs: AttachmentRef[] = [];
+    let rejected = false;
 
-  // Library-mention refs ride alongside file uploads — same array on the
-  // wire, distinguished only by whether a file part is present.
-  const refsRaw = form.get("attachments");
-  const refs: AttachmentRef[] = [];
-  if (typeof refsRaw === "string" && refsRaw !== "") {
-    const parsed = z.array(AttachmentRefSchema).safeParse(JSON.parse(refsRaw));
-    if (!parsed.success) {
-      throw new ValidationError(`Invalid 'attachments' JSON: ${parsed.error.message}`);
-    }
-    refs.push(...parsed.data);
-  }
+    const rejectOnce = (err: unknown) => {
+      if (rejected) return;
+      rejected = true;
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
 
-  const fileParts = form.getAll("attachment").filter((p): p is File => p instanceof Blob);
-  const uploaded: AttachmentRef[] = [];
-  for (const part of fileParts) {
-    const name = part.name || "upload";
-    const mime = part.type || "application/octet-stream";
-    const stream = Readable.from(Buffer.from(await part.arrayBuffer()));
-    const ref = await uploadArtifact(storage, {
-      workspaceId: chat.workspaceId,
-      workspaceSlug: ws.path,
-      chatId,
-      name,
-      mime,
-      stream,
+    bb.on("field", (fieldname, value) => {
+      fields[fieldname] = value;
+      if (fieldname === "attachments") {
+        try {
+          attachmentRefs = parseAttachmentRefs(value);
+        } catch (err) {
+          bb.destroy(err instanceof Error ? err : new Error(String(err)));
+        }
+      }
     });
-    uploaded.push({
-      path: ref.path,
-      name: ref.name,
-      mime: ref.mime,
-      size: ref.size,
-    });
-  }
 
-  const body: Record<string, unknown> = {
-    content,
-    attachments: [...refs, ...uploaded],
-  };
-  for (const k of ["kind", "title", "executeAt", "cron"] as const) {
-    const v = form.get(k);
-    if (typeof v === "string" && v !== "") body[k] = v;
-  }
-  const goal = form.get("goal");
-  if (typeof goal === "string") body.goal = goal === "" ? null : goal;
-  return body;
+    bb.on("file", (fieldname, fileStream, info) => {
+      if (fieldname !== "attachment") {
+        fileStream.resume();
+        return;
+      }
+      const upload = uploadArtifact(storage, {
+        workspaceId: chat.workspaceId,
+        workspaceSlug: ws.path,
+        chatId,
+        name: info.filename || "upload",
+        mime: info.mimeType || "application/octet-stream",
+        stream: fileStream,
+      }).then((ref) => ({
+        path: ref.path,
+        name: ref.name,
+        mime: ref.mime,
+        size: ref.size,
+      }));
+      uploads.push(upload);
+      upload.catch((err: unknown) => {
+        bb.destroy(err instanceof Error ? err : new Error(String(err)));
+      });
+    });
+
+    bb.on("error", rejectOnce);
+    bodyLimit.on("error", (err) => {
+      bb.destroy(err);
+      rejectOnce(err);
+    });
+    bb.on("close", () => {
+      if (rejected) return;
+      Promise.all(uploads)
+        .then((uploaded) => {
+          resolve(bodyFromMultipartFields(fields, uploaded, attachmentRefs));
+        })
+        .catch(rejectOnce);
+    });
+
+    req.pipe(bodyLimit).pipe(bb);
+  });
 }
 
 export async function sendMessage(
