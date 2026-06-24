@@ -7,6 +7,7 @@ export {
   pruneDriftedContainers,
   sandboxImage,
   providerKeyEnv,
+  rawSandboxCredentialEnvEnabled,
   classifyResourceError,
   growSandboxForResourceError,
   reapIdleSandboxes,

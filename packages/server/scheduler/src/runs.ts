@@ -20,6 +20,7 @@ import {
   cancelRun as runtimeCancelRun,
   isContainerGoneError,
   productionReflectWorkspace,
+  rawSandboxCredentialEnvEnabled,
   resolveLocalSourceEnv,
   type LogEvent,
   type AgentFileInput,
@@ -198,7 +199,9 @@ export function createRunManager(opts: RunManagerOptions) {
     const agentId = msg.agentId ?? (await getDefaultAgentId());
     const agent = await queries.agents.findById(pool, agentId);
     if (!agent) throw new Error(`Reflection agent not found: ${agentId}`);
-    const providerKeys = userId ? await resolveProviderKeys(userId, workspaceId) : {};
+    const providerKeys = userId && rawSandboxCredentialEnvEnabled()
+      ? await resolveProviderKeys(userId, workspaceId)
+      : {};
     const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
     return await runWorkspaceReflection({
       pool,
@@ -467,7 +470,9 @@ export function createRunManager(opts: RunManagerOptions) {
       // explicitly mid-fire; this matches that behaviour at the start.
       logStream = fs.createWriteStream(logFile, { flags: "w" });
       const agentId = msg.agentId ?? chatAgentId ?? (await getDefaultAgentId());
-      const providerKeys = userId ? await resolveProviderKeys(userId, workspaceId) : {};
+      const providerKeys = userId && rawSandboxCredentialEnvEnabled()
+        ? await resolveProviderKeys(userId, workspaceId)
+        : {};
       if (userId && Object.keys(providerKeys).length > 0) {
         await queries.providerKeyAccessLog.logKeyAccess(
           pool, userId, "read", Object.keys(providerKeys), `sandbox_run:${runId}`,

@@ -4,9 +4,9 @@
  * On mount the parent SPA calls `POST /apps/chat/:chatId/:appName/issue`
  * with its bearer token; the server mints a per-app session and returns
  * a bootstrap URL that includes a one-shot `?t=<token>` query param.
- * The iframe loads that URL once; the server consumes the query token,
- * sets a path-scoped HttpOnly cookie, and 302-redirects to the clean
- * `dist/` URL so subsequent asset requests carry the cookie. See
+ * The iframe loads that URL once; the server validates the app token,
+ * sets a path-scoped HttpOnly cookie, serves the HTML inline, and injects
+ * a session-bound asset base URL for sandboxed subresource loads. See
  * `packages/server/api/src/routes/apps.ts`.
  */
 import { useEffect, useRef, useState } from 'react'

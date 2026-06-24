@@ -29,6 +29,7 @@ let port: number;
 let home: string;
 let dbPath: string;
 let mountSourceDir: string;
+let previousAllowedRoots: string | undefined;
 
 beforeAll(async () => {
   const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-vmount-db-"));
@@ -46,6 +47,8 @@ beforeAll(async () => {
   // Sits outside the Roomy home so the test verifies the projection — not a
   // path that happens to resolve under the workspace by accident.
   mountSourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-vmount-src-"));
+  previousAllowedRoots = process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+  process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = mountSourceDir;
   await fs.writeFile(
     path.join(mountSourceDir, "pr-review.md"),
     "# PR Review\n\nfrom host directory\n",
@@ -77,6 +80,8 @@ afterAll(async () => {
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (mountSourceDir) await fs.rm(mountSourceDir, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
+  if (previousAllowedRoots === undefined) delete process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+  else process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = previousAllowedRoots;
 });
 
 function request(
@@ -300,6 +305,122 @@ describe("library virtual-mount reads", () => {
     expect(onDisk).toBe(newBody);
   });
 
+  it("PUT /library/content rejects writes to read-only connected host directories", async () => {
+    const token = await login();
+    const workspaceId = await firstWorkspaceId(token);
+    const userId = await firstUserId();
+    const readOnlyDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-vmount-ro-"));
+    await fs.writeFile(path.join(readOnlyDir, "locked.md"), "locked\n", "utf-8");
+    const priorAllowedRoots = process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+    process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = [mountSourceDir, readOnlyDir].join(",");
+
+    try {
+      const connection = await queries.connectors.createConnection(pool, {
+        ownerUserId: userId,
+        providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+        displayName: "Read-only host folder",
+        capabilities: ["local_filesystem.read"],
+        metadata: {
+          localFilesystem: {
+            directories: [
+              {
+                id: "dir-ro",
+                hostPath: readOnlyDir,
+                homeName: "ReadOnly",
+                access: "read_only",
+              },
+            ],
+          },
+        },
+      });
+      await queries.connectors.replaceWorkspaceGrants(pool, workspaceId, userId, [
+        {
+          connectionId: connection.id,
+          providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+          grantedCapabilities: ["local_filesystem.read"],
+        },
+      ]);
+
+      const target = "ReadOnly/locked.md";
+      const putRes = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const body = Buffer.from("changed\n");
+        const req = http.request(
+          {
+            hostname: "127.0.0.1",
+            port,
+            path: `/library/content?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(target)}`,
+            method: "PUT",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "text/plain",
+              "Content-Length": String(body.length),
+            },
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            res.on("data", (c: Buffer) => chunks.push(c));
+            res.on("end", () => resolve({
+              status: res.statusCode ?? 0,
+              body: Buffer.concat(chunks).toString(),
+            }));
+          },
+        );
+        req.on("error", reject);
+        req.write(body);
+        req.end();
+      });
+      expect(putRes.status).toBe(403);
+      expect(await fs.readFile(path.join(readOnlyDir, "locked.md"), "utf-8")).toBe("locked\n");
+    } finally {
+      if (priorAllowedRoots === undefined) delete process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+      else process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = priorAllowedRoots;
+      await fs.rm(readOnlyDir, { recursive: true, force: true });
+    }
+  });
+
+  it("GET /library/content rejects symlink escapes inside a connected host directory", async () => {
+    const token = await login();
+    const workspaceId = await firstWorkspaceId(token);
+    const userId = await firstUserId();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-vmount-outside-"));
+    await fs.writeFile(path.join(outside, "secret.txt"), "outside secret\n", "utf-8");
+    await fs.symlink(outside, path.join(mountSourceDir, "outside-link"));
+    const connection = await queries.connectors.createConnection(pool, {
+      ownerUserId: userId,
+      providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+      displayName: "Symlink host folder",
+      capabilities: ["local_filesystem.read", "local_filesystem.write"],
+      metadata: {
+        localFilesystem: {
+          directories: [
+            {
+              id: "dir-escape",
+              hostPath: mountSourceDir,
+              homeName: "DownloadsEscape",
+              access: "read_write",
+            },
+          ],
+        },
+      },
+    });
+    await queries.connectors.replaceWorkspaceGrants(pool, workspaceId, userId, [
+      {
+        connectionId: connection.id,
+        providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+        grantedCapabilities: ["local_filesystem.read", "local_filesystem.write"],
+      },
+    ]);
+
+    const contentRes = await getRaw(
+      `/library/content?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent("DownloadsEscape/outside-link/secret.txt")}`,
+      token,
+    );
+    expect(contentRes.status).toBe(404);
+    expect(contentRes.body).not.toContain("outside secret");
+
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
   it("GET /library/content rejects path traversal inside a virtual mount", async () => {
     const token = await login();
     const workspaceId = await firstWorkspaceId(token);
@@ -312,5 +433,57 @@ describe("library virtual-mount reads", () => {
     );
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(res.status).toBeLessThan(500);
+  });
+
+  it("GET /library rejects granted virtual mounts outside the operator allowlist", async () => {
+    const token = await login();
+    const workspaceId = await firstWorkspaceId(token);
+    const userId = await firstUserId();
+    const blockedDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-vmount-blocked-"));
+    const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-vmount-allowed-other-"));
+    const priorAllowedRoots = process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+    process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = allowedRoot;
+    try {
+      const connection = await queries.connectors.createConnection(pool, {
+        ownerUserId: userId,
+        providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+        displayName: "Blocked host folder",
+        capabilities: ["local_filesystem.read"],
+        status: "active",
+        metadata: {
+          localFilesystem: {
+            directories: [
+              {
+                id: "dir-blocked",
+                hostPath: blockedDir,
+                homeName: "BlockedHost",
+                access: "read_only",
+              },
+            ],
+          },
+        },
+      });
+      await queries.connectors.replaceWorkspaceGrants(pool, workspaceId, userId, [
+        {
+          connectionId: connection.id,
+          providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+          grantedCapabilities: ["local_filesystem.read"],
+        },
+      ]);
+
+      const res = await request(
+        "GET",
+        `/library?workspaceId=${encodeURIComponent(workspaceId)}`,
+        token,
+      );
+
+      expect(res.status).toBe(409);
+      expect(JSON.stringify(res.body)).toContain("not allowed");
+    } finally {
+      if (priorAllowedRoots === undefined) delete process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+      else process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = priorAllowedRoots;
+      await fs.rm(blockedDir, { recursive: true, force: true });
+      await fs.rm(allowedRoot, { recursive: true, force: true });
+    }
   });
 });

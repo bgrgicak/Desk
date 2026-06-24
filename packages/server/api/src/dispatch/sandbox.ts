@@ -1,6 +1,6 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { queries } from "@roomy-ai/db";
-import { generateId, NotFoundError, ValidationError, type Agent, type Message, type SandboxSession } from "@roomy-ai/shared";
+import { generateId, NotFoundError, ValidationError, type Agent, type Chat, type Message, type SandboxSession } from "@roomy-ai/shared";
 import { withModule } from "@roomy-ai/shared/logger";
 import { authenticateSandboxToken } from "../auth/sandboxToken.js";
 import { requireOwnedChat } from "../auth/ownership.js";
@@ -10,6 +10,7 @@ import * as vaultRoutes from "../routes/vault.js";
 import { parseBody, sendJson } from "../http/io.js";
 import { parseSearchKinds, parseSearchScope } from "../routes/search-params.js";
 import type { DispatchContext } from "./context.js";
+import type { WorkspaceScope } from "../workspace-scope.js";
 
 const log = withModule("api/dispatch/sandbox");
 
@@ -17,6 +18,12 @@ interface CurrentTaskContext {
   task: Message;
   run: Message | null;
   threadChatId: string;
+}
+
+interface SandboxRouteAuth {
+  agent: Agent;
+  session: SandboxSession;
+  scope: WorkspaceScope;
 }
 
 async function currentTaskFromSession(
@@ -35,14 +42,26 @@ async function currentTaskFromSession(
   };
 }
 
+async function requireSandboxScopedChat(
+  pool: DispatchContext["pool"],
+  chatId: string,
+  auth: SandboxRouteAuth,
+): Promise<Chat> {
+  const chat = await requireOwnedChat(pool, chatId, auth.agent.userId);
+  if (chat.workspaceId !== auth.session.workspaceId) {
+    throw new NotFoundError(`Chat not found: ${chatId}`);
+  }
+  return chat;
+}
+
 async function taskByIdForAgent(
   pool: DispatchContext["pool"],
   taskId: string,
-  agent: Agent,
+  auth: SandboxRouteAuth,
 ): Promise<Message> {
   const task = await queries.messages.findById(pool, taskId);
   if (!task) throw new NotFoundError(`Task not found: ${taskId}`);
-  await requireOwnedChat(pool, task.chatId, agent.userId);
+  await requireSandboxScopedChat(pool, task.chatId, auth);
   if (task.kind !== "task") {
     throw new ValidationError(`Message ${task.id} is not a task (kind=${task.kind})`);
   }
@@ -51,14 +70,16 @@ async function taskByIdForAgent(
 
 async function resolveCurrentTaskOrThrow(
   pool: DispatchContext["pool"],
-  session: SandboxSession,
-  agent: Agent,
+  auth: SandboxRouteAuth,
 ): Promise<CurrentTaskContext> {
-  const ctx = await currentTaskFromSession(pool, session);
+  const ctx = await currentTaskFromSession(pool, auth.session);
   if (!ctx) {
     throw new ValidationError("No current task in this sandbox session; pass an explicit task id or run from a task");
   }
-  await requireOwnedChat(pool, ctx.task.chatId, agent.userId);
+  await requireSandboxScopedChat(pool, ctx.task.chatId, auth);
+  if (ctx.threadChatId !== ctx.task.chatId) {
+    await requireSandboxScopedChat(pool, ctx.threadChatId, auth);
+  }
   return ctx;
 }
 
@@ -108,13 +129,13 @@ export async function dispatchSandbox(
   if (path === "/sandbox/messages" && method === "POST") {
     const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-    const { agent, session } = await authenticateSandboxToken(pool, token);
+    const auth = await authenticateSandboxToken(pool, token);
     const body = await parseBody(req) as { chatId?: string; newChat?: boolean; title?: unknown; content?: unknown; executeAt?: unknown; cron?: unknown; parentTaskId?: unknown } & Record<string, unknown>;
     let parentTask: Message | null = null;
     if (typeof body.parentTaskId === "string" && body.parentTaskId) {
-      parentTask = await taskByIdForAgent(pool, body.parentTaskId, agent);
+      parentTask = await taskByIdForAgent(pool, body.parentTaskId, auth);
     } else if (!body.chatId) {
-      parentTask = (await resolveCurrentTaskOrThrow(pool, session, agent)).task;
+      parentTask = (await resolveCurrentTaskOrThrow(pool, auth)).task;
     }
 
     const sourceChatId = parentTask
@@ -123,7 +144,7 @@ export async function dispatchSandbox(
     if (!sourceChatId || typeof sourceChatId !== "string") {
       throw new ValidationError("Missing chatId or parentTaskId");
     }
-    await requireOwnedChat(pool, sourceChatId, agent.userId);
+    await requireSandboxScopedChat(pool, sourceChatId, auth);
 
     const sendBody = { kind: "task", ...body };
     delete (sendBody as { chatId?: string }).chatId;
@@ -265,7 +286,7 @@ export async function dispatchSandbox(
   if (path === "/sandbox/messages/reschedule" && method === "POST") {
     const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-    const { agent } = await authenticateSandboxToken(pool, token);
+    const auth = await authenticateSandboxToken(pool, token);
     const body = await parseBody(req) as {
       chatId?: unknown;
       messageId?: unknown;
@@ -291,7 +312,7 @@ export async function dispatchSandbox(
       );
     }
 
-    await requireOwnedChat(pool, body.chatId, agent.userId);
+    await requireSandboxScopedChat(pool, body.chatId, auth);
     const current = await queries.messages.findById(pool, body.messageId);
     if (!current || current.chatId !== body.chatId) {
       throw new NotFoundError(`Message not found in chat: ${body.messageId}`);
@@ -360,12 +381,13 @@ export async function dispatchSandbox(
   if (path === "/sandbox/messages/complete" && method === "POST") {
     const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-    const { agent, session } = await authenticateSandboxToken(pool, token);
+    const auth = await authenticateSandboxToken(pool, token);
+    const { session } = auth;
     const body = await parseBody(req) as { chatId?: unknown; messageId?: unknown; message?: unknown };
     const messageIdArg = typeof body.messageId === "string" && body.messageId ? body.messageId : null;
     const chatIdArg = typeof body.chatId === "string" && body.chatId ? body.chatId : null;
     if (!messageIdArg && !chatIdArg) {
-      const current = await resolveCurrentTaskOrThrow(pool, session, agent);
+      const current = await resolveCurrentTaskOrThrow(pool, auth);
       body.messageId = current.task.id;
     }
 
@@ -376,7 +398,7 @@ export async function dispatchSandbox(
         if (!found) {
           throw new NotFoundError(`Task not found: ${currentMessageId}`);
         }
-        await requireOwnedChat(pool, found.chatId, agent.userId);
+        await requireSandboxScopedChat(pool, found.chatId, auth);
         return found;
       }
       if (messageIdArg) {
@@ -386,11 +408,11 @@ export async function dispatchSandbox(
         }
         // Validate ownership via the anchor's own chat — the agent must own
         // the chat the task lives in, not whatever chat it's calling from.
-        await requireOwnedChat(pool, found.chatId, agent.userId);
+        await requireSandboxScopedChat(pool, found.chatId, auth);
         return found;
       }
       const threadChatId = chatIdArg!;
-      await requireOwnedChat(pool, threadChatId, agent.userId);
+      await requireSandboxScopedChat(pool, threadChatId, auth);
       const found = await queries.messages.findAnchorForThreadChat(pool, threadChatId);
       if (!found) {
         throw new NotFoundError(
@@ -462,11 +484,12 @@ export async function dispatchSandbox(
   if (path === "/sandbox/tasks/progress" && method === "POST") {
     const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-    const { agent, session } = await authenticateSandboxToken(pool, token);
+    const auth = await authenticateSandboxToken(pool, token);
+    const { agent } = auth;
     const body = await parseBody(req) as { message?: unknown };
     const rawMessage = typeof body.message === "string" ? body.message.trim() : "";
     if (!rawMessage) throw new ValidationError("Missing progress message");
-    const current = await resolveCurrentTaskOrThrow(pool, session, agent);
+    const current = await resolveCurrentTaskOrThrow(pool, auth);
     const progress = await queries.messages.insert(pool, {
       id: generateId("message"),
       chatId: current.threadChatId,
@@ -489,11 +512,12 @@ export async function dispatchSandbox(
   if (path === "/sandbox/tasks/fail" && method === "POST") {
     const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-    const { agent, session } = await authenticateSandboxToken(pool, token);
+    const auth = await authenticateSandboxToken(pool, token);
+    const { agent } = auth;
     const body = await parseBody(req) as { message?: unknown };
     const rawMessage = typeof body.message === "string" ? body.message.trim() : "";
     if (!rawMessage) throw new ValidationError("Missing failure message");
-    const current = await resolveCurrentTaskOrThrow(pool, session, agent);
+    const current = await resolveCurrentTaskOrThrow(pool, auth);
 
     const updatedRun = current.run
       ? await queries.messages.finalizeExecution(pool, current.run.id, "failed") ?? await queries.messages.findById(pool, current.run.id)
@@ -526,7 +550,7 @@ export async function dispatchSandbox(
   if (path === "/sandbox/messages/cancel" && method === "POST") {
     const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-    const { agent } = await authenticateSandboxToken(pool, token);
+    const auth = await authenticateSandboxToken(pool, token);
     const body = await parseBody(req) as { chatId?: unknown; messageId?: unknown };
     if (typeof body.chatId !== "string" || !body.chatId) {
       throw new ValidationError("Missing chatId");
@@ -535,7 +559,7 @@ export async function dispatchSandbox(
       throw new ValidationError("Missing messageId");
     }
 
-    await requireOwnedChat(pool, body.chatId, agent.userId);
+    await requireSandboxScopedChat(pool, body.chatId, auth);
     const current = await queries.messages.findById(pool, body.messageId);
     if (!current || current.chatId !== body.chatId) {
       throw new NotFoundError(`Message not found in chat: ${body.messageId}`);
@@ -562,7 +586,7 @@ export async function dispatchSandbox(
   if (path === "/sandbox/seed-messages" && method === "POST") {
     const tokenHeader = req.headers["x-roomy-sandbox-token"];
     const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-    const { agent } = await authenticateSandboxToken(pool, token);
+    const auth = await authenticateSandboxToken(pool, token);
     const body = await parseBody(req) as {
       chatId?: string;
       messages?: Array<{ role?: string; text: string }>;
@@ -573,7 +597,7 @@ export async function dispatchSandbox(
     if (!Array.isArray(body.messages) || body.messages.length === 0) {
       throw new ValidationError("Missing or empty messages array");
     }
-    await requireOwnedChat(pool, body.chatId, agent.userId);
+    await requireSandboxScopedChat(pool, body.chatId, auth);
 
     const inserted: unknown[] = [];
     for (const m of body.messages) {

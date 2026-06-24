@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { type Pool } from "@roomy-ai/db";
 import {
+  ForbiddenError,
   NotFoundError,
   MAX_UPLOAD_BYTES,
   ValidationError,
@@ -14,7 +15,7 @@ import {
   chatArtifactsDir,
   chatAttachmentsDir,
   resolveHostPath,
-  resolveLibraryHostPath,
+  resolveLibraryHostPathDetails,
   tmpDir,
   trashDir,
   workspaceRootPath,
@@ -132,8 +133,28 @@ function rejectHiddenName(name: string): void {
   }
 }
 
+function validateBasename(name: string, field = "filename"): void {
+  if (
+    name === ""
+    || name === "."
+    || name === ".."
+    || name.includes("/")
+    || name.includes("\\")
+    || name.includes("\0")
+    || path.basename(name) !== name
+  ) {
+    throw new ValidationError(`Invalid ${field}: ${name}`);
+  }
+}
+
+function validateUploadName(name: string): void {
+  validateBasename(name, "filename");
+  rejectHiddenName(name);
+}
+
 /** Generates a non-colliding filename inside `dir` for a desired `name`. */
 export async function uniqueDestPath(dir: string, name: string): Promise<string> {
+  validateBasename(name);
   const ext = path.extname(name);
   const stem = path.basename(name, ext);
   let candidate = name;
@@ -157,6 +178,63 @@ export function relativeSymlinkTarget(linkPath: string, targetAbs: string): stri
   return path.relative(path.dirname(linkPath), targetAbs).split(path.sep).join("/") || ".";
 }
 
+function isInsidePath(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+async function requireExistingContainedPath(
+  root: string,
+  target: string,
+  relPath: string,
+): Promise<string> {
+  let realRoot: string;
+  let realTarget: string;
+  try {
+    [realRoot, realTarget] = await Promise.all([
+      fs.realpath(root),
+      fs.realpath(target),
+    ]);
+  } catch {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
+  if (!isInsidePath(realRoot, realTarget)) {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
+  return realTarget;
+}
+
+async function ensureDirectoryForWriteInside(root: string, dir: string, relPath: string): Promise<void> {
+  const realRoot = await fs.realpath(root).catch(() => null);
+  if (!realRoot) throw new NotFoundError(`Path not found: ${relPath}`);
+
+  const rootToDir = path.relative(root, dir);
+  if (rootToDir && (rootToDir === ".." || rootToDir.startsWith(`..${path.sep}`) || path.isAbsolute(rootToDir))) {
+    throw new ValidationError(`Path traversal detected: ${relPath}`);
+  }
+
+  let current = root;
+  const segments = rootToDir ? rootToDir.split(path.sep).filter(Boolean) : [];
+  for (const segment of segments) {
+    current = path.join(current, segment);
+    const st = await fs.lstat(current).catch(() => null);
+    if (!st) break;
+    if (st.isSymbolicLink() || !st.isDirectory()) {
+      throw new NotFoundError(`Path not found: ${relPath}`);
+    }
+    const realCurrent = await fs.realpath(current).catch(() => null);
+    if (!realCurrent || !isInsidePath(realRoot, realCurrent)) {
+      throw new NotFoundError(`Path not found: ${relPath}`);
+    }
+  }
+
+  await fs.mkdir(dir, { recursive: true });
+  const realDir = await fs.realpath(dir).catch(() => null);
+  if (!realDir || !isInsidePath(realRoot, realDir)) {
+    throw new NotFoundError(`Path not found: ${relPath}`);
+  }
+}
+
 /**
  * Uploads a file to the filesystem. No DB row is written — the FS is the
  * single source of truth. Returns a FileRef describing the workspace-relative
@@ -169,7 +247,7 @@ export async function uploadArtifact(
   ctx: StorageContext,
   input: UploadArtifactInput,
 ): Promise<FileRef> {
-  rejectHiddenName(input.name);
+  validateUploadName(input.name);
 
   const tmpPath = path.join(tmpDir(ctx.home), crypto.randomUUID());
 
@@ -178,10 +256,15 @@ export async function uploadArtifact(
     destDir = await chatAttachmentsDir(ctx.home, input.workspaceSlug, input.chatId);
   } else {
     const root = workspaceRootPath(ctx.home, input.workspaceSlug);
+    await fs.mkdir(root, { recursive: true });
     const sub = validateLibrarySubpath(input.subpath);
     destDir = sub ? path.join(root, sub) : root;
   }
-  await fs.mkdir(destDir, { recursive: true });
+  await ensureDirectoryForWriteInside(
+    workspaceRootPath(ctx.home, input.workspaceSlug),
+    destDir,
+    input.subpath ?? input.name,
+  );
 
   const destPath = await uniqueDestPath(destDir, input.name);
 
@@ -231,13 +314,15 @@ export async function uploadArtifact(
   };
 }
 
-async function fileRefFromDisk(
+async function fileRefAndPathFromDisk(
   home: string,
   slug: string,
   relPath: string,
   virtualMounts?: readonly VirtualLibraryMount[],
-): Promise<FileRef> {
-  const abs = resolveLibraryHostPath(home, slug, relPath, virtualMounts);
+): Promise<{ file: FileRef; abs: string }> {
+  const resolved = resolveLibraryHostPathDetails(home, slug, relPath, virtualMounts);
+  const abs = resolved.path;
+  await requireExistingContainedPath(resolved.root, abs, relPath);
   const stat = await fs.stat(abs).catch(() => null);
   if (!stat) throw new NotFoundError(`File not found: ${relPath}`);
   // Allow `.app/` directories to be stat'd so the frontend can render them
@@ -248,24 +333,39 @@ async function fileRefFromDisk(
       throw new NotFoundError(`Not a file: ${relPath}`);
     }
     return {
-      path: relPath.split(path.sep).join("/"),
-      name,
-      mime: "inode/directory",
-      size: 0,
-      createdAt: stat.birthtime.toISOString(),
-      updatedAtMs: String(stat.mtimeMs),
-      isDir: true,
+      abs,
+      file: {
+        path: relPath.split(path.sep).join("/"),
+        name,
+        mime: "inode/directory",
+        size: 0,
+        createdAt: stat.birthtime.toISOString(),
+        updatedAtMs: String(stat.mtimeMs),
+        isDir: true,
+      },
     };
   }
   if (!stat.isFile()) throw new NotFoundError(`Not a file: ${relPath}`);
   return {
-    path: relPath.split(path.sep).join("/"),
-    name: path.basename(abs),
-    mime: guessMime(abs),
-    size: stat.size,
-    createdAt: stat.birthtime.toISOString(),
-    updatedAtMs: String(stat.mtimeMs),
+    abs,
+    file: {
+      path: relPath.split(path.sep).join("/"),
+      name: path.basename(abs),
+      mime: guessMime(abs),
+      size: stat.size,
+      createdAt: stat.birthtime.toISOString(),
+      updatedAtMs: String(stat.mtimeMs),
+    },
   };
+}
+
+async function fileRefFromDisk(
+  home: string,
+  slug: string,
+  relPath: string,
+  virtualMounts?: readonly VirtualLibraryMount[],
+): Promise<FileRef> {
+  return (await fileRefAndPathFromDisk(home, slug, relPath, virtualMounts)).file;
 }
 
 /**
@@ -281,8 +381,7 @@ export async function readFile(
   relPath: string,
   virtualMounts?: readonly VirtualLibraryMount[],
 ): Promise<{ stream: Readable; file: FileRef }> {
-  const file = await fileRefFromDisk(ctx.home, slug, relPath, virtualMounts);
-  const abs = resolveLibraryHostPath(ctx.home, slug, relPath, virtualMounts);
+  const { file, abs } = await fileRefAndPathFromDisk(ctx.home, slug, relPath, virtualMounts);
   const stream = createReadStream(abs);
   return { stream, file };
 }
@@ -320,7 +419,9 @@ export async function statPath(
   relPath: string,
   virtualMounts?: readonly VirtualLibraryMount[],
 ): Promise<{ isDir: boolean }> {
-  const abs = resolveLibraryHostPath(ctx.home, slug, relPath, virtualMounts);
+  const resolved = resolveLibraryHostPathDetails(ctx.home, slug, relPath, virtualMounts);
+  const abs = resolved.path;
+  await requireExistingContainedPath(resolved.root, abs, relPath);
   const stat = await fs.stat(abs).catch(() => null);
   if (!stat) throw new NotFoundError(`Path not found: ${relPath}`);
   if (!stat.isFile() && !stat.isDirectory()) {
@@ -346,14 +447,29 @@ export async function overwriteFile(
   stream: Readable,
   virtualMounts?: readonly VirtualLibraryMount[],
 ): Promise<FileRef> {
-  const abs = resolveLibraryHostPath(ctx.home, slug, relPath, virtualMounts);
+  const resolved = resolveLibraryHostPathDetails(ctx.home, slug, relPath, virtualMounts);
+  if (resolved.access !== "read_write") {
+    throw new ForbiddenError(`Local filesystem mount is read-only: ${relPath}`);
+  }
+  if (!resolved.virtual) {
+    await fs.mkdir(resolved.root, { recursive: true });
+  }
+
+  const abs = resolved.path;
+  const linkStat = await fs.lstat(abs).catch(() => null);
+  if (linkStat?.isSymbolicLink()) {
+    throw new NotFoundError(`File not found: ${relPath}`);
+  }
   const stat = await fs.stat(abs).catch(() => null);
   if (stat && !stat.isFile()) throw new NotFoundError(`Not a file: ${relPath}`);
+  if (stat) {
+    await requireExistingContainedPath(resolved.root, abs, relPath);
+  }
 
   // Ensure parent directory exists so new files in nested hidden paths
   // (e.g. .memory/workspace.md) can be created via PUT.
   const parent = path.dirname(abs);
-  await fs.mkdir(parent, { recursive: true });
+  await ensureDirectoryForWriteInside(resolved.root, parent, relPath);
 
   // Place the temp file beside the target rather than under Roomy's tmp
   // dir. Virtual mounts can live on a different filesystem (e.g. a user's
@@ -409,7 +525,11 @@ export async function pinLibraryFileToChat(
   chatId: string,
   libraryRelPath: string,
 ): Promise<FileRef> {
-  const targetAbs = resolveHostPath(ctx.home, slug, libraryRelPath);
+  const root = workspaceRootPath(ctx.home, slug);
+  const rootReal = await fs.realpath(root);
+  const requestedTargetAbs = resolveHostPath(ctx.home, slug, libraryRelPath);
+  const targetReal = await requireExistingContainedPath(root, requestedTargetAbs, libraryRelPath);
+  const targetAbs = path.join(root, path.relative(rootReal, targetReal));
   const targetStat = await fs.stat(targetAbs).catch(() => null);
   if (!targetStat) throw new NotFoundError(`File not found: ${libraryRelPath}`);
   const isAppDir =
@@ -418,17 +538,18 @@ export async function pinLibraryFileToChat(
     path.basename(targetAbs) !== ".app";
   if (!targetStat.isFile() && !isAppDir) throw new ValidationError(`Not a file: ${libraryRelPath}`);
 
-  const root = workspaceRootPath(ctx.home, slug);
   const attDir = await chatAttachmentsDir(ctx.home, slug, chatId);
+  const attDirReal = await fs.realpath(attDir).catch(() => attDir);
 
   // A library path that already lives inside this chat's attachments dir
   // is already pinned (or is a chat-local upload). Pinning it would
   // create a self-referential symlink — refuse.
-  if (targetAbs === attDir || targetAbs.startsWith(attDir + path.sep)) {
+  const requestedTargetReal = await fs.realpath(requestedTargetAbs).catch(() => targetAbs);
+  if (requestedTargetReal === attDirReal || requestedTargetReal.startsWith(attDirReal + path.sep)) {
     throw new ValidationError(`Cannot pin a file that is already a chat attachment: ${libraryRelPath}`);
   }
 
-  const desiredName = path.basename(targetAbs);
+  const desiredName = path.basename(requestedTargetAbs);
 
   // The same library target can be reachable through more than one visible
   // path (for example after an app was saved/promoted under an alias). Treat

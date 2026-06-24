@@ -75,7 +75,7 @@ describe("classifyResourceError", () => {
   });
 });
 
-describe("bindsSatisfy — subset semantics for mount drift", () => {
+describe("bindsSatisfy — exact semantics for mount drift", () => {
   const workspace = "/home/bero/Roomy/proj:/home/agent:rw";
   const skills = "/home/bero/Roomy/.skills:/opt/roomy-skills:ro";
   const projectsLocal = "/home/bero/Projects:/home/agent/Projects:rw";
@@ -85,17 +85,16 @@ describe("bindsSatisfy — subset semantics for mount drift", () => {
     expect(bindsSatisfy([workspace, skills], [workspace, skills])).toBe(true);
   });
 
-  it("accepts extras in actual beyond what expected requires", () => {
-    // Container has more mounts than the caller asked about (the
-    // chaos-test failure mode: container created with local-fs mounts,
-    // then a utility caller without a mountPlan asks for just the
-    // defaults — must not be flagged as drift).
+  it("rejects extras in actual beyond what expected requires", () => {
+    // Revoked local-filesystem grants must not survive as extra binds in
+    // a warm container. Reuse is safe only when the live bind set exactly
+    // matches the current mount plan.
     expect(
       bindsSatisfy(
         [workspace, skills, projectsLocal, downloadsLocal],
         [workspace, skills],
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("rejects when an expected mount is missing", () => {
@@ -123,20 +122,65 @@ describe("bindsSatisfy — subset semantics for mount drift", () => {
 
   it("is order-insensitive — Docker reports binds in arbitrary order", () => {
     expect(
-      bindsSatisfy([skills, projectsLocal, workspace], [workspace, skills]),
+      bindsSatisfy([skills, workspace], [workspace, skills]),
     ).toBe(true);
   });
 });
 
 describe("providerKeyEnv", () => {
+  it("does not fall back to host process provider keys", () => {
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "host-openai-key";
+    try {
+      expect(providerKeyEnv()).not.toContain("OPENAI_API_KEY=host-openai-key");
+    } finally {
+      if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previousOpenAiKey;
+    }
+  });
+
+  it("requires explicit opt-in before forwarding provider keys as sandbox env", () => {
+    const previous = process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    try {
+      expect(providerKeyEnv({ OPENAI_API_KEY: "sk-test" })).toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+      else process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = previous;
+    }
+  });
+
+  it("forwards explicit provider keys when raw sandbox credential env is opted in", () => {
+    const previous = process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = "1";
+    try {
+      expect(providerKeyEnv({
+        OPENAI_API_KEY: "sk-test",
+        NOT_ALLOWED: "nope",
+      })).toEqual([
+        "OPENAI_API_KEY=sk-test",
+      ]);
+    } finally {
+      if (previous === undefined) delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+      else process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = previous;
+    }
+  });
+
   it("keeps sandbox connection tokens out of create-time container env", () => {
-    expect(providerKeyEnv({
-      OPENAI_API_KEY: "sk-test",
-      GITHUB_TOKEN: "github_pat_test",
-      NOT_ALLOWED: "nope",
-    })).toEqual([
-      "OPENAI_API_KEY=sk-test",
-    ]);
+    const previous = process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = "1";
+    try {
+      expect(providerKeyEnv({
+        OPENAI_API_KEY: "sk-test",
+        GITHUB_TOKEN: "github_pat_test",
+        NOT_ALLOWED: "nope",
+      })).toEqual([
+        "OPENAI_API_KEY=sk-test",
+      ]);
+    } finally {
+      if (previous === undefined) delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+      else process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = previous;
+    }
   });
 });
 
@@ -160,34 +204,71 @@ describe("providerKeyExecEnv", () => {
   });
 
   it("forwards GitHub connection tokens per exec alongside model provider keys", () => {
-    const env = providerKeyExecEnv({
-      OPENAI_API_KEY: "sk-test",
-      GITHUB_TOKEN: "github_pat_test",
-      NOT_ALLOWED: "nope",
-    });
-    expect(env).toContain("GITHUB_TOKEN=github_pat_test");
-    expect(env).toContain("GH_TOKEN=github_pat_test");
+    const previous = process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = "1";
+    try {
+      const env = providerKeyExecEnv({
+        OPENAI_API_KEY: "sk-test",
+        GITHUB_TOKEN: "github_pat_test",
+        NOT_ALLOWED: "nope",
+      });
+      expect(env).toContain("GITHUB_TOKEN=github_pat_test");
+      expect(env).toContain("GH_TOKEN=github_pat_test");
+    } finally {
+      if (previous === undefined) delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+      else process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = previous;
+    }
   });
 
   it("clears missing connection keys so warm sandboxes cannot reuse deleted tokens", () => {
-    const env = providerKeyExecEnv({ OPENAI_API_KEY: "sk-test" });
+    const previous = process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = "1";
+    try {
+      const env = providerKeyExecEnv({ OPENAI_API_KEY: "sk-test" });
 
-    expect(env).toContain("OPENAI_API_KEY=sk-test");
-    expect(env).toContain("GITHUB_TOKEN=");
-    expect(env).toContain("GH_TOKEN=");
+      expect(env).toContain("OPENAI_API_KEY=sk-test");
+      expect(env).toContain("GITHUB_TOKEN=");
+      expect(env).toContain("GH_TOKEN=");
+    } finally {
+      if (previous === undefined) delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+      else process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = previous;
+    }
+  });
+
+  it("clears managed env names even when raw credential forwarding is not opted in", () => {
+    const previous = process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    try {
+      const env = providerKeyExecEnv({ OPENAI_API_KEY: "sk-test" });
+
+      expect(env).not.toContain("OPENAI_API_KEY=sk-test");
+      expect(env).toContain("OPENAI_API_KEY=");
+      expect(env).toContain("GITHUB_TOKEN=");
+      expect(env).toContain("GH_TOKEN=");
+    } finally {
+      if (previous === undefined) delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+      else process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = previous;
+    }
   });
 
   it("does not let extra env override managed connection credentials", () => {
-    const env = providerKeyExecEnv(
-      { OPENAI_API_KEY: "sk-test" },
-      { GITHUB_TOKEN: "stale", GH_TOKEN: "stale", PI_AUTH_JSON_BASE64: "codex" },
-    );
+    const previous = process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = "1";
+    try {
+      const env = providerKeyExecEnv(
+        { OPENAI_API_KEY: "sk-test" },
+        { GITHUB_TOKEN: "stale", GH_TOKEN: "stale", PI_AUTH_JSON_BASE64: "codex" },
+      );
 
-    expect(env).not.toContain("GITHUB_TOKEN=stale");
-    expect(env).not.toContain("GH_TOKEN=stale");
-    expect(env).toContain("GITHUB_TOKEN=");
-    expect(env).toContain("GH_TOKEN=");
-    expect(env).toContain("PI_AUTH_JSON_BASE64=codex");
+      expect(env).not.toContain("GITHUB_TOKEN=stale");
+      expect(env).not.toContain("GH_TOKEN=stale");
+      expect(env).toContain("GITHUB_TOKEN=");
+      expect(env).toContain("GH_TOKEN=");
+      expect(env).toContain("PI_AUTH_JSON_BASE64=codex");
+    } finally {
+      if (previous === undefined) delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+      else process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = previous;
+    }
   });
 });
 

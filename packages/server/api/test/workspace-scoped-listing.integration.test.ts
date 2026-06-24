@@ -140,7 +140,7 @@ function requestMultipart(
     const chunks: Buffer[] = [];
     for (const p of parts) {
       const header = [`--${boundary}`];
-      const disposition = p.filename
+      const disposition = p.filename !== undefined
         ? `Content-Disposition: form-data; name="${p.name}"; filename="${p.filename}"`
         : `Content-Disposition: form-data; name="${p.name}"`;
       header.push(disposition);
@@ -276,6 +276,23 @@ describe("GET /library?workspaceId=", () => {
     expect(uploaded.path).toBe("root-relative.txt");
   });
 
+  it("rejects multipart upload filenames that contain path traversal", async () => {
+    const up = await requestMultipart(
+      "POST",
+      `/library?workspaceId=${alpha.wsA}`,
+      alpha.token,
+      [
+        { name: "name", body: Buffer.from("nested/../../escape.txt") },
+        { name: "file", filename: "", contentType: "text/plain", body: Buffer.from("escape") },
+      ],
+    );
+    expect(up.status).toBe(400);
+
+    const ws = await queries.workspaces.findById(pool, alpha.wsA);
+    expect(ws).toBeTruthy();
+    await expect(fs.access(path.join(home, ws!.path, "escape.txt"))).rejects.toThrow();
+  });
+
   it("returns an empty list when workspaceId is absent (no implicit fallback)", async () => {
     // See the matching `/chats` test above — the implicit fallback was
     // removed when the hub workspace started sorting first.
@@ -355,6 +372,72 @@ describe("DELETE /library", () => {
     const listA = await request("GET", `/library?workspaceId=${alpha.wsA}`, alpha.token);
     const itemsA = (listA.body as { items: Array<{ path: string }> }).items;
     expect(itemsA.some((i) => i.path === filePath)).toBe(true);
+  });
+
+  it("does not follow symlinked workspace parents when deleting", async () => {
+    const ws = await queries.workspaces.findById(pool, alpha.wsA);
+    expect(ws).toBeTruthy();
+    const root = path.join(home, ws!.path);
+    await fs.mkdir(root, { recursive: true });
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-delete-outside-"));
+    await fs.writeFile(path.join(outside, "secret.txt"), "keep me", "utf-8");
+    await fs.symlink(outside, path.join(root, "outside-delete"));
+
+    const res = await request(
+      "DELETE",
+      `/library?workspaceId=${alpha.wsA}&path=${encodeURIComponent("outside-delete/secret.txt")}`,
+      alpha.token,
+    );
+    expect(res.status).toBe(404);
+    expect(await fs.readFile(path.join(outside, "secret.txt"), "utf-8")).toBe("keep me");
+
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+});
+
+describe("PATCH /library", () => {
+  it("does not follow symlinked workspace parents when moving", async () => {
+    const ws = await queries.workspaces.findById(pool, alpha.wsA);
+    expect(ws).toBeTruthy();
+    const root = path.join(home, ws!.path);
+    await fs.mkdir(root, { recursive: true });
+    await fs.writeFile(path.join(root, "move-source.txt"), "source", "utf-8");
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-move-outside-"));
+    await fs.symlink(outside, path.join(root, "outside-move"));
+
+    const res = await request(
+      "PATCH",
+      `/library?workspaceId=${alpha.wsA}`,
+      alpha.token,
+      { from: "move-source.txt", to: "outside-move/moved.txt" },
+    );
+    expect(res.status).toBe(404);
+    await expect(fs.access(path.join(outside, "moved.txt"))).rejects.toThrow();
+    expect(await fs.readFile(path.join(root, "move-source.txt"), "utf-8")).toBe("source");
+
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+});
+
+describe("POST /library/folder", () => {
+  it("does not follow symlinked workspace parents when creating folders", async () => {
+    const ws = await queries.workspaces.findById(pool, alpha.wsA);
+    expect(ws).toBeTruthy();
+    const root = path.join(home, ws!.path);
+    await fs.mkdir(root, { recursive: true });
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-folder-outside-"));
+    await fs.symlink(outside, path.join(root, "outside-folder"));
+
+    const res = await request(
+      "POST",
+      `/library/folder?workspaceId=${alpha.wsA}`,
+      alpha.token,
+      { path: "outside-folder/new-dir" },
+    );
+    expect(res.status).toBe(404);
+    await expect(fs.access(path.join(outside, "new-dir"))).rejects.toThrow();
+
+    await fs.rm(outside, { recursive: true, force: true });
   });
 });
 

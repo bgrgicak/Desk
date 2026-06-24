@@ -289,17 +289,17 @@ export async function ensureImage(kind: WorkspaceKind = "project"): Promise<void
  * workspace, any agent enrolled in the workspace execs through it.
  *
  * Reuse is guarded by a drift check: if the running container's image id,
- * bind layout, or runtime user no longer matches what the current code
+ * exact bind layout, or runtime user no longer matches what the current code
  * would produce, it's torn down and recreated. Silent reuse of a drifted
  * container previously masked real bugs for days — a stale agent file
  * inside an old container kept resolving a long-removed model, while
  * fresh host code had already moved on.
  *
  * `providerKeys` is an optional map of AI-provider credentials to inject as
- * create-time env vars. Sandbox tool connection tokens are intentionally not
- * baked into the long-lived container config; they are injected per exec.
- * When omitted the function falls back to reading the host env — that legacy
- * path is what tests without DB access use.
+ * create-time env vars only when ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV=1.
+ * Sandbox tool connection tokens are intentionally not baked into the
+ * long-lived container config; they are injected per exec under the same
+ * explicit raw-env opt-in.
  *
  * `extraEnv` carries non-key env vars (e.g. `PI_AUTH_JSON_BASE64` for the
  * Codex/ChatGPT bridge) that should be present at container birth so the
@@ -622,20 +622,15 @@ export async function sandboxUser(engine?: Engine): Promise<string> {
 }
 
 /**
- * Subset semantics for bind-mount drift checks: actual must include every
- * expected mount, but extras (mounts a previous caller asked for) are fine.
- *
- * Equality was rejected because two callers with different but-overlapping
- * mount plans cause an infinite recreate ping-pong: each call fails the
- * exact-match drift check, recreates the container with its plan, then the
- * next call from the other caller sees missing mounts and recreates again.
- * Subset is the correct invariant: "the caller's required mounts must be
- * live; extras the previous caller asked for are harmless."
+ * Exact semantics for bind-mount drift checks. Extra binds are not harmless:
+ * a revoked local-filesystem grant would otherwise remain reachable in a
+ * warm container until some unrelated recreate happens.
  */
 export function bindsSatisfy(actual: string[] | undefined, expected: string[]): boolean {
-  if (expected.length === 0) return true;
   const have = new Set(actual ?? []);
-  for (const e of expected) {
+  const want = new Set(expected);
+  if (have.size !== want.size) return false;
+  for (const e of want) {
     if (!have.has(e)) return false;
   }
   return true;
@@ -657,10 +652,10 @@ function parseBindStrings(strings: string[]): BindMount[] {
 /**
  * Formats AI-provider credentials as engine env entries for container create.
  *
- * With `keys` provided, uses that map (intersected with PROVIDER_KEY_VARS to
- * avoid leaking unrelated env into the container). Without, falls back to
- * the host process env — a legacy path for tests and dev flows that haven't
- * moved to DB-backed keys yet.
+ * With `keys` provided and ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV=1, uses
+ * that map (intersected with PROVIDER_KEY_VARS to avoid leaking unrelated
+ * env into the container). Without the explicit opt-in, provider keys are
+ * never materialized as sandbox environment variables.
  *
  * `extraEnv` is emitted after filtering out managed connection key names.
  * Use it for non-key credentials such as `PI_AUTH_JSON_BASE64`, which carry
@@ -670,15 +665,24 @@ function parseBindStrings(strings: string[]): BindMount[] {
  * Only keys with non-empty values are emitted, so pi's auto-detection
  * doesn't light up empty providers.
  */
+export function rawSandboxCredentialEnvEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const value = env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+  return value === "1" || value?.toLowerCase() === "true";
+}
+
 export function providerKeyEnv(
   keys?: Record<string, string>,
   extraEnv?: Record<string, string>,
 ): string[] {
   const out: string[] = [];
-  const source: Record<string, string | undefined> = keys ?? process.env;
-  for (const name of PROVIDER_KEY_VARS) {
-    const v = source[name];
-    if (v && v.length > 0) out.push(`${name}=${v}`);
+  if (rawSandboxCredentialEnvEnabled()) {
+    const source: Record<string, string | undefined> = keys ?? {};
+    for (const name of PROVIDER_KEY_VARS) {
+      const v = source[name];
+      if (v && v.length > 0) out.push(`${name}=${v}`);
+    }
   }
   appendExtraEnv(out, extraEnv);
   return out;
@@ -707,7 +711,7 @@ function appendExtraEnv(out: string[], extraEnv?: Record<string, string>): void 
 
 function sandboxConnectionEnv(keys?: Record<string, string>): string[] {
   const out: string[] = [];
-  if (!keys) return out;
+  if (!keys || !rawSandboxCredentialEnvEnabled()) return out;
   const source: Record<string, string | undefined> = keys;
   for (const name of [...SANDBOX_CONNECTION_ENV_VARS, ...TOOL_CONNECTION_ENV_VARS]) {
     const v = source[name];
@@ -735,20 +739,19 @@ export function providerKeyExecEnv(
   extraEnv?: Record<string, string>,
 ): string[] {
   const out = [
-    ...providerKeyEnv(keys),
+    ...providerKeyEnv(keys, extraEnv),
     ...sandboxConnectionEnv(keys),
   ];
-  appendExtraEnv(out, extraEnv);
-  if (!keys) return out;
 
   const emitted = new Set(out.map((entry) => entry.slice(0, entry.indexOf("="))));
   for (const name of CONNECTION_ENV_VARS) {
     if (!emitted.has(name)) out.push(`${name}=`);
   }
 
+  const source = rawSandboxCredentialEnvEnabled() ? keys ?? {} : {};
   for (const definition of managedConnectionDefinitions()) {
     for (const alias of definition.envAliases ?? []) {
-      out.push(`${alias}=${keys[definition.envKey] ?? ""}`);
+      out.push(`${alias}=${source[definition.envKey] ?? ""}`);
     }
   }
   return out;

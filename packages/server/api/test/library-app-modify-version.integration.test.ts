@@ -158,6 +158,66 @@ function httpRaw(
 }
 
 describe("modify-as-version flow", () => {
+  it("does not follow symlinked workspace parents when copying a library app into chat", async () => {
+    const wsRoot = workspaceRootPath(home, workspaceSlug);
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-copy-app-outside-"));
+    const outsideApp = path.join(outside, "external-copy.app");
+    await fs.mkdir(path.join(outsideApp, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(outsideApp, "roomy.app.json"),
+      JSON.stringify({ name: "external-copy", capabilities: [] }),
+      "utf8",
+    );
+    const linkPath = path.join(wsRoot, "outside-copy-app");
+    await fs.symlink(outside, linkPath, "dir");
+
+    const res = await httpRaw(
+      "POST",
+      `/chats/${chatId}/copy-library-app`,
+      { bearer: authToken, body: { path: "outside-copy-app/external-copy.app" } },
+    );
+
+    expect(res.status).toBe(404);
+    await expect(
+      fs.access(path.join(chatArtifactsDir(home, workspaceSlug, chatId), "external-copy.app")),
+    ).rejects.toThrow();
+    await fs.rm(linkPath, { force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
+  it("does not follow symlinked workspace parents when replacing a library app from chat", async () => {
+    const artifactName = "external-replace.app";
+    const chatAppDir = path.join(
+      chatArtifactsDir(home, workspaceSlug, chatId),
+      artifactName,
+    );
+    await fs.mkdir(path.join(chatAppDir, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(chatAppDir, "roomy.app.json"),
+      JSON.stringify({ name: "external-replace", capabilities: [] }),
+      "utf8",
+    );
+    const wsRoot = workspaceRootPath(home, workspaceSlug);
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-replace-app-outside-"));
+    const linkPath = path.join(wsRoot, "outside-replace-app");
+    await fs.symlink(outside, linkPath, "dir");
+
+    const res = await httpRaw(
+      "POST",
+      `/chats/${chatId}/replace-library-app`,
+      {
+        bearer: authToken,
+        body: { name: artifactName, targetPath: `outside-replace-app/${artifactName}` },
+      },
+    );
+
+    expect(res.status).toBe(404);
+    await expect(fs.access(path.join(outside, artifactName))).rejects.toThrow();
+    await expect(fs.access(chatAppDir)).resolves.toBeUndefined();
+    await fs.rm(linkPath, { force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
   it("`POST /chats/:id/copy-library-app` clones the library `<name>.app/` into the chat artifacts dir", async () => {
     const res = await httpRaw(
       "POST",

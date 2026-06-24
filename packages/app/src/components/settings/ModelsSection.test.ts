@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  defaultModelIdForProvider,
   modelProviderCredentialRequired,
   modelProviderCredentialScopeText,
   modelProviderConnectionEnvKey,
@@ -38,6 +39,12 @@ describe('model settings helpers', () => {
     expect(normalizeModelIdForProvider('anthropic', 'claude-sonnet-4-6')).toBe('anthropic/claude-sonnet-4-6')
     expect(normalizeModelIdForProvider('openai', 'openai/gpt-5.4')).toBe('openai/gpt-5.4')
     expect(normalizeModelIdForProvider('codex', '  gpt-5.5  ')).toBe('codex/gpt-5.5')
+  })
+
+  it('provides default model ids for credential-backed providers', () => {
+    expect(defaultModelIdForProvider('anthropic')).toBe('anthropic/claude-sonnet-4-6')
+    expect(defaultModelIdForProvider('openai')).toBe('openai/gpt-5.4')
+    expect(defaultModelIdForProvider('unknown')).toBe('')
   })
 
   it('reorders dragged models before and after a target id', () => {

@@ -24,7 +24,8 @@ export interface ExecInSandboxOptions {
   /**
    * AI-provider credentials to inject. Used both when the sandbox is created
    * on demand and on every exec, so reused containers pick up rotated or
-   * newly-saved keys without a restart. Omit to fall back to host process env.
+   * newly-saved keys without a restart. Forwarding requires
+   * ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV=1.
    */
   providerKeys?: Record<string, string>;
 }

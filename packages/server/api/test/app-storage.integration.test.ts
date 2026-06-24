@@ -30,6 +30,7 @@ let server: http.Server;
 let port: number;
 let home: string;
 let dbPath: string;
+let workspaceId: string;
 let workspaceSlug: string;
 let chatId: string;
 let authToken: string;
@@ -53,6 +54,7 @@ beforeAll(async () => {
   const { rows: wsRows } = await pool.query<{ id: string; path: string }>(
     "SELECT id, path FROM workspaces LIMIT 1",
   );
+  workspaceId = wsRows[0].id;
   workspaceSlug = wsRows[0].path;
   await ensureWorkspaceLayout(home, workspaceSlug);
 
@@ -205,16 +207,25 @@ async function appCookie(appName: string): Promise<string> {
   return cookie;
 }
 
-async function libraryAppCookie(appName: string): Promise<{ cookie: string; setCookie: string; appBasePath: string }> {
+async function libraryAppCookie(
+  appName: string,
+  opts: { appPath?: string; workspaceId?: string } = {},
+): Promise<{ cookie: string; setCookie: string; appBasePath: string; assetToken: string }> {
+  const qs = new URLSearchParams();
+  if (opts.workspaceId) qs.set("workspaceId", opts.workspaceId);
+  if (opts.appPath) qs.set("path", opts.appPath);
+  const suffix = qs.size > 0 ? `?${qs}` : "";
   const issue = await httpRaw(
     "POST",
-    `/apps/library/${appName}/issue`,
+    `/apps/library/${appName}/issue${suffix}`,
     { bearer: authToken },
   );
   expect(issue.status).toBe(201);
   const data = issue.bodyJson as { url: string; cookieName: string };
   const distIndex = data.url.indexOf("/dist");
   const appBasePath = distIndex === -1 ? data.url.split("?")[0] : data.url.slice(0, distIndex);
+  const parts = appBasePath.split("/");
+  const assetToken = parts[4];
   const bootstrap = await httpRaw("GET", data.url);
   expect(bootstrap.status).toBe(200);
   const cookie = pickSetCookie(bootstrap.headers, data.cookieName);
@@ -224,7 +235,7 @@ async function libraryAppCookie(appName: string): Promise<{ cookie: string; setC
     (line): line is string => typeof line === "string" && line.startsWith(`${data.cookieName}=`),
   );
   if (!setCookie) throw new Error(`No Set-Cookie header for ${appName}`);
-  return { cookie, setCookie, appBasePath };
+  return { cookie, setCookie, appBasePath, assetToken };
 }
 
 describe("per-app storage CRUD (PR-H)", () => {
@@ -383,6 +394,89 @@ describe("per-app storage CRUD (PR-H)", () => {
     expect(listed.status).toBe(200);
     const list = listed.bodyJson as { items: Array<{ id: string; doc: { title: string } }> };
     expect(list.items.map((item) => item.id)).toContain(createdDoc.id);
+  });
+
+  it("rejects library app storage access to a same-basename sibling app path", async () => {
+    const { cookie, assetToken } = await libraryAppCookie(LIBRARY_APP);
+    const nestedRoot = path.join(
+      workspaceRootPath(home, workspaceSlug),
+      "Nested",
+      `${LIBRARY_APP}.app`,
+    );
+    await fs.mkdir(path.join(nestedRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(nestedRoot, "roomy.app.json"),
+      JSON.stringify({ name: LIBRARY_APP, capabilities: ["storage.read", "storage.write"] }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(nestedRoot, "dist", "index.html"),
+      "<!doctype html><html><head></head><body>nested</body></html>",
+      "utf8",
+    );
+
+    const crossWrite = await httpRaw(
+      "POST",
+      `/apps/library/${encodeURIComponent(workspaceId)}/${assetToken}/Nested/${LIBRARY_APP}.app/storage/items`,
+      { headers: { Cookie: cookie }, body: { title: "wrong app" } },
+    );
+    expect(crossWrite.status).toBe(401);
+    await expect(fs.stat(path.join(nestedRoot, ".storage", "data.sqlite"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("uses the path-specific library cookie when same-basename apps both have browser cookies", async () => {
+    const root = await libraryAppCookie(LIBRARY_APP);
+    const nestedAppPath = `NestedDuplicate/${LIBRARY_APP}.app`;
+    const nestedRoot = path.join(workspaceRootPath(home, workspaceSlug), nestedAppPath);
+    await fs.mkdir(path.join(nestedRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(nestedRoot, "roomy.app.json"),
+      JSON.stringify({ name: LIBRARY_APP, capabilities: ["storage.read", "storage.write"] }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(nestedRoot, "dist", "index.html"),
+      "<!doctype html><html><head></head><body>nested duplicate</body></html>",
+      "utf8",
+    );
+    const nested = await libraryAppCookie(LIBRARY_APP, {
+      workspaceId,
+      appPath: nestedAppPath,
+    });
+
+    expect(nested.cookie.split("=")[0]).not.toBe(root.cookie.split("=")[0]);
+    const write = await httpRaw(
+      "POST",
+      `${nested.appBasePath}/storage/items`,
+      {
+        // Browsers send longer-path cookies first. This order made the old
+        // same-name parser keep the root cookie and reject the nested app.
+        headers: { Cookie: `${nested.cookie}; ${root.cookie}` },
+        body: { title: "nested app doc" },
+      },
+    );
+
+    expect(write.status).toBe(201);
+    await expect(fs.stat(path.join(nestedRoot, ".storage", "data.sqlite"))).resolves.toBeTruthy();
+  });
+
+  it("rejects symlinked library app assets that resolve outside dist/", async () => {
+    const { cookie, appBasePath } = await libraryAppCookie(LIBRARY_APP);
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-library-asset-escape-"));
+    await fs.writeFile(path.join(outside, "secret.txt"), "LIBRARY-SYMLINK-SECRET", "utf8");
+    await fs.symlink(
+      path.join(outside, "secret.txt"),
+      path.join(workspaceRootPath(home, workspaceSlug), `${LIBRARY_APP}.app`, "dist", "leak.txt"),
+    );
+
+    const leaked = await httpRaw(
+      "GET",
+      `${appBasePath}/dist/leak.txt`,
+      { headers: { Cookie: cookie } },
+    );
+    expect(leaked.status).toBe(404);
+    expect(leaked.body).not.toContain("LIBRARY-SYMLINK-SECRET");
+    await fs.rm(outside, { recursive: true, force: true });
   });
 
   it("creates the storage SQLite file on disk inside the app directory", async () => {

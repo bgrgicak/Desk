@@ -24,6 +24,7 @@ import { createRunManager } from "@roomy-ai/scheduler";
 import { generateId } from "@roomy-ai/shared";
 import {
   chatArtifactsDir,
+  chatAttachmentsDir,
   ensureLayout,
   ensureWorkspaceLayout,
   workspaceRootPath,
@@ -194,6 +195,61 @@ function pickSetCookie(headers: http.IncomingHttpHeaders, prefix: string): strin
 }
 
 describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
+  it("does not follow symlinked workspace parents when saving a chat attachment to the library", async () => {
+    const attDir = await chatAttachmentsDir(home, workspaceSlug, chatId);
+    await fs.mkdir(attDir, { recursive: true });
+    await fs.writeFile(path.join(attDir, "escape-note.txt"), "keep inside chat", "utf8");
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-save-attachment-outside-"));
+    const wsRoot = workspaceRootPath(home, workspaceSlug);
+    const linkPath = path.join(wsRoot, "outside-save-attachment");
+    await fs.symlink(outside, linkPath, "dir");
+
+    const res = await httpRaw(
+      "POST",
+      `/chats/${chatId}/save-to-library`,
+      {
+        bearer: authToken,
+        body: { name: "escape-note.txt", destSubpath: "outside-save-attachment" },
+      },
+    );
+
+    expect(res.status).toBe(404);
+    await expect(fs.access(path.join(outside, "escape-note.txt"))).rejects.toThrow();
+    await expect(fs.access(path.join(attDir, "escape-note.txt"))).resolves.toBeUndefined();
+    await fs.rm(linkPath, { force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
+  it("does not follow symlinked workspace parents when promoting a chat app artifact", async () => {
+    const artifactName = "escape-promote.app";
+    const appRoot = path.join(chatArtifactsDir(home, workspaceSlug, chatId), artifactName);
+    await fs.mkdir(path.join(appRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(appRoot, "roomy.app.json"),
+      JSON.stringify({ name: "escape-promote", capabilities: [] }),
+      "utf8",
+    );
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-save-artifact-outside-"));
+    const wsRoot = workspaceRootPath(home, workspaceSlug);
+    const linkPath = path.join(wsRoot, "outside-save-artifact");
+    await fs.symlink(outside, linkPath, "dir");
+
+    const res = await httpRaw(
+      "POST",
+      `/chats/${chatId}/save-artifact-to-library`,
+      {
+        bearer: authToken,
+        body: { name: artifactName, destSubpath: "outside-save-artifact" },
+      },
+    );
+
+    expect(res.status).toBe(404);
+    await expect(fs.access(path.join(outside, artifactName))).rejects.toThrow();
+    await expect(fs.access(appRoot)).resolves.toBeUndefined();
+    await fs.rm(linkPath, { force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
   it("library list returns `<name>.app/` directories as single items with isDir:true and the app mime", async () => {
     // First, copy a plain `.app/` directly into the workspace root so
     // we can assert library walking before the promotion runs.
@@ -387,6 +443,30 @@ describe("library `.app/` recognition + promote-from-chat (PR-E)", () => {
       `/apps/library/${workspaceId}/${APP_NAME}/dist/assets/index.js`,
     );
     expect(noAssetToken.status).toBe(401);
+  });
+
+  it("rejects a library app whose dist directory is a symlink outside the app root", async () => {
+    const wsRoot = workspaceRootPath(home, workspaceSlug);
+    const appRoot = path.join(wsRoot, "linked-dist.app");
+    const siblingDist = path.join(wsRoot, "linked-dist-target");
+    await fs.mkdir(siblingDist, { recursive: true });
+    await fs.writeFile(path.join(siblingDist, "secret.txt"), "DIST-ROOT-SYMLINK-SECRET", "utf8");
+    await fs.mkdir(appRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(appRoot, "roomy.app.json"),
+      JSON.stringify({ name: "linked-dist", capabilities: [] }),
+      "utf8",
+    );
+    await fs.symlink(siblingDist, path.join(appRoot, "dist"), "dir");
+
+    const issue = await httpRaw(
+      "POST",
+      `/apps/library/linked-dist/issue`,
+      { bearer: authToken },
+    );
+
+    expect(issue.status).toBe(404);
+    expect(issue.body).not.toContain("DIST-ROOT-SYMLINK-SECRET");
   });
 
   it("rejects promotion of non-`.app` artifacts", async () => {

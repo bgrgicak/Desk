@@ -21,6 +21,7 @@ let dbPath: string;
 let workspaceId: string;
 let agentId: string;
 let sourceChatId: string;
+let userId: string;
 
 beforeAll(async () => {
   const dbDir = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-sandbox-messages-db-"));
@@ -34,8 +35,9 @@ beforeAll(async () => {
   await ensureLayout(home);
   process.env.ROOMY_HOME = home;
 
-  const { rows: wsRows } = await pool.query<{ id: string }>("SELECT id FROM workspaces LIMIT 1");
+  const { rows: wsRows } = await pool.query<{ id: string; user_id: string }>("SELECT id, user_id FROM workspaces LIMIT 1");
   workspaceId = wsRows[0].id;
+  userId = wsRows[0].user_id;
   const { rows: agentRows } = await pool.query<{ id: string }>("SELECT id FROM agents LIMIT 1");
   agentId = agentRows[0].id;
 
@@ -82,6 +84,83 @@ async function issueSandboxToken(opts?: { runId?: string }): Promise<string> {
   return token;
 }
 
+async function issueSandboxTokenForWorkspace(targetWorkspaceId: string, opts?: { runId?: string }): Promise<string> {
+  const token = `tok_${crypto.randomBytes(16).toString("hex")}`;
+  await queries.sandboxSessions.issue(pool, {
+    id: generateId("sandboxSession"),
+    agentId,
+    workspaceId: targetWorkspaceId,
+    runId: opts?.runId,
+    tokenHash: crypto.createHash("sha256").update(token).digest("hex"),
+  });
+  return token;
+}
+
+async function createOwnedWorkspaceChat(title = "Other workspace chat"): Promise<{ workspaceId: string; chatId: string }> {
+  const otherWorkspaceId = generateId("workspace");
+  await queries.workspaces.insert(pool, {
+    id: otherWorkspaceId,
+    userId,
+    name: `Other workspace ${otherWorkspaceId.slice(-6)}`,
+    path: `other-${otherWorkspaceId.slice(-6)}`,
+  });
+  await queries.workspaceAgents.addToWorkspace(pool, otherWorkspaceId, agentId);
+  const otherChatId = generateId("chat");
+  await pool.query(
+    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
+    [otherChatId, otherWorkspaceId, agentId, title],
+  );
+  return { workspaceId: otherWorkspaceId, chatId: otherChatId };
+}
+
+async function createHubWorkspace(): Promise<string> {
+  const hubWorkspaceId = generateId("workspace");
+  await queries.workspaces.insert(pool, {
+    id: hubWorkspaceId,
+    userId,
+    name: `Hub workspace ${hubWorkspaceId.slice(-6)}`,
+    path: `hub-${hubWorkspaceId.slice(-6)}`,
+    kind: "hub",
+  });
+  await queries.workspaceAgents.addToWorkspace(pool, hubWorkspaceId, agentId);
+  return hubWorkspaceId;
+}
+
+async function insertTask(chatId: string, title = "Existing task"): Promise<string> {
+  const taskId = generateId("message");
+  await pool.query(
+    `INSERT INTO messages (id, chat_id, role, content, kind, title, state, created_at, updated_at)
+     VALUES (?, ?, 'agent', ?, 'task', ?, 'pending', ?, ?)`,
+    [
+      taskId,
+      chatId,
+      JSON.stringify({ type: "text", text: title }),
+      title,
+      new Date(),
+      new Date(),
+    ],
+  );
+  return taskId;
+}
+
+async function insertTaskWithThread(
+  chatId: string,
+  workspaceForThreadId: string,
+  title = "Existing threaded task",
+): Promise<{ taskId: string; threadChatId: string }> {
+  const taskId = await insertTask(chatId, title);
+  const threadChatId = generateId("chat");
+  await pool.query(
+    `INSERT INTO chats (id, workspace_id, agent_id, title) VALUES (?, ?, ?, ?)`,
+    [threadChatId, workspaceForThreadId, agentId, `${title} thread`],
+  );
+  await pool.query(
+    `UPDATE messages SET thread_chat_id = ? WHERE id = ?`,
+    [threadChatId, taskId],
+  );
+  return { taskId, threadChatId };
+}
+
 function sandboxPost(body: unknown, token: string, urlPath = "/sandbox/messages"): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
     const raw = JSON.stringify(body);
@@ -113,6 +192,80 @@ function sandboxPost(body: unknown, token: string, urlPath = "/sandbox/messages"
 }
 
 describe("POST /sandbox/messages", () => {
+  it("rejects project-scoped tokens posting into another owned workspace chat", async () => {
+    const token = await issueSandboxToken();
+    const other = await createOwnedWorkspaceChat("Cross-workspace task target");
+
+    const res = await sandboxPost({
+      chatId: other.chatId,
+      title: "Cross workspace task",
+      content: "This should stay out of the other workspace.",
+      executeAt: "2027-06-01T09:00:00Z",
+    }, token);
+
+    expect(res.status).toBe(404);
+    const messages = await pool.query<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE chat_id = ?",
+      [other.chatId],
+    );
+    expect(messages.rows[0].count).toBe(0);
+  });
+
+  it("rejects hub sandbox tokens posting into another owned workspace chat", async () => {
+    const hubWorkspaceId = await createHubWorkspace();
+    const token = await issueSandboxTokenForWorkspace(hubWorkspaceId);
+    const other = await createOwnedWorkspaceChat("Hub cross-workspace task target");
+
+    const res = await sandboxPost({
+      chatId: other.chatId,
+      title: "Hub cross workspace task",
+      content: "Hub runs can read broadly but must not mutate other workspaces.",
+      executeAt: "2027-06-01T09:30:00Z",
+    }, token);
+
+    expect(res.status).toBe(404);
+    const messages = await pool.query<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE chat_id = ?",
+      [other.chatId],
+    );
+    expect(messages.rows[0].count).toBe(0);
+  });
+
+  it("rejects project-scoped tokens creating child tasks from a parent task in another workspace", async () => {
+    const token = await issueSandboxToken();
+    const other = await createOwnedWorkspaceChat("Cross-workspace parent target");
+    const parentTaskId = await insertTask(other.chatId, "Other workspace parent");
+
+    const res = await sandboxPost({
+      parentTaskId,
+      title: "Cross workspace child",
+      content: "This should not be attached to the other workspace task.",
+      executeAt: "2027-06-01T10:00:00Z",
+    }, token);
+
+    expect(res.status).toBe(404);
+    const children = await pool.query<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE parent_id = ?",
+      [parentTaskId],
+    );
+    expect(children.rows[0].count).toBe(0);
+  });
+
+  it("allows a token scoped to the target workspace to post in that workspace", async () => {
+    const other = await createOwnedWorkspaceChat("Legitimate scoped target");
+    const token = await issueSandboxTokenForWorkspace(other.workspaceId);
+
+    const res = await sandboxPost({
+      chatId: other.chatId,
+      title: "Legitimate scoped task",
+      content: "This token belongs to the target workspace.",
+      executeAt: "2027-06-01T11:00:00Z",
+    }, token);
+
+    expect(res.status).toBe(201);
+    expect(res.body.message.chatId).toBe(other.chatId);
+  });
+
   it("posts the task anchor in the source chat and spawns a dedicated thread chat", async () => {
     const token = await issueSandboxToken();
     const res = await sandboxPost({
@@ -436,6 +589,23 @@ describe("POST /sandbox/messages/reschedule", () => {
     return { ...body.message, threadChatId: body.threadChat.id };
   }
 
+  it("rejects project-scoped tokens rescheduling tasks in another owned workspace", async () => {
+    const token = await issueSandboxToken();
+    const other = await createOwnedWorkspaceChat("Cross-workspace reschedule target");
+    const taskId = await insertTask(other.chatId, "Other workspace scheduled task");
+
+    const res = await sandboxPost({
+      chatId: other.chatId,
+      messageId: taskId,
+      executeAt: "2026-06-02T09:00:00Z",
+    }, token, "/sandbox/messages/reschedule");
+
+    expect(res.status).toBe(404);
+    const task = await queries.messages.findById(pool, taskId);
+    expect(task?.state).toBe("pending");
+    expect(task?.executeAt).toBeFalsy();
+  });
+
   it("updates executeAt in place — same id, same created_at, state pending", async () => {
     const token = await issueSandboxToken();
     const created = await createScheduledTask(token);
@@ -602,6 +772,51 @@ describe("POST /sandbox/messages/complete", () => {
     };
     return result;
   }
+
+  it("rejects project-scoped tokens completing tasks in another owned workspace", async () => {
+    const token = await issueSandboxToken();
+    const otherByMessage = await createOwnedWorkspaceChat("Cross-workspace complete by message");
+    const byMessage = await insertTaskWithThread(
+      otherByMessage.chatId,
+      otherByMessage.workspaceId,
+      "Other workspace task by message",
+    );
+
+    const messageRes = await sandboxPost({
+      messageId: byMessage.taskId,
+      message: "This report should not be posted.",
+    }, token, "/sandbox/messages/complete");
+
+    expect(messageRes.status).toBe(404);
+    const messageTask = await queries.messages.findById(pool, byMessage.taskId);
+    expect(messageTask?.state).toBe("pending");
+    const messageReports = await pool.query<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE parent_id = ?",
+      [byMessage.taskId],
+    );
+    expect(messageReports.rows[0].count).toBe(0);
+
+    const otherByThread = await createOwnedWorkspaceChat("Cross-workspace complete by thread");
+    const byThread = await insertTaskWithThread(
+      otherByThread.chatId,
+      otherByThread.workspaceId,
+      "Other workspace task by thread",
+    );
+
+    const threadRes = await sandboxPost({
+      chatId: byThread.threadChatId,
+      message: "This report should not be posted either.",
+    }, token, "/sandbox/messages/complete");
+
+    expect(threadRes.status).toBe(404);
+    const threadTask = await queries.messages.findById(pool, byThread.taskId);
+    expect(threadTask?.state).toBe("pending");
+    const threadReports = await pool.query<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE parent_id = ?",
+      [byThread.taskId],
+    );
+    expect(threadReports.rows[0].count).toBe(0);
+  });
 
   it("flips the anchor to succeeded and posts the report back to the parent chat", async () => {
     const token = await issueSandboxToken();
@@ -803,6 +1018,45 @@ describe("POST /sandbox/messages/complete", () => {
     }, token, "/sandbox/messages/complete");
     expect(res.status).toBe(400);
     expect(res.body.message).toMatch(/is not a task/);
+  });
+});
+
+describe("POST /sandbox/messages/cancel", () => {
+  it("rejects project-scoped tokens cancelling tasks in another owned workspace", async () => {
+    const token = await issueSandboxToken();
+    const other = await createOwnedWorkspaceChat("Cross-workspace cancel target");
+    const taskId = await insertTask(other.chatId, "Other workspace cancellable task");
+
+    const res = await sandboxPost({
+      chatId: other.chatId,
+      messageId: taskId,
+    }, token, "/sandbox/messages/cancel");
+
+    expect(res.status).toBe(404);
+    const task = await queries.messages.findById(pool, taskId);
+    expect(task?.state).toBe("pending");
+  });
+});
+
+describe("POST /sandbox/seed-messages", () => {
+  it("rejects project-scoped tokens bulk-inserting seed messages in another owned workspace", async () => {
+    const token = await issueSandboxToken();
+    const other = await createOwnedWorkspaceChat("Cross-workspace seed target");
+
+    const res = await sandboxPost({
+      chatId: other.chatId,
+      messages: [
+        { role: "user", text: "seed one" },
+        { role: "agent", text: "seed two" },
+      ],
+    }, token, "/sandbox/seed-messages");
+
+    expect(res.status).toBe(404);
+    const messages = await pool.query<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM messages WHERE chat_id = ?",
+      [other.chatId],
+    );
+    expect(messages.rows[0].count).toBe(0);
   });
 });
 

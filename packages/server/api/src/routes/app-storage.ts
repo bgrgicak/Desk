@@ -40,6 +40,10 @@ import {
   workspaceRootPath,
   type StorageContext,
 } from "@roomy-ai/storage";
+import {
+  findLibraryCookieEntry,
+  librarySessionAppKey,
+} from "./app-cookies.js";
 
 const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
 const COLLECTION_PATTERN = /^[a-z][a-z0-9_-]{0,62}$/;
@@ -111,11 +115,6 @@ function parseCookies(req: IncomingMessage): Record<string, string> {
 function chatCookieName(chatId: string, appName: string): string {
   return `roomy_app_${chatId}_${appName}`;
 }
-
-// Shared prefix for every library-scope cookie. The full cookie name
-// is `roomy_libapp_<workspaceId>_<appName>`; the workspaceId is encoded
-// at request time so cross-workspace replay fails the verify step.
-const LIBRARY_COOKIE_PREFIX = "roomy_libapp_";
 
 function normalizeLibraryAppPath(appPathOrName: string): { appPath: string; appName: string } | null {
   const appPath = appPathOrName.endsWith(".app") || appPathOrName.includes("/")
@@ -221,15 +220,17 @@ async function resolveLibraryStorage(
   expectedAssetToken?: string,
 ): Promise<AppStorageContext> {
   const cookies = parseCookies(req);
-  const cookieEntry = Object.entries(cookies).find(
-    ([k]) => k.startsWith(LIBRARY_COOKIE_PREFIX) && k.endsWith(`_${appName}`),
-  );
+  const cookieEntry = findLibraryCookieEntry(cookies, {
+    workspaceId: expectedWorkspaceId,
+    appPath,
+    appName,
+  });
   if (!cookieEntry) throw new UnauthorizedError("Missing app token");
   const cookieToken = cookieEntry[1];
   const session = await queries.appSessions.verify(pool, hashToken(cookieToken));
   if (!session) throw new UnauthorizedError("Invalid app token");
   if (session.scope !== "library") throw new UnauthorizedError("Wrong scope");
-  if (session.appName !== appName) {
+  if (session.appName !== librarySessionAppKey(appPath)) {
     throw new UnauthorizedError("Token scope mismatch");
   }
   if (expectedWorkspaceId && session.workspaceId !== expectedWorkspaceId) {

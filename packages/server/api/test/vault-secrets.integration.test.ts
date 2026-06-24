@@ -7,8 +7,8 @@
  *   - POST /vault/unlock with the right master unlocks; wrong master 401s
  *   - GET /secrets returns metadata only
  *   - POST /secrets writes; PUT /secrets/:title overwrites
- *   - GET /sandbox/secrets and GET /sandbox/secrets/:title return plaintext
- *     to a holder of a real sandbox token, scoped to that agent's user
+ *   - GET /sandbox/secrets and GET /sandbox/secrets/:title deny sandbox
+ *     vault access by default instead of enumerating the user's vault
  *   - When the vault is locked, every endpoint that needs the master
  *     returns 423 LOCKED
  *   - POST /auth/logout locks the vault for that user
@@ -244,35 +244,32 @@ describe("secrets CRUD via user API", () => {
   });
 });
 
-describe("agent reads via /sandbox/secrets", () => {
-  it("list returns titles + metadata for the agent's user", async () => {
+describe("sandbox access via /sandbox/secrets", () => {
+  it("denies listing the user's vault without an explicit sandbox secret grant", async () => {
     const res = await request("GET", "/sandbox/secrets", { kind: "sandbox", token: sandboxToken });
-    expect(res.status).toBe(200);
-    const secrets = (res.body as { secrets: { title: string }[] }).secrets;
-    expect(secrets.map((s) => s.title)).toEqual(["wordpress.org"]);
+    expect(res.status).toBe(403);
+    expect(JSON.stringify(res.body)).not.toContain("wordpress.org");
+    expect(JSON.stringify(res.body)).not.toContain("newp4ss");
   });
 
-  it("get returns the full plaintext entry", async () => {
+  it("denies reading a plaintext secret without an explicit sandbox secret grant", async () => {
     const res = await request(
       "GET",
       "/sandbox/secrets/wordpress.org",
       { kind: "sandbox", token: sandboxToken },
     );
-    expect(res.status).toBe(200);
-    const secret = res.body as { title: string; username: string; password: string; url: string };
-    expect(secret.title).toBe("wordpress.org");
-    expect(secret.username).toBe("myuser");
-    expect(secret.password).toBe("newp4ss");
-    expect(secret.url).toBe("https://wordpress.org/wp-login.php");
+    expect(res.status).toBe(403);
+    expect(JSON.stringify(res.body)).not.toContain("wordpress.org");
+    expect(JSON.stringify(res.body)).not.toContain("newp4ss");
   });
 
-  it("get for an unknown title 404s", async () => {
+  it("denies unknown titles before probing the vault", async () => {
     const res = await request(
       "GET",
       "/sandbox/secrets/does-not-exist",
       { kind: "sandbox", token: sandboxToken },
     );
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(403);
   });
 
   it("missing sandbox token 401s", async () => {
@@ -302,14 +299,14 @@ describe("locked vault → 423 on every endpoint that needs the master", () => {
     expect(res.status).toBe(423);
   });
 
-  it("GET /sandbox/secrets returns 423", async () => {
+  it("GET /sandbox/secrets still denies sandbox vault access before vault unlock state matters", async () => {
     const res = await request("GET", "/sandbox/secrets", { kind: "sandbox", token: sandboxToken });
-    expect(res.status).toBe(423);
+    expect(res.status).toBe(403);
   });
 
-  it("GET /sandbox/secrets/:title returns 423", async () => {
+  it("GET /sandbox/secrets/:title still denies sandbox vault access before vault unlock state matters", async () => {
     const res = await request("GET", "/sandbox/secrets/wordpress.org", { kind: "sandbox", token: sandboxToken });
-    expect(res.status).toBe(423);
+    expect(res.status).toBe(403);
   });
 
   it("status still works (no master needed)", async () => {

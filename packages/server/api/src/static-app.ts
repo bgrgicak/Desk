@@ -17,7 +17,7 @@
  */
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, isAbsolute, join, relative, sep, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ServerResponse } from "node:http";
 
@@ -86,11 +86,13 @@ export async function serveStaticOrIndex(
 ): Promise<void> {
   const decoded = decodeURIComponent(reqPath);
   const candidate = decoded === "/" ? "/index.html" : decoded;
-  const target = normalize(join(distRoot, candidate));
+  const root = resolve(distRoot);
+  const target = resolve(root, candidate.replace(/^\/+/, ""));
 
   // Refuse anything that escapes the dist root via .. traversal.
-  if (!target.startsWith(distRoot)) {
-    return sendIndex(res, distRoot);
+  const rel = relative(root, target);
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    return sendIndex(res, root);
   }
 
   try {
@@ -106,7 +108,7 @@ export async function serveStaticOrIndex(
   } catch {
     // Fall through to SPA index.
   }
-  return sendIndex(res, distRoot);
+  return sendIndex(res, root);
 }
 
 async function sendIndex(res: ServerResponse, distRoot: string): Promise<void> {

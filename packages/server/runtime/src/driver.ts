@@ -27,7 +27,7 @@ import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { SANDBOX_HOME, type MountPlan } from "./mounts.js";
 import { managedConnectionDefinitions } from "@roomy-ai/shared";
-import { connectionEnvNames } from "./docker.js";
+import { connectionEnvNames, rawSandboxCredentialEnvEnabled } from "./docker.js";
 import { LOCAL_SOURCE_ENV_NAMES } from "./localSources/index.js";
 import { runPi, type PiHandle } from "./piClient.js";
 import { withModule } from "@roomy-ai/shared/logger";
@@ -495,7 +495,7 @@ function buildManagedConnectionAliases(
   providerKeys?: Record<string, string>,
 ): Record<string, string> {
   const env: Record<string, string> = {};
-  if (!providerKeys) return env;
+  if (!providerKeys || !rawSandboxCredentialEnvEnabled()) return env;
   for (const definition of managedConnectionDefinitions()) {
     const value = providerKeys[definition.envKey];
     if (!value || value.length === 0) continue;
@@ -530,12 +530,13 @@ export function buildPiEnv(opts: {
   const blanks: Record<string, string> = {};
   for (const name of connectionEnvNames()) blanks[name] = "";
   for (const name of LOCAL_SOURCE_ENV_NAMES) blanks[name] = "";
+  const providerKeys = rawSandboxCredentialEnvEnabled() ? opts.providerKeys ?? {} : {};
 
   return {
     ...blanks,
-    ...(opts.providerKeys ?? {}),
+    ...providerKeys,
     ...(opts.extraEnv ?? {}),
-    ...buildManagedConnectionAliases(opts.providerKeys),
+    ...buildManagedConnectionAliases(providerKeys),
     ...(opts.runId ? { ROOMY_SANDBOX_TOKEN_PATH: sandboxTokenPath(opts.runId) } : {}),
     ...(opts.apiUrl ? { ROOMY_API_URL: opts.apiUrl } : {}),
   };

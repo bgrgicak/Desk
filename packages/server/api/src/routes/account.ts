@@ -44,6 +44,7 @@ type GrantInput = {
 
 const CONNECTION_STATUSES = new Set(["active", "disabled", "error", "revoked"]);
 const LOCAL_FILESYSTEM_ACCESS = new Set(["read_only", "read_write"]);
+const LOCAL_FILESYSTEM_ALLOWED_ROOTS_ENV = "ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS";
 
 function asStringArray(value: unknown, field: string): string[] | undefined {
   if (value === undefined) return undefined;
@@ -102,6 +103,54 @@ function uniqueHomeNameForPath(hostPath: string, seenHomeNames: Set<string>): st
   return candidate;
 }
 
+function isInsidePath(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (rel.length > 0 && !rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+async function localFilesystemAllowedRoots(): Promise<string[]> {
+  const raw = process.env[LOCAL_FILESYSTEM_ALLOWED_ROOTS_ENV];
+  if (!raw?.trim()) {
+    throw new ValidationError(
+      `Local filesystem connections require ${LOCAL_FILESYSTEM_ALLOWED_ROOTS_ENV} to list approved host roots`,
+    );
+  }
+  const roots: string[] = [];
+  for (const entry of raw.split(",")) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    if (!path.isAbsolute(trimmed)) {
+      throw new ValidationError(`${LOCAL_FILESYSTEM_ALLOWED_ROOTS_ENV} entries must be absolute paths`);
+    }
+    let real: string;
+    try {
+      real = await fs.realpath(trimmed);
+      const stat = await fs.stat(real);
+      if (!stat.isDirectory()) throw new ValidationError(`${LOCAL_FILESYSTEM_ALLOWED_ROOTS_ENV} entry is not a directory: ${trimmed}`);
+    } catch (err) {
+      if (err instanceof ValidationError) throw err;
+      throw new ValidationError(`${LOCAL_FILESYSTEM_ALLOWED_ROOTS_ENV} entry is not readable: ${trimmed}`);
+    }
+    roots.push(real);
+  }
+  if (roots.length === 0) {
+    throw new ValidationError(`${LOCAL_FILESYSTEM_ALLOWED_ROOTS_ENV} must include at least one approved host root`);
+  }
+  return roots;
+}
+
+async function assertLocalFilesystemHostPathAllowed(hostPath: string): Promise<void> {
+  const roots = await localFilesystemAllowedRoots();
+  if (roots.some((root) => isInsidePath(hostPath, root))) return;
+  throw new ValidationError(`Local filesystem path is not allowed by ${LOCAL_FILESYSTEM_ALLOWED_ROOTS_ENV}: ${hostPath}`);
+}
+
+async function assertLocalFilesystemMetadataAllowed(metadata: Record<string, unknown> | undefined): Promise<void> {
+  for (const directory of localFilesystemDirectories(metadata)) {
+    await assertLocalFilesystemHostPathAllowed(directory.hostPath);
+  }
+}
+
 async function sanitizeLocalFilesystemMetadata(metadata: Record<string, unknown> | undefined): Promise<Record<string, unknown>> {
   const root = asRecord(metadata?.localFilesystem, "metadata.localFilesystem");
   if (!root) throw new ValidationError("metadata.localFilesystem is required");
@@ -126,13 +175,14 @@ async function sanitizeLocalFilesystemMetadata(metadata: Record<string, unknown>
       if (err instanceof ValidationError) throw err;
       throw new ValidationError(`Local filesystem path is not readable: ${hostPathRaw}`);
     }
+    await assertLocalFilesystemHostPathAllowed(hostPath);
     const homeName = raw.homeName === undefined
       ? uniqueHomeNameForPath(hostPath, seenHomeNames)
       : validateHomeName(raw.homeName, `metadata.localFilesystem.directories[${index}].homeName`);
     const homeKey = homeName.toLowerCase();
     if (seenHomeNames.has(homeKey)) throw new ValidationError(`Duplicate mounted folder name: ${homeName}`);
     seenHomeNames.add(homeKey);
-    const access = typeof raw.access === "string" ? raw.access : "read_write";
+    const access = typeof raw.access === "string" ? raw.access : "read_only";
     if (!LOCAL_FILESYSTEM_ACCESS.has(access)) {
       throw new ValidationError(`metadata.localFilesystem.directories[${index}].access must be read_only or read_write`);
     }
@@ -615,6 +665,7 @@ export async function updateConnection(pool: Pool, vault: VaultStore, userId: st
 
   if (current.providerId === LOCAL_FILESYSTEM_PROVIDER_ID) {
     const nextMetadata = metadata ?? current.metadata;
+    await assertLocalFilesystemMetadataAllowed(nextMetadata);
     await validateLocalFilesystemMountTargets(pool, userId, nextMetadata, { home: opts.home, excludeConnectionId: id });
   }
 
@@ -667,6 +718,9 @@ export async function replaceWorkspaceGrants(pool: Pool, userId: string, workspa
     const connection = await queries.connectors.findConnection(pool, connectionId, userId);
     if (!connection) throw new NotFoundError("Connector connection not found");
     if (connection.providerId !== providerId) throw new ValidationError("Grant providerId must match the connection providerId");
+    if (connection.providerId === LOCAL_FILESYSTEM_PROVIDER_ID) {
+      await assertLocalFilesystemMetadataAllowed(connection.metadata);
+    }
     normalized.push({
       connectionId,
       providerId,

@@ -183,4 +183,24 @@ describe("chat-message embedding for library apps (PR-F)", () => {
     );
     expect(res.status).toBe(400);
   });
+
+  it("does not list attachment symlinks that resolve outside the workspace", async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-attach-outside-"));
+    await fs.writeFile(path.join(outside, "secret.txt"), "do not list", "utf8");
+    const attDir = await chatAttachmentsDir(home, workspaceSlug, chatId);
+    const linkPath = path.join(attDir, "outside-secret.txt");
+    await fs.symlink(path.join(outside, "secret.txt"), linkPath);
+
+    const listed = await httpRaw(
+      "GET",
+      `/chats/${chatId}/attachments`,
+      { bearer: authToken },
+    );
+    expect(listed.status).toBe(200);
+    const names = (listed.bodyJson as Array<{ name: string }>).map((item) => item.name);
+    expect(names).not.toContain("outside-secret.txt");
+
+    await fs.unlink(linkPath);
+    await fs.rm(outside, { recursive: true, force: true });
+  });
 });

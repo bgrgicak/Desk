@@ -43,13 +43,30 @@ export const LOCAL_SOURCE_ENV_NAMES: readonly string[] = [
   "PI_AUTH_JSON_BASE64",
 ];
 
+function hostLocalSourcesEnabled(): boolean {
+  const value = process.env.ROOMY_ENABLE_HOST_LOCAL_SOURCES;
+  return value === "1" || value?.toLowerCase() === "true";
+}
+
+function disabledByPolicyStatus(kind: LocalSourceKind): LocalSourceStatus {
+  return { kind, available: false, reason: "disabled_by_policy" };
+}
+
+function identityMatchesUser(status: LocalSourceStatus, userEmail: string | undefined): boolean {
+  if (status.kind !== "codex") return true;
+  const sourceEmail = typeof status.detail?.email === "string" ? status.detail.email.trim().toLowerCase() : "";
+  return Boolean(sourceEmail && userEmail && sourceEmail === userEmail.trim().toLowerCase());
+}
+
 /** Run every registered detector. Order is `LOCAL_SOURCE_KINDS`. */
 export function listLocalSourceStatuses(): LocalSourceStatus[] {
+  if (!hostLocalSourcesEnabled()) return LOCAL_SOURCE_KINDS.map(disabledByPolicyStatus);
   return LOCAL_SOURCE_KINDS.map((k) => LOCAL_SOURCES[k].detect());
 }
 
 /** Detect a single registered source by kind. */
 export function detectLocalSource(kind: LocalSourceKind): LocalSourceStatus | null {
+  if (!hostLocalSourcesEnabled()) return disabledByPolicyStatus(kind);
   return LOCAL_SOURCES[kind]?.detect() ?? null;
 }
 
@@ -58,6 +75,7 @@ export function detectLocalSource(kind: LocalSourceKind): LocalSourceStatus | nu
  * unusable. Caller must have already verified the user opted in.
  */
 export function loadLocalSourceEnv(kind: LocalSourceKind): Record<string, string> | null {
+  if (!hostLocalSourcesEnabled()) return null;
   return LOCAL_SOURCES[kind]?.loadEnv() ?? null;
 }
 
@@ -73,10 +91,15 @@ export async function resolveLocalSourceEnv(
   pool: Pool,
   userId: string,
 ): Promise<Record<string, string>> {
+  if (!hostLocalSourcesEnabled()) return {};
+  const user = await queries.users.findById(pool, userId);
+  if (!user) return {};
   const meta = await queries.userSettings.getProviderMeta(pool, userId);
   const out: Record<string, string> = {};
   for (const kind of LOCAL_SOURCE_KINDS) {
     if (meta[kind]?.enabled !== true) continue;
+    const status = LOCAL_SOURCES[kind].detect();
+    if (!status.available || !identityMatchesUser(status, user.email)) continue;
     const env = loadLocalSourceEnv(kind);
     if (!env) continue;
     Object.assign(out, env);
@@ -93,6 +116,7 @@ export async function resolveLocalSourceEnv(
  * agent is actually saved/run.
  */
 export function resolveAvailableLocalSourceEnv(): Record<string, string> {
+  if (!hostLocalSourcesEnabled()) return {};
   const out: Record<string, string> = {};
   for (const kind of LOCAL_SOURCE_KINDS) {
     const status = LOCAL_SOURCES[kind].detect();

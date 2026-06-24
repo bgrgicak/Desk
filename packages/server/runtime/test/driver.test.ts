@@ -13,9 +13,28 @@ import {
 import { SANDBOX_HOME } from "../src/mounts.js";
 
 describe("buildPiEnv / buildDaemonEnv (alias)", () => {
-  it("forwards provider keys verbatim", () => {
-    const env = buildPiEnv({ providerKeys: { ANTHROPIC_API_KEY: "secret-123" } });
-    expect(env.ANTHROPIC_API_KEY).toBe("secret-123");
+  it("does not forward provider keys without explicit raw-env opt-in", () => {
+    const previous = process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    try {
+      const env = buildPiEnv({ providerKeys: { ANTHROPIC_API_KEY: "secret-123" } });
+      expect(env.ANTHROPIC_API_KEY).toBe("");
+    } finally {
+      if (previous === undefined) delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+      else process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = previous;
+    }
+  });
+
+  it("forwards provider keys when raw-env forwarding is opted in", () => {
+    const previous = process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = "1";
+    try {
+      const env = buildPiEnv({ providerKeys: { ANTHROPIC_API_KEY: "secret-123" } });
+      expect(env.ANTHROPIC_API_KEY).toBe("secret-123");
+    } finally {
+      if (previous === undefined) delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+      else process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = previous;
+    }
   });
 
   it("emits known connection vars as empty strings when not provided so birth-env values can't leak", () => {
@@ -30,11 +49,18 @@ describe("buildPiEnv / buildDaemonEnv (alias)", () => {
   });
 
   it("expands managed-connection aliases (e.g. GITHUB_TOKEN → GH_TOKEN)", () => {
-    const env = buildPiEnv({
-      providerKeys: { GITHUB_TOKEN: "ghp_abc" },
-    });
-    expect(env.GITHUB_TOKEN).toBe("ghp_abc");
-    expect(env.GH_TOKEN).toBe("ghp_abc");
+    const previous = process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = "1";
+    try {
+      const env = buildPiEnv({
+        providerKeys: { GITHUB_TOKEN: "ghp_abc" },
+      });
+      expect(env.GITHUB_TOKEN).toBe("ghp_abc");
+      expect(env.GH_TOKEN).toBe("ghp_abc");
+    } finally {
+      if (previous === undefined) delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+      else process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = previous;
+    }
   });
 
   it("includes ROOMY_API_URL only when supplied", () => {

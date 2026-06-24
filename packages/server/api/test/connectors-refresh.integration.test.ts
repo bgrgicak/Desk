@@ -21,6 +21,7 @@ import { ensureLayout } from "@roomy-ai/storage";
 import { createRunManager } from "@roomy-ai/scheduler";
 import {
   buildDaemonEnv,
+  rawSandboxCredentialEnvEnabled,
   refreshSandboxConnections,
   resolveLocalSourceEnv,
 } from "@roomy-ai/runtime";
@@ -87,7 +88,9 @@ beforeAll(async () => {
         userId: uid,
         workspaceId: wsId,
         buildSandboxEnv: async (innerUid, innerWsId) => {
-          const providerKeys = await resolveProviderKeys(pool, vault, innerUid, innerWsId);
+          const providerKeys = rawSandboxCredentialEnvEnabled()
+            ? await resolveProviderKeys(pool, vault, innerUid, innerWsId)
+            : {};
           const extraEnv = await resolveLocalSourceEnv(pool, innerUid);
           return buildDaemonEnv({ providerKeys, extraEnv });
         },
@@ -315,8 +318,9 @@ describe("connection-mutation refresh wiring", () => {
  *
  * These tests cover both halves of the fix:
  *   - PUT /me/providers writes the token in a shape resolveProviderKeys
- *     actually finds, and emits both the canonical env var and the
- *     managed-alias env var when wrapped by buildDaemonEnv.
+ *     actually finds. buildDaemonEnv keeps raw credential env closed by
+ *     default, and only emits the canonical env var and managed alias under
+ *     the explicit raw-env opt-in.
  *   - PUT /me/providers (and /me/providers/meta) triggers the same
  *     refresh wiring as POST /me/connections (session clear + WS
  *     broadcast).
@@ -341,16 +345,27 @@ describe("legacy /me/providers — sandbox env propagation", () => {
     expect(afterGrant.GITHUB_TOKEN).toBe("ghp_legacy_resolves");
   });
 
-  it("buildDaemonEnv mirrors GITHUB_TOKEN to the GH_TOKEN alias the GitHub CLI reads", async () => {
+  it("buildDaemonEnv only mirrors GITHUB_TOKEN to GH_TOKEN under raw-env opt-in", async () => {
     await request("PUT", "/me/providers", token, {
       providers: { GITHUB_TOKEN: "ghp_alias_value" },
     });
     await grantDefaultConnectionToWorkspace("GITHUB_TOKEN");
 
     const providerKeys = await resolveProviderKeys(pool, vault, userId, workspaceId);
-    const env = buildDaemonEnv({ providerKeys });
-    expect(env.GITHUB_TOKEN).toBe("ghp_alias_value");
-    expect(env.GH_TOKEN).toBe("ghp_alias_value");
+    const defaultEnv = buildDaemonEnv({ providerKeys });
+    expect(defaultEnv.GITHUB_TOKEN).toBe("");
+    expect(defaultEnv.GH_TOKEN).toBe("");
+
+    const previous = process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = "1";
+    try {
+      const optedInEnv = buildDaemonEnv({ providerKeys });
+      expect(optedInEnv.GITHUB_TOKEN).toBe("ghp_alias_value");
+      expect(optedInEnv.GH_TOKEN).toBe("ghp_alias_value");
+    } finally {
+      if (previous === undefined) delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+      else process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = previous;
+    }
   });
 
   it("clears sessions and broadcasts when PUT /me/providers saves a key", async () => {

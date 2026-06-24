@@ -19,8 +19,11 @@ function jwt(claims: Record<string, unknown>): string {
 
 let tmpDir: string;
 let authPath: string;
+let previousHostLocalSources: string | undefined;
 
 beforeEach(() => {
+  previousHostLocalSources = process.env.ROOMY_ENABLE_HOST_LOCAL_SOURCES;
+  process.env.ROOMY_ENABLE_HOST_LOCAL_SOURCES = "1";
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "roomy-local-sources-"));
   authPath = path.join(tmpDir, "auth.json");
   process.env.ROOMY_CODEX_AUTH_PATH = authPath;
@@ -28,6 +31,8 @@ beforeEach(() => {
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
   delete process.env.ROOMY_CODEX_AUTH_PATH;
+  if (previousHostLocalSources === undefined) delete process.env.ROOMY_ENABLE_HOST_LOCAL_SOURCES;
+  else process.env.ROOMY_ENABLE_HOST_LOCAL_SOURCES = previousHostLocalSources;
 });
 
 describe("registry", () => {
@@ -47,6 +52,23 @@ describe("registry", () => {
 describe("Codex local source", () => {
   it("defaultCodexAuthPath honors ROOMY_CODEX_AUTH_PATH override", () => {
     expect(defaultCodexAuthPath()).toBe(authPath);
+  });
+
+  it("detect() fails closed when host local sources are not explicitly enabled", () => {
+    delete process.env.ROOMY_ENABLE_HOST_LOCAL_SOURCES;
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    fs.writeFileSync(authPath, JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: jwt({ exp }),
+        refresh_token: "rt_xxx",
+        account_id: "acct-1",
+      },
+    }));
+
+    const status = detectLocalSource("codex");
+    expect(status?.available).toBe(false);
+    expect(status?.reason).toBe("disabled_by_policy");
   });
 
   it("detect() returns missing when the file does not exist", () => {
