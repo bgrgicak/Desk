@@ -126,104 +126,213 @@ describe("mounts", () => {
   });
 
   it("buildWorkspaceMountPlan adds active local filesystem mounts and agent context", async () => {
+    const previousAllowedRoots = process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
     const source = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-local-fs-source-"));
-    const connection = await queries.connectors.createConnection(pool, {
-      ownerUserId: userId,
-      providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
-      displayName: "Local folders",
-      status: "active",
-      metadata: {
-        localFilesystem: {
-          directories: [{
-            id: "dir_docs",
-            hostPath: source,
-            homeName: "Docs",
-            access: "read_only",
-            description: "Reference docs.",
-          }],
+    const realSource = await fs.realpath(source);
+    process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = source;
+    try {
+      const connection = await queries.connectors.createConnection(pool, {
+        ownerUserId: userId,
+        providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+        displayName: "Local folders",
+        status: "active",
+        metadata: {
+          localFilesystem: {
+            directories: [{
+              id: "dir_docs",
+              hostPath: source,
+              homeName: "Docs",
+              access: "read_only",
+              description: "Reference docs.",
+            }],
+          },
         },
-      },
-    });
-    await queries.connectors.replaceWorkspaceGrants(pool, workspaceId, userId, [
-      { connectionId: connection.id, providerId: LOCAL_FILESYSTEM_PROVIDER_ID, grantedCapabilities: [] },
-    ]);
+      });
+      await queries.connectors.replaceWorkspaceGrants(pool, workspaceId, userId, [
+        { connectionId: connection.id, providerId: LOCAL_FILESYSTEM_PROVIDER_ID, grantedCapabilities: [] },
+      ]);
 
-    const result = await buildWorkspaceMountPlan(pool, { home, workspaceId, workspaceSlug: TEST_SLUG, userId });
+      const result = await buildWorkspaceMountPlan(pool, { home, workspaceId, workspaceSlug: TEST_SLUG, userId });
 
-    expect(result.mountPlan).toContainEqual({
-      sourcePath: source,
-      targetPath: `${SANDBOX_HOME}/Docs`,
-      mode: "ro",
-      category: "external",
-      ensureSource: false,
-      mountPointId: `${result.mountPlan.find((entry) => entry.targetPath === `${SANDBOX_HOME}/Docs`)?.mountPointId}`,
-    });
-    expect(result.agentDirectories).toEqual([{ path: "~/Docs", access: "read_only", description: "Reference docs." }]);
+      expect(result.mountPlan).toContainEqual({
+        sourcePath: realSource,
+        targetPath: `${SANDBOX_HOME}/Docs`,
+        mode: "ro",
+        category: "external",
+        ensureSource: false,
+        mountPointId: `${result.mountPlan.find((entry) => entry.targetPath === `${SANDBOX_HOME}/Docs`)?.mountPointId}`,
+      });
+      expect(result.agentDirectories).toEqual([{ path: "~/Docs", access: "read_only", description: "Reference docs." }]);
+    } finally {
+      if (previousAllowedRoots === undefined) delete process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+      else process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = previousAllowedRoots;
+    }
   });
 
   it("buildWorkspaceMountPlan accepts stale local filesystem mount placeholders for the same home name", async () => {
+    const previousAllowedRoots = process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
     const source = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-local-fs-stale-marker-"));
-    const staleUserId = generateId("user");
-    await queries.users.insert(pool, {
-      id: staleUserId,
-      username: "mount-stale-marker-user",
-      passwordHash: "hash",
-      email: "mount-stale-marker@example.com",
-    });
-    const target = path.join(workspaceRootPath(home, TEST_SLUG), "Projects");
-    await fs.mkdir(target, { recursive: true });
-    await fs.writeFile(path.join(target, LOCAL_FILESYSTEM_MOUNT_MARKER), JSON.stringify({ mountId: "old:dir" }));
-    const connection = await queries.connectors.createConnection(pool, {
-      ownerUserId: staleUserId,
-      providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
-      displayName: "Local folders",
-      status: "active",
-      metadata: {
-        localFilesystem: {
-          directories: [{ id: "dir_projects", hostPath: source, homeName: "Projects", access: "read_write" }],
+    const realSource = await fs.realpath(source);
+    process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = source;
+    try {
+      const staleUserId = generateId("user");
+      await queries.users.insert(pool, {
+        id: staleUserId,
+        username: "mount-stale-marker-user",
+        passwordHash: "hash",
+        email: "mount-stale-marker@example.com",
+      });
+      const target = path.join(workspaceRootPath(home, TEST_SLUG), "Projects");
+      await fs.mkdir(target, { recursive: true });
+      await fs.writeFile(path.join(target, LOCAL_FILESYSTEM_MOUNT_MARKER), JSON.stringify({ mountId: "old:dir" }));
+      const connection = await queries.connectors.createConnection(pool, {
+        ownerUserId: staleUserId,
+        providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+        displayName: "Local folders",
+        status: "active",
+        metadata: {
+          localFilesystem: {
+            directories: [{ id: "dir_projects", hostPath: source, homeName: "Projects", access: "read_write" }],
+          },
         },
-      },
-    });
-    await queries.connectors.replaceWorkspaceGrants(pool, workspaceId, staleUserId, [
-      { connectionId: connection.id, providerId: LOCAL_FILESYSTEM_PROVIDER_ID, grantedCapabilities: [] },
-    ]);
+      });
+      await queries.connectors.replaceWorkspaceGrants(pool, workspaceId, staleUserId, [
+        { connectionId: connection.id, providerId: LOCAL_FILESYSTEM_PROVIDER_ID, grantedCapabilities: [] },
+      ]);
 
-    const result = await buildWorkspaceMountPlan(pool, { home, workspaceId, workspaceSlug: TEST_SLUG, userId: staleUserId });
+      const result = await buildWorkspaceMountPlan(pool, { home, workspaceId, workspaceSlug: TEST_SLUG, userId: staleUserId });
 
-    expect(result.mountPlan).toContainEqual(expect.objectContaining({
-      sourcePath: source,
-      targetPath: `${SANDBOX_HOME}/Projects`,
-      mountPointId: `${connection.id}:dir_projects`,
-    }));
+      expect(result.mountPlan).toContainEqual(expect.objectContaining({
+        sourcePath: realSource,
+        targetPath: `${SANDBOX_HOME}/Projects`,
+        mountPointId: `${connection.id}:dir_projects`,
+      }));
+    } finally {
+      if (previousAllowedRoots === undefined) delete process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+      else process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = previousAllowedRoots;
+    }
+  });
+
+  it("buildWorkspaceMountPlan downgrades read-write directories when the workspace grant lacks write", async () => {
+    const previousAllowedRoots = process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+    const source = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-local-fs-grant-ro-"));
+    const realSource = await fs.realpath(source);
+    process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = source;
+    try {
+      const grantUserId = generateId("user");
+      await queries.users.insert(pool, {
+        id: grantUserId,
+        username: "mount-grant-ro-user",
+        passwordHash: "hash",
+        email: "mount-grant-ro@example.com",
+      });
+      const connection = await queries.connectors.createConnection(pool, {
+        ownerUserId: grantUserId,
+        providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+        displayName: "Grant read only",
+        status: "active",
+        capabilities: ["local_filesystem.read", "local_filesystem.write"],
+        metadata: {
+          localFilesystem: {
+            directories: [{ id: "dir_projects_ro", hostPath: source, homeName: "GrantProjects", access: "read_write" }],
+          },
+        },
+      });
+      await queries.connectors.replaceWorkspaceGrants(pool, workspaceId, grantUserId, [
+        { connectionId: connection.id, providerId: LOCAL_FILESYSTEM_PROVIDER_ID, grantedCapabilities: ["local_filesystem.read"] },
+      ]);
+
+      const result = await buildWorkspaceMountPlan(pool, { home, workspaceId, workspaceSlug: TEST_SLUG, userId: grantUserId });
+
+      expect(result.mountPlan).toContainEqual(expect.objectContaining({
+        sourcePath: realSource,
+        targetPath: `${SANDBOX_HOME}/GrantProjects`,
+        mode: "ro",
+        mountPointId: `${connection.id}:dir_projects_ro`,
+      }));
+      expect(result.agentDirectories).toContainEqual({
+        path: "~/GrantProjects",
+        access: "read_only",
+      });
+    } finally {
+      if (previousAllowedRoots === undefined) delete process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+      else process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = previousAllowedRoots;
+      await fs.rm(source, { recursive: true, force: true });
+    }
+  });
+
+  it("buildWorkspaceMountPlan rejects local filesystem mounts outside the operator allowlist", async () => {
+    const previousAllowedRoots = process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+    const source = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-local-fs-blocked-"));
+    const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-local-fs-different-root-"));
+    process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = allowedRoot;
+    try {
+      const blockedUserId = generateId("user");
+      await queries.users.insert(pool, {
+        id: blockedUserId,
+        username: "mount-blocked-user",
+        passwordHash: "hash",
+        email: "mount-blocked@example.com",
+      });
+      const connection = await queries.connectors.createConnection(pool, {
+        ownerUserId: blockedUserId,
+        providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+        displayName: "Blocked local folders",
+        status: "active",
+        metadata: {
+          localFilesystem: {
+            directories: [{ id: "dir_blocked", hostPath: source, homeName: "Blocked", access: "read_only" }],
+          },
+        },
+      });
+      await queries.connectors.replaceWorkspaceGrants(pool, workspaceId, blockedUserId, [
+        { connectionId: connection.id, providerId: LOCAL_FILESYSTEM_PROVIDER_ID, grantedCapabilities: [] },
+      ]);
+
+      await expect(buildWorkspaceMountPlan(pool, { home, workspaceId, workspaceSlug: TEST_SLUG, userId: blockedUserId }))
+        .rejects.toThrow("not allowed");
+    } finally {
+      if (previousAllowedRoots === undefined) delete process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+      else process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = previousAllowedRoots;
+      await fs.rm(allowedRoot, { recursive: true, force: true });
+      await fs.rm(source, { recursive: true, force: true });
+    }
   });
 
   it("buildWorkspaceMountPlan rejects home-name collisions", async () => {
+    const previousAllowedRoots = process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
     const source = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-local-fs-collision-"));
-    await fs.mkdir(path.join(workspaceRootPath(home, TEST_SLUG), "Taken"));
-    const collisionUserId = generateId("user");
-    await queries.users.insert(pool, {
-      id: collisionUserId,
-      username: "mount-collision-user",
-      passwordHash: "hash",
-      email: "mount-collision@example.com",
-    });
-    const connection = await queries.connectors.createConnection(pool, {
-      ownerUserId: collisionUserId,
-      providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
-      displayName: "Local folders",
-      status: "active",
-      metadata: {
-        localFilesystem: {
-          directories: [{ id: "dir_taken", hostPath: source, homeName: "Taken", access: "read_write" }],
+    process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = source;
+    try {
+      await fs.mkdir(path.join(workspaceRootPath(home, TEST_SLUG), "Taken"));
+      const collisionUserId = generateId("user");
+      await queries.users.insert(pool, {
+        id: collisionUserId,
+        username: "mount-collision-user",
+        passwordHash: "hash",
+        email: "mount-collision@example.com",
+      });
+      const connection = await queries.connectors.createConnection(pool, {
+        ownerUserId: collisionUserId,
+        providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+        displayName: "Local folders",
+        status: "active",
+        metadata: {
+          localFilesystem: {
+            directories: [{ id: "dir_taken", hostPath: source, homeName: "Taken", access: "read_write" }],
+          },
         },
-      },
-    });
-    await queries.connectors.replaceWorkspaceGrants(pool, workspaceId, collisionUserId, [
-      { connectionId: connection.id, providerId: LOCAL_FILESYSTEM_PROVIDER_ID, grantedCapabilities: [] },
-    ]);
+      });
+      await queries.connectors.replaceWorkspaceGrants(pool, workspaceId, collisionUserId, [
+        { connectionId: connection.id, providerId: LOCAL_FILESYSTEM_PROVIDER_ID, grantedCapabilities: [] },
+      ]);
 
-    await expect(buildWorkspaceMountPlan(pool, { home, workspaceId, workspaceSlug: TEST_SLUG, userId: collisionUserId }))
-      .rejects.toThrow("~/Taken already exists");
+      await expect(buildWorkspaceMountPlan(pool, { home, workspaceId, workspaceSlug: TEST_SLUG, userId: collisionUserId }))
+        .rejects.toThrow("~/Taken already exists");
+    } finally {
+      if (previousAllowedRoots === undefined) delete process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+      else process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = previousAllowedRoots;
+    }
   });
 
   it("activeRunCount tracks runs correctly", async () => {

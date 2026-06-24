@@ -18,8 +18,9 @@
  *     The first response sets a path-scoped HttpOnly cookie and redirects
  *     to the clean URL.
  *   - HTML entrypoints require that cookie and receive the injected bridge.
- *     Non-HTML built assets are served as unprivileged subresources because
- *     opaque sandbox origins do not send cookies for module-script loads.
+ *     Non-HTML built assets either carry an asset-token URL path injected
+ *     through the HTML `<base>` tag or use the app-session cookie/query token.
+ *     The route verifies the app session before opening files.
  *
  * The iframe is rendered without `allow-same-origin`, so generated app
  * JavaScript gets an opaque origin and cannot read the parent SPA's
@@ -45,6 +46,15 @@ import {
   workspaceRootPath,
   type StorageContext,
 } from "@roomy-ai/storage";
+import {
+  applyScriptNonce,
+  injectBridge,
+  nonceForRequest,
+  setSecurityHeaders,
+  type BridgeContext,
+} from "./app-response.js";
+
+export { BRIDGE_SCRIPT_BODY } from "./app-response.js";
 
 const APP_TOKEN_PREFIX = "app_";
 const APP_TOKEN_BYTES = 32;
@@ -103,13 +113,24 @@ const KNOWN_CAPABILITIES = new Set<string>([
   "storage.write",
 ]);
 
-function sanitizeCapabilities(raw: unknown): string[] {
+const SELF_DECLARED_APP_CAPABILITIES = new Set<string>([
+  "library.read",
+  "chats.read",
+  "storage.read",
+  "storage.write",
+]);
+
+function sanitizeCapabilities(
+  raw: unknown,
+  allowedCapabilities: ReadonlySet<string> = KNOWN_CAPABILITIES,
+): string[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
   const out: string[] = [];
   for (const value of raw) {
     if (typeof value !== "string") continue;
     if (!KNOWN_CAPABILITIES.has(value)) continue;
+    if (!allowedCapabilities.has(value)) continue;
     if (seen.has(value)) continue;
     seen.add(value);
     out.push(value);
@@ -165,6 +186,23 @@ function libraryCookieNameFor(workspaceId: string, appName: string): string {
 
 function globalCookieNameFor(chatId: string, appName: string): string {
   return `roomy_globalapp_${chatId}_${appName}`;
+}
+
+function isInsidePath(root: string, candidate: string): boolean {
+  const rel = path.relative(root, candidate);
+  return rel === "" || (!!rel && !rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function librarySessionAppKey(appPath: string): string {
+  return appPath.endsWith(".app") ? appPath.slice(0, -".app".length) : appPath;
+}
+
+function chatAssetBaseHref(chatId: string, assetToken: string, appName: string): string {
+  return `/apps/chat/${encodeURIComponent(chatId)}/${encodeURIComponent(assetToken)}/${encodeURIComponent(appName)}/dist/`;
+}
+
+function globalAssetBaseHref(chatId: string, assetToken: string, appName: string): string {
+  return `/apps/global/${encodeURIComponent(chatId)}/${encodeURIComponent(assetToken)}/${encodeURIComponent(appName)}/dist/`;
 }
 
 function parseCookies(req: IncomingMessage): Record<string, string> {
@@ -302,7 +340,10 @@ export async function issueAppSession(
   );
 
   const manifest = await readManifest(distDir);
-  const capabilities = sanitizeCapabilities(manifest?.capabilities);
+  const capabilities = sanitizeCapabilities(
+    manifest?.capabilities,
+    SELF_DECLARED_APP_CAPABILITIES,
+  );
 
   const raw = randomBytes(APP_TOKEN_BYTES).toString("hex");
   const token = APP_TOKEN_PREFIX + raw;
@@ -345,6 +386,7 @@ async function verifyAppToken(
 ): Promise<VerifiedSession | null> {
   const session = await queries.appSessions.verify(pool, hashToken(token));
   if (!session) return null;
+  if (session.scope !== "chat") return null;
   // Strict scope check: a leaked token for app A must not unlock app B.
   if (session.chatId !== expectedChatId) return null;
   if (session.appName !== expectedAppName) return null;
@@ -354,86 +396,6 @@ async function verifyAppToken(
     appName: session.appName,
     capabilities: session.capabilities,
   };
-}
-
-interface BridgeContext {
-  chatId: string;
-  appName: string;
-  bridgeKey: string;
-  capabilities: string[];
-}
-
-/**
-  * Inlines `window.roomy` into the served `index.html`. The bridge exposes
-  * identity, declared capabilities, and narrow postMessage-backed methods.
-  * The parent SPA validates the source iframe and performs privileged calls
-  * on the app's behalf; the app itself runs with an opaque sandbox origin.
- *
- * Security: the JSON payload is escaped so any `</script>` sequence inside
- * a string value (e.g. a capability the manifest tampered with) becomes
- * `<\/script>` — JS parses the string the same, but the HTML parser no
- * longer terminates the script tag early. Capabilities are also filtered
- * against `KNOWN_CAPABILITIES` at issue time, so this is defense in depth
- * rather than the primary gate.
- */
-/**
- * Vite (and most bundlers) emit `<script type="module" src="...">` tags
- * with no nonce. Our CSP uses `strict-dynamic`, which ignores `'self'`
- * and only trusts scripts with the matching nonce (plus what those
- * scripts dynamically import). Without this rewrite the entry bundle is
- * blocked and the app never boots. Apply to every `<script>` that
- * doesn't already carry a nonce — including the bridge tag would be a
- * no-op since `injectBridge` already sets one.
- */
-function applyScriptNonce(html: string, nonce: string): string {
-  return html.replace(
-    /<script\b(?![^>]*\bnonce=)([^>]*)>/g,
-    `<script nonce="${nonce}"$1>`,
-  );
-}
-
-/**
- * Body of the iframe-side bridge. Exposed for unit tests; the real script
- * tag is built by {@link injectBridge} with a CSP nonce and an inlined
- * payload. The body intentionally does NOT include the surrounding IIFE —
- * `injectBridge` wraps it.
- *
- * Height reporting: we measure `body.scrollHeight` (with `offsetHeight` as
- * a fallback) — these reflect actual content size regardless of the iframe
- * viewport. We deliberately do NOT use `documentElement.scrollHeight` or
- * `getBoundingClientRect()` here: those track the html element's rendered
- * box, which by default fills the iframe viewport, so once the iframe
- * grew they would keep reporting that larger size forever (a one-way
- * ratchet — the iframe could never shrink when a later wizard step had
- * less content). We observe both body and documentElement so subsequent
- * mutations re-fire `v()`, and re-measure once `document.fonts.ready`
- * resolves so font-induced layout shifts don't leave the iframe one
- * frame short.
- */
-export const BRIDGE_SCRIPT_BODY = `const t="roomy.app.request";const r="roomy.app.response";const s="roomy.app.resize";let n=0;const p=new Map;function q(method,params){return new Promise((resolve,reject)=>{const id=Date.now()+":"+(++n);p.set(id,{resolve,reject});window.parent.postMessage({type:t,id,key:c.bridgeKey,method,params},"*")})}window.addEventListener("message",e=>{const m=e.data;if(!m||m.type!==r||!p.has(m.id))return;const h=p.get(m.id);p.delete(m.id);m.ok?h.resolve(m.result):h.reject(new Error(m.error||"Roomy app bridge request failed"))});const storage={list(collection){return q("storage.list",{collection})},get(collection,id){return q("storage.get",{collection,id})},create(collection,doc){return q("storage.create",{collection,doc})},put(collection,id,doc){return q("storage.put",{collection,id,doc})},delete(collection,id){return q("storage.delete",{collection,id})}};const chat={sendMessage(text,opts){return q("chat.sendMessage",{text,artifactRefMessageId:opts&&opts.artifactRefMessageId})}};function u(){const b=document.body;const h=Math.ceil(Math.max(b?b.scrollHeight:0,b?b.offsetHeight:0));window.parent.postMessage({type:s,key:c.bridgeKey,height:h},"*")}let o=0;function v(){if(o)return;o=requestAnimationFrame(()=>{o=0;u()})}function w(){u();if(typeof ResizeObserver!=="undefined"){const ro=new ResizeObserver(v);if(document.body)ro.observe(document.body);if(document.documentElement)ro.observe(document.documentElement);window.addEventListener("load",v,{once:true});if(document.fonts&&document.fonts.ready)document.fonts.ready.then(v)}else{window.addEventListener("resize",v);window.addEventListener("load",v,{once:true})}}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",w,{once:true})}else{w()}window.roomy={app:c.app,chatId:c.chatId,capabilities:c.capabilities,storage,chat,fetch(){throw new Error("roomy.fetch is not enabled; use explicit window.roomy capabilities")}};`;
-
-function injectBridge(html: string, ctx: BridgeContext, nonce: string): string {
-  const payload = JSON.stringify({
-    app: { name: ctx.appName },
-    chatId: ctx.chatId,
-    bridgeKey: ctx.bridgeKey,
-    capabilities: ctx.capabilities,
-  })
-    // Escape all `<` so `</script>`, `<!--`, and `<![CDATA[` inside a JSON
-    // string can't break out of the surrounding `<script>` tag.
-    .replace(/</g, "\\u003c");
-  // The bridge is small enough to inline. The bridge key lets the parent
-  // reject messages from any later iframe navigation that did not receive
-  // this injected script. `postMessage('*')` is deliberate:
-  // sandboxed iframes without `allow-same-origin` have an opaque `null`
-  // origin, so the parent authenticates messages by exact contentWindow
-  // identity instead of by Origin.
-  const script = `<script nonce="${nonce}">(()=>{const c=${payload};${BRIDGE_SCRIPT_BODY}})();</script>`;
-  if (html.includes("</head>")) {
-    return html.replace("</head>", `${script}</head>`);
-  }
-  // No </head> (rare but possible for hand-rolled HTML) — prepend.
-  return script + html;
 }
 
 /**
@@ -476,117 +438,61 @@ function setAppCookie(
 }
 
 /**
- * Production security headers shared by every `/apps/*` response. These
- * apply to both `index.html` and asset bytes — the iframe's contents
- * never load cross-origin scripts, never get framed in another tab,
-  * never sniff MIME types. The iframe itself is sandboxed to an opaque
-  * origin; these headers protect both direct navigations and subresources.
- *
- * Tradeoffs:
- * - **`Content-Security-Policy`**: `'self'` for scripts + styles +
-  *   fonts + connect lets the app load its own bundles and
-  *   embed `@roomy-ai/ui` styles. `img-src` additionally allows
-  *   `https:` so result-set fragments (chat-cards thumbnails, etc.) can
-  *   render previews straight from third-party CDNs — images don't
-  *   execute and can't read data back, so the leak surface is just the
-  *   user's IP to the image host. Privileged Roomy calls go through the
-  *   parent postMessage bridge, not direct iframe fetches. Inline `<script>`
- *   from the bridge is gated on its sha256 hash so the CSP doesn't
- *   need `'unsafe-inline'`. Inline styles from Tailwind v4 / shadcn
- *   require `'unsafe-inline'` for now — Tailwind emits a few inline
- *   `<style>` blocks at build time and there's no easy hash story.
- * - **`X-Frame-Options: SAMEORIGIN`**: only the parent SPA (same
- *   origin) is allowed to embed the iframe. Defeats clickjacking via
- *   evil-iframe-on-other-origin.
- * - **`X-Content-Type-Options: nosniff`**: browsers must respect our
- *   declared `Content-Type`; no MIME-sniffing-as-script attack on a
- *   text/plain response.
- * - **`Referrer-Policy: same-origin`**: any link the app produces
- *   sends the full URL only to same-origin destinations and `Origin`
- *   only otherwise — keeps app-specific paths from leaking.
- * - **`Permissions-Policy`**: refuse the most dangerous platform
- *   features at the iframe level — camera/microphone/geolocation
- *   should require explicit Roomy capability, not be implicitly
- *   available because the iframe is same-origin.
- */
-function nonceForRequest(): string {
-  return randomBytes(16).toString("base64");
-}
-
-function setSecurityHeaders(res: ServerResponse, nonce: string): void {
-  // CSP: scripts only from same-origin, plus the nonce so our injected
-  // bridge runs. No inline styles from external sources; inline-style
-  // 'unsafe-inline' is allowed only because Tailwind/shadcn emit a small
-  // number of style blocks at build time and we don't have hashes for
-  // those yet. Connect is `'self'` for app-owned assets and non-privileged
-  // same-origin calls; Roomy capabilities are parent-mediated.
-  const csp = [
-    "default-src 'self'",
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
-    "style-src 'self' 'unsafe-inline'",
-    // `img-src` includes `https:` because the built-in chat-cards app
-    // (and similar result-set fragments) renders thumbnails for products,
-    // articles, papers, etc. straight from the source's CDN. Those URLs
-    // are always cross-origin. Images don't execute, the iframe is
-    // sandboxed to an opaque origin, and the parent doesn't see the
-    // requests — the worst-case leak is the user's IP to the image host,
-    // which any link the agent surfaces already implies on click. We do
-    // NOT widen `connect-src` for the same reason: fetches CAN read data
-    // back, images cannot.
-    "img-src 'self' data: blob: https:",
-    "font-src 'self' data:",
-    "connect-src 'self'",
-    "frame-ancestors 'self'",
-    // Do not emit `navigate-to` here: unsupported clients log it as an
-    // unrecognized directive, and the rest of this policy still applies.
-    "base-uri 'self'",
-    "form-action 'self'",
-    "object-src 'none'",
-  ].join("; ");
-  res.setHeader("Content-Security-Policy", csp);
-  res.setHeader("X-Frame-Options", "SAMEORIGIN");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Referrer-Policy", "same-origin");
-  res.setHeader(
-    "Permissions-Policy",
-    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=()",
-  );
-}
-
-/**
  * Serves a single asset under the app's dist directory. Caller must have
  * already validated authentication.
  */
+async function resolveDistFile(
+  distDir: string,
+  relPath: string,
+  notFoundMessage: string,
+): Promise<{ realPath: string; size: number }> {
+  const target = path.normalize(path.join(distDir, relPath));
+  if (!isInsidePath(distDir, target)) {
+    throw new NotFoundError(notFoundMessage);
+  }
+  let realTarget: string;
+  try {
+    realTarget = await realpath(target);
+  } catch {
+    throw new NotFoundError(notFoundMessage);
+  }
+  if (!isInsidePath(distDir, realTarget)) {
+    throw new NotFoundError(notFoundMessage);
+  }
+  let s;
+  try {
+    s = await stat(realTarget);
+  } catch {
+    throw new NotFoundError(notFoundMessage);
+  }
+  if (!s.isFile()) throw new NotFoundError(notFoundMessage);
+  return { realPath: realTarget, size: s.size };
+}
+
 async function serveAsset(
   distDir: string,
   relPath: string,
   res: ServerResponse,
 ): Promise<void> {
-  const target = path.normalize(path.join(distDir, relPath));
-  if (!target.startsWith(distDir + path.sep) && target !== distDir) {
-    throw new NotFoundError("Asset not found");
-  }
-  let s;
-  try {
-    s = await stat(target);
-  } catch {
-    throw new NotFoundError("Asset not found");
-  }
-  if (!s.isFile()) throw new NotFoundError("Asset not found");
+  const { realPath, size } = await resolveDistFile(
+    distDir,
+    relPath,
+    "Asset not found",
+  );
   // Set security headers before writeHead so they ride along on the 200.
   setSecurityHeaders(res, nonceForRequest());
   res.writeHead(200, {
-    "Content-Type": mimeFor(target),
-    "Content-Length": String(s.size),
+    "Content-Type": mimeFor(realPath),
+    "Content-Length": String(size),
     "Cache-Control": "no-store",
     // The iframe sandbox lacks `allow-same-origin`, so it has a null
     // origin and module/CSS chunk fetches go out as CORS requests.
-    // These bytes are public-by-design (URL is unguessable; privileged
-    // calls go through the bridge), so `*` is safe and matches the
-    // null-origin requester without credentials.
+    // The route has already verified the app session or session-bound
+    // asset token; `*` lets the null-origin requester read only those
+    // scoped bytes without credentials.
     "Access-Control-Allow-Origin": "*",
   });
-  createReadStream(target).pipe(res);
+  createReadStream(realPath).pipe(res);
 }
 
 interface IndexResponseOpts {
@@ -594,22 +500,50 @@ interface IndexResponseOpts {
   subpath: string;
   bridge: BridgeContext;
   res: ServerResponse;
+  assetBaseHref?: string;
 }
 
-async function serveIndex({ distDir, subpath, bridge, res }: IndexResponseOpts): Promise<void> {
-  const indexPath = path.join(distDir, subpath, "index.html");
-  const normalized = path.normalize(indexPath);
-  if (!normalized.startsWith(distDir + path.sep) && normalized !== path.join(distDir, "index.html")) {
-    throw new NotFoundError("index.html not found");
+function injectAssetBase(html: string, href: string): string {
+  const tag = `<base href="${href}">`;
+  if (/<base\b/i.test(html)) {
+    return html.replace(/<base\b[^>]*>/i, tag);
   }
+  if (/<head\b[^>]*>/i.test(html)) {
+    return html.replace(/<head\b([^>]*)>/i, `<head$1>${tag}`);
+  }
+  return tag + html;
+}
+
+function entryAssetBaseHref(rootHref: string, subpath: string): string {
+  const root = rootHref.endsWith("/") ? rootHref : `${rootHref}/`;
+  const clean = subpath.replace(/^\/+|\/+$/g, "");
+  return clean ? `${root}${clean}/` : root;
+}
+
+async function serveIndex({
+  distDir,
+  subpath,
+  bridge,
+  res,
+  assetBaseHref,
+}: IndexResponseOpts): Promise<void> {
+  const relPath = path.join(subpath, "index.html");
+  const { realPath } = await resolveDistFile(
+    distDir,
+    relPath,
+    "index.html not found",
+  );
   let html: string;
   try {
-    html = await readFile(indexPath, "utf-8");
+    html = await readFile(realPath, "utf-8");
   } catch {
     throw new NotFoundError("index.html not found");
   }
   const nonce = nonceForRequest();
-  const injected = applyScriptNonce(injectBridge(html, bridge, nonce), nonce);
+  const withBase = assetBaseHref
+    ? injectAssetBase(html, entryAssetBaseHref(assetBaseHref, subpath))
+    : html;
+  const injected = applyScriptNonce(injectBridge(withBase, bridge, nonce), nonce);
   const buf = Buffer.from(injected, "utf-8");
   setSecurityHeaders(res, nonce);
   res.writeHead(200, {
@@ -641,35 +575,46 @@ export async function handleStaticAppRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
-  // Expect: ["apps", "chat", chatId, appName, "dist", ...rest]
-  if (
+  // Expect one of:
+  //   ["apps", "chat", chatId, appName, "dist", ...rest]
+  //   ["apps", "chat", chatId, assetToken, appName, "dist", ...rest]
+  const routeAssetToken =
+    segments.length >= 6 && /^[a-f0-9]{64}$/.test(decodeURIComponent(segments[3] ?? "")) && segments[5] === "dist"
+      ? decodeURIComponent(segments[3])
+      : null;
+  const legacyShape =
     segments.length < 5 ||
     segments[0] !== "apps" ||
     segments[1] !== "chat" ||
-    segments[4] !== "dist"
-  ) {
+    segments[4] !== "dist";
+  const tokenizedShape =
+    !!routeAssetToken &&
+    segments[0] === "apps" &&
+    segments[1] === "chat" &&
+    segments[5] === "dist";
+  if (legacyShape && !tokenizedShape) {
     return false;
   }
   const chatId = decodeURIComponent(segments[2]);
-  const appName = decodeURIComponent(segments[3]);
+  const appName = decodeURIComponent(routeAssetToken ? segments[4] : segments[3]);
   if (!APP_NAME_PATTERN.test(appName)) {
     throw new NotFoundError(`Unknown app: ${appName}`);
   }
 
-  const tail = segments.slice(5).map((s) => decodeURIComponent(s)).join("/");
-
-  // Sandboxed iframes without `allow-same-origin` have an opaque origin.
-  // Chromium does not send same-site cookies for module-script subresource
-  // loads from that opaque origin, so built JS/CSS/image assets cannot rely
-  // on the app-session cookie. Keep HTML entrypoints authenticated and bridge-
-  // injected; serve non-HTML assets as unprivileged bytes under an unguessable
-  // chat/app URL. Privileged data still requires the parent-mediated bridge.
-  //
-  // Skip the unprivileged-asset branch when the tail is a recognized HTML
-  // entry point (`fragments/<name>` or `fragments/<name>/`) — those need
-  // the cookie/bridge injection path.
+  const tailStart = routeAssetToken ? 6 : 5;
+  const tail = segments.slice(tailStart).map((s) => decodeURIComponent(s)).join("/");
   const chatEntry = matchEntryPoint(tail);
-  if (tail !== "" && !chatEntry && path.extname(tail).toLowerCase() !== ".html") {
+  const isNonHtmlAsset = tail !== "" && !chatEntry && path.extname(tail).toLowerCase() !== ".html";
+  if (isNonHtmlAsset && routeAssetToken) {
+    const ses = await queries.appSessions.verify(pool, routeAssetToken);
+    if (
+      !ses ||
+      ses.scope !== "chat" ||
+      ses.chatId !== chatId ||
+      ses.appName !== appName
+    ) {
+      throw new UnauthorizedError("Invalid app asset token");
+    }
     const { distDir } = await resolveChatAppDist(pool, storage, chatId, appName);
     await serveAsset(distDir, tail, res);
     return true;
@@ -721,6 +666,7 @@ export async function handleStaticAppRequest(
         capabilities: session.capabilities,
       },
       res,
+      assetBaseHref: chatAssetBaseHref(chatId, hashToken(bridgeToken), appName),
     });
     return true;
   }
@@ -874,30 +820,46 @@ export async function handleStaticGlobalAppRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
-  // Expect: ["apps", "global", chatId, appName, "dist", ...rest]
-  if (
+  // Expect one of:
+  //   ["apps", "global", chatId, appName, "dist", ...rest]
+  //   ["apps", "global", chatId, assetToken, appName, "dist", ...rest]
+  const routeAssetToken =
+    segments.length >= 6 && /^[a-f0-9]{64}$/.test(decodeURIComponent(segments[3] ?? "")) && segments[5] === "dist"
+      ? decodeURIComponent(segments[3])
+      : null;
+  const legacyShape =
     segments.length < 5 ||
     segments[0] !== "apps" ||
     segments[1] !== "global" ||
-    segments[4] !== "dist"
-  ) {
+    segments[4] !== "dist";
+  const tokenizedShape =
+    !!routeAssetToken &&
+    segments[0] === "apps" &&
+    segments[1] === "global" &&
+    segments[5] === "dist";
+  if (legacyShape && !tokenizedShape) {
     return false;
   }
   const chatId = decodeURIComponent(segments[2]);
-  const appName = decodeURIComponent(segments[3]);
+  const appName = decodeURIComponent(routeAssetToken ? segments[4] : segments[3]);
   if (!APP_NAME_PATTERN.test(appName)) {
     throw new NotFoundError(`Unknown app: ${appName}`);
   }
 
-  const tail = segments.slice(5).map((s) => decodeURIComponent(s)).join("/");
-
-  // Non-HTML assets served unprivileged (same rationale as the chat scope:
-  // sandboxed-iframe module-script loads from an opaque origin do not send
-  // cookies). Privileged operations route through the bridge. Skip the
-  // asset branch when the tail matches a fragment HTML entry point so the
-  // bridge-injection path is reached.
+  const tailStart = routeAssetToken ? 6 : 5;
+  const tail = segments.slice(tailStart).map((s) => decodeURIComponent(s)).join("/");
   const globalEntry = matchEntryPoint(tail);
-  if (tail !== "" && !globalEntry && path.extname(tail).toLowerCase() !== ".html") {
+  const isNonHtmlAsset = tail !== "" && !globalEntry && path.extname(tail).toLowerCase() !== ".html";
+  if (isNonHtmlAsset && routeAssetToken) {
+    const ses = await queries.appSessions.verify(pool, routeAssetToken);
+    if (
+      !ses ||
+      ses.scope !== "global" ||
+      ses.chatId !== chatId ||
+      ses.appName !== appName
+    ) {
+      throw new UnauthorizedError("Invalid app asset token");
+    }
     const { distDir } = await resolveGlobalAppDist(storage, appName);
     await serveAsset(distDir, tail, res);
     return true;
@@ -943,6 +905,7 @@ export async function handleStaticGlobalAppRequest(
         capabilities: session.capabilities,
       },
       res,
+      assetBaseHref: globalAssetBaseHref(chatId, hashToken(bridgeToken), appName),
     });
     return true;
   }
@@ -1056,9 +1019,10 @@ export async function issueLibraryAppSession(
   }
 
   const manifest = await readManifest(distDir);
-  // Same sanitization as the chat scope — drop unknown capabilities and
-  // dedupe so the bridge payload is well-formed.
-  const capabilities = sanitizeCapabilities(manifest?.capabilities);
+  const capabilities = sanitizeCapabilities(
+    manifest?.capabilities,
+    SELF_DECLARED_APP_CAPABILITIES,
+  );
 
   const raw = randomBytes(APP_TOKEN_BYTES).toString("hex");
   const token = APP_TOKEN_PREFIX + raw;
@@ -1069,7 +1033,7 @@ export async function issueLibraryAppSession(
     scope: "library",
     chatId: null,
     workspaceId: ws.id,
-    appName,
+    appName: librarySessionAppKey(appPath),
     capabilities,
     tokenHash: hashToken(token),
     expiresAt,
@@ -1090,18 +1054,19 @@ export async function issueLibraryAppSession(
 async function verifyLibraryAppToken(
   pool: Pool,
   token: string,
+  expectedAppPath: string,
   expectedAppName: string,
   expectedWorkspaceId: string,
 ): Promise<VerifiedSession | null> {
   const session = await queries.appSessions.verify(pool, hashToken(token));
   if (!session) return null;
   if (session.scope !== "library") return null;
-  if (session.appName !== expectedAppName) return null;
+  if (session.appName !== librarySessionAppKey(expectedAppPath)) return null;
   if (session.workspaceId !== expectedWorkspaceId) return null;
   return {
     userId: session.userId,
     chatId: session.chatId ?? "",
-    appName: session.appName,
+    appName: expectedAppName,
     capabilities: session.capabilities,
   };
 }
@@ -1158,7 +1123,7 @@ export async function handleStaticLibraryAppRequest(
       !ses ||
       ses.scope !== "library" ||
       ses.workspaceId !== routeWorkspaceId ||
-      ses.appName !== appName
+      ses.appName !== librarySessionAppKey(appPath)
     ) {
       throw new UnauthorizedError("Invalid app asset token");
     }
@@ -1190,20 +1155,28 @@ export async function handleStaticLibraryAppRequest(
 
   if (queryToken) {
     const ses = await queries.appSessions.verify(pool, hashToken(queryToken));
-    if (!ses || ses.scope !== "library" || ses.appName !== appName) {
+    if (
+      !ses ||
+      ses.scope !== "library" ||
+      ses.appName !== librarySessionAppKey(appPath)
+    ) {
       throw new UnauthorizedError("Invalid app token");
     }
     session = {
       userId: ses.userId,
       chatId: "",
-      appName: ses.appName,
+      appName,
       capabilities: ses.capabilities,
     };
     workspaceId = routeWorkspaceId ?? ses.workspaceId;
     if (workspaceId !== ses.workspaceId) throw new UnauthorizedError("Invalid app token");
   } else if (cookieToken) {
     const ses = await queries.appSessions.verify(pool, hashToken(cookieToken));
-    if (!ses || ses.scope !== "library" || ses.appName !== appName) {
+    if (
+      !ses ||
+      ses.scope !== "library" ||
+      ses.appName !== librarySessionAppKey(appPath)
+    ) {
       throw new UnauthorizedError("Invalid app token");
     }
     // The cookie name we matched on encodes the workspaceId — re-check
@@ -1212,7 +1185,7 @@ export async function handleStaticLibraryAppRequest(
     if (ses.workspaceId !== cookieWs) {
       throw new UnauthorizedError("Invalid app token");
     }
-    session = await verifyLibraryAppToken(pool, cookieToken, appName, ses.workspaceId);
+    session = await verifyLibraryAppToken(pool, cookieToken, appPath, appName, ses.workspaceId);
     if (!session) throw new UnauthorizedError("Invalid app token");
     workspaceId = routeWorkspaceId ?? ses.workspaceId;
     if (workspaceId !== ses.workspaceId) throw new UnauthorizedError("Invalid app token");

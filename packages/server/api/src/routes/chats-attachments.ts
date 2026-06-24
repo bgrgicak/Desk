@@ -117,6 +117,11 @@ function normalizeWorkspaceRelativePath(raw: string): string {
   return segments.join("/");
 }
 
+function isInsidePath(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
 function validateAttachableArtifactPath(relPath: string, _chatId: string): void {
   // Accepts three shapes:
   //   `.chats/<sourceChatId>/artifacts/<rest>` — any chat's artifact dir
@@ -276,32 +281,44 @@ export async function listAttachments(
   const root = workspaceRootPath(storage.home, slug);
   const showHidden = opts?.showHidden ?? false;
   const out: ChatFileRef[] = [];
+  const rootReal = await fs.realpath(root).catch(() => null);
+  if (!rootReal) return out;
   const attachmentNames = new Set<string>();
 
   const attDir = await chatAttachmentsDir(storage.home, slug, chatId);
-  const attNames = await fs.readdir(attDir).catch(() => [] as string[]);
-  for (const name of attNames) {
-    if (!showHidden && name.startsWith(".")) continue;
-    const abs = path.join(attDir, name);
-    const stat = await fs.stat(abs).catch(() => null);
-    if (!stat) continue;
-    const isAppDir = stat.isDirectory() && name.endsWith(".app") && name !== ".app";
-    if (!stat.isFile() && !isAppDir) continue;
-    attachmentNames.add(name);
-    out.push({
-      path: path.relative(root, abs).split(path.sep).join("/"),
-      name,
-      mime: isAppDir ? APP_DIR_MIME : "application/octet-stream",
-      size: isAppDir ? 0 : stat.size,
-      createdAt: stat.birthtime.toISOString(),
-      updatedAtMs: String(stat.mtimeMs),
-      kind: "attachment",
-      isDir: isAppDir || undefined,
-    });
+  const attDirReal = await fs.realpath(attDir).catch(() => null);
+  if (attDirReal && isInsidePath(rootReal, attDirReal)) {
+    const attNames = await fs.readdir(attDir).catch(() => [] as string[]);
+    for (const name of attNames) {
+      if (!showHidden && name.startsWith(".")) continue;
+      const abs = path.join(attDir, name);
+      const realAbs = await fs.realpath(abs).catch(() => null);
+      if (!realAbs || !isInsidePath(rootReal, realAbs)) continue;
+      const stat = await fs.stat(realAbs).catch(() => null);
+      if (!stat) continue;
+      const isAppDir = stat.isDirectory() && name.endsWith(".app") && name !== ".app";
+      if (!stat.isFile() && !isAppDir) continue;
+      attachmentNames.add(name);
+      out.push({
+        path: path.relative(root, abs).split(path.sep).join("/"),
+        name,
+        mime: isAppDir ? APP_DIR_MIME : "application/octet-stream",
+        size: isAppDir ? 0 : stat.size,
+        createdAt: stat.birthtime.toISOString(),
+        updatedAtMs: String(stat.mtimeMs),
+        kind: "attachment",
+        isDir: isAppDir || undefined,
+      });
+    }
   }
 
   if (opts?.includeArtifacts) {
     const artDir = chatArtifactsDir(storage.home, slug, chatId);
+    const artDirReal = await fs.realpath(artDir).catch(() => null);
+    if (!artDirReal || !isInsidePath(rootReal, artDirReal)) {
+      out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+      return out;
+    }
     const attachedArtifactPaths = new Set<string>();
     const { rows } = await storage.pool.query<{ content: string | unknown }>(
       "SELECT content FROM messages WHERE chat_id = ?",
@@ -327,7 +344,9 @@ export async function listAttachments(
     for (const name of artNames) {
       if (!showHidden && name.startsWith(".")) continue;
       const abs = path.join(artDir, name);
-      const stat = await fs.stat(abs).catch(() => null);
+      const realAbs = await fs.realpath(abs).catch(() => null);
+      if (!realAbs || !isInsidePath(artDirReal, realAbs)) continue;
+      const stat = await fs.stat(realAbs).catch(() => null);
       if (!stat) continue;
       const isDir = stat.isDirectory();
       const relPath = path.relative(root, abs).split(path.sep).join("/");

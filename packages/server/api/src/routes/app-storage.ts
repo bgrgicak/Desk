@@ -128,6 +128,10 @@ function normalizeLibraryAppPath(appPathOrName: string): { appPath: string; appN
   return { appPath, appName };
 }
 
+function librarySessionAppKey(appPath: string): string {
+  return appPath.endsWith(".app") ? appPath.slice(0, -".app".length) : appPath;
+}
+
 interface AppStorageContext {
   scope: "chat" | "library";
   storageDir: string;          // <appRoot>/.storage
@@ -229,7 +233,7 @@ async function resolveLibraryStorage(
   const session = await queries.appSessions.verify(pool, hashToken(cookieToken));
   if (!session) throw new UnauthorizedError("Invalid app token");
   if (session.scope !== "library") throw new UnauthorizedError("Wrong scope");
-  if (session.appName !== appName) {
+  if (session.appName !== librarySessionAppKey(appPath)) {
     throw new UnauthorizedError("Token scope mismatch");
   }
   if (expectedWorkspaceId && session.workspaceId !== expectedWorkspaceId) {

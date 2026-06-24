@@ -18,18 +18,53 @@ snapshot or backup.
 |-----------|-----------|-------|
 | Stored | `api/src/routes/account.ts → setProviders` / `vault.upsert` | Selective write into the user's KDBX vault |
 | Deleted | `api/src/routes/account.ts → setProviders` / `vault.delete` | Selective delete from the user's KDBX vault |
-| Read for sandbox | `scheduler/src/runs.ts` | Decrypted into memory, injected as sandbox exec env vars |
+| Read for sandbox | `scheduler/src/runs.ts` | Disabled by default; only decrypted for raw sandbox env injection when `ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV=1` |
 | Read for UI | `api/src/routes/account.ts → getProviders` | Always masked (`sk-ant-...nop`) before returning |
 
 Keys are never returned in plaintext over the API. The masking function lives in `api/src/routes/account.ts → maskKey()`.
 
 ### Docker sandbox injection
 
-Keys are passed to containers as environment variables via `runtime/src/docker.ts → providerKeyEnv()` at create time and `providerKeyExecEnv()` per run. This means container-scoped credentials are visible to code running in the sandbox; create-time values may also be visible via `docker inspect` on the host. Because sandboxed code must be able to use the keys, switching to a tmpfs file does not reduce exposure — any code running in the container can read either.
+Provider and managed-connection keys are **not** passed to sandbox
+containers by default. Raw environment-variable forwarding is available
+only for trusted single-user/dev deployments that set
+`ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV=1`; in that mode
+`runtime/src/docker.ts → providerKeyEnv()` and
+`providerKeyExecEnv()` inject the configured provider keys and aliases.
+Those values are readable by code running in the sandbox and create-time
+values may be visible via `docker inspect` on the host, so hosted
+multi-user deployments should leave the opt-in unset.
 
-GitHub connections are exposed as both `GITHUB_TOKEN` and `GH_TOKEN` for CLI compatibility. The UI guides users to create a classic personal access token with the `repo` scope, plus `workflow` if agents should edit GitHub Actions workflow files. Classic tokens are broad, but they are currently the simplest compatible path for `gh`, GitHub API calls, private repo git operations, pull requests, issues, and HTTPS `git` from sandboxes. Deleting the connection removes Roomy's local vault entry; users can revoke or rotate the token in GitHub settings. The runtime also creates a temporary `GIT_ASKPASS` helper during pi runs so HTTPS `git` operations can authenticate non-interactively without requiring the `gh` CLI to be installed.
+GitHub connections are exposed as both `GITHUB_TOKEN` and `GH_TOKEN` for
+CLI compatibility only under that raw-env opt-in and only after the
+active workspace grants the connection. The UI guides users to create a
+classic personal access token with the `repo` scope, plus `workflow` if
+agents should edit GitHub Actions workflow files. Classic tokens are
+broad, but they are currently the simplest compatible path for `gh`,
+GitHub API calls, private repo git operations, pull requests, issues, and
+HTTPS `git` from sandboxes. Deleting the connection removes Roomy's local
+vault entry; users can revoke or rotate the token in GitHub settings.
+The runtime also creates a temporary `GIT_ASKPASS` helper during pi runs
+when raw credential forwarding is enabled so HTTPS `git` operations can
+authenticate non-interactively without requiring the `gh` CLI to be
+installed.
 
-The real risk is `docker inspect` access on the host, which requires Docker socket access (root-equivalent). Mitigated sufficiently by host access controls.
+### Host local sources
+
+Host-local model sources such as Codex/ChatGPT OAuth are disabled by
+default. Operators must set `ROOMY_ENABLE_HOST_LOCAL_SOURCES=1`, the
+Roomy user must opt in, and the detected host-source identity must match
+the Roomy user's email before `resolveLocalSourceEnv()` forwards
+`PI_AUTH_JSON_BASE64` into a sandbox or model-listing exec.
+
+### Local filesystem connector grants
+
+Local filesystem connections require an operator allowlist:
+`ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS=/absolute/root,/another/root`.
+Connection host paths are realpathed and must stay inside one of those
+roots. New directories default to `read_only`; write access requires both
+the connection and the workspace grant to carry `local_filesystem.write`.
+Library APIs enforce the same read-only policy as sandbox mounts.
 
 ---
 
@@ -59,7 +94,7 @@ CREATE TABLE provider_key_access_log (
 | Event | Call site | `action` | `reason` |
 |-------|-----------|----------|---------|
 | User saves keys in settings UI | `api/src/routes/account.ts → setProviders` | `write` / `delete` | `"user_update"` |
-| Keys fetched for sandbox run | `scheduler/src/runs.ts → fireMessage` | `read` | `"sandbox_run:<messageId>"` |
+| Keys fetched for raw sandbox env run | `scheduler/src/runs.ts → fireMessage` | `read` | `"sandbox_run:<messageId>"` |
 
 ### Query helpers
 
@@ -96,7 +131,7 @@ Out of scope for v1; would need an HSM or hardware enclave.
 | Lock | `POST /vault/lock` and `handleLogout` | Master Buffer is `fill(0)`'d, reference dropped |
 | Server restart | Process exit | All in-memory masters die with the process |
 | Read by user | (no endpoint) | The SPA cannot read plaintext, by design |
-| Read by agent | `GET /sandbox/secrets/:title` (X-Roomy-Sandbox-Token) | Agent's `userId` resolves the vault |
+| Read by agent | `GET /sandbox/secrets/:title` (X-Roomy-Sandbox-Token) | Denied by default; future explicit secret grants must opt in per secret |
 | Write by user | `POST /secrets`, `PUT /secrets/:title` | Add or overwrite via KDBX entry fields |
 
 The master password is held as a `Buffer` (not a JS String) so we
@@ -115,8 +150,10 @@ acceptable for a once-per-restart operation.
 The SPA has **no reveal endpoint**. List endpoints return titles +
 metadata only (username, url, hasNotes); plaintext lives only in
 the KDBX file and in the server's in-memory cache while unlocked.
-A hijacked SPA session can overwrite secrets but can't exfiltrate
-them — that's an intentional asymmetry, not a bug.
+Sandbox `/sandbox/secrets` routes also deny list/read by default until
+an explicit task-scoped secret grant model exists. A hijacked SPA session
+can overwrite secrets but can't exfiltrate them — that's an intentional
+asymmetry, not a bug.
 
 ### Lock-on-logout
 
@@ -136,8 +173,7 @@ only an explicit logout does.
   encryption it was guarding).
 - App-write capability path (waits on per-app identity from #47).
 - Audit log for vault reads (mirror of `provider_key_access_log`).
-- Per-workspace ACLs (currently every workspace under the user can
-  read every secret in that user's vault).
+- Per-workspace and per-task secret grants for sandbox code.
 
 ---
 

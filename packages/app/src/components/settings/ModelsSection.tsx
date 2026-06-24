@@ -144,6 +144,10 @@ export function normalizeModelIdForProvider(provider: string, model: string): st
   return `${provider}/${trimmed}`
 }
 
+export function defaultModelIdForProvider(provider: string): string {
+  return DEFAULT_MODEL_BY_PROVIDER[provider] ?? ''
+}
+
 export function reorderModelIds(
   ids: string[],
   activeId: string,
@@ -701,7 +705,6 @@ function ModelDetail({
   const credentialScopeText = modelProviderCredentialScopeText(provider, focus.mode, hasSavedCredential)
   const localSource = providerOption?.localSourceKind ? localSources[providerOption.localSourceKind] : undefined
   const localSourceUnavailable = providerOption?.localSourceKind !== undefined && localSource?.available === false
-  const normalizedModel = normalizeModelIdForProvider(provider, model)
   const needsCredential = modelProviderCredentialRequired(provider, focus.mode, hasSavedCredential)
   // The Model ID field is only meaningful once we know how the agent will
   // authenticate — otherwise we'd be asking the user to pick a model we
@@ -715,6 +718,8 @@ function ModelDetail({
     : providerOption?.localSourceKind
       ? !localSourceUnavailable
       : true
+  const defaultModel = connectionEnvKey && credentialReady ? defaultModelIdForProvider(provider) : ''
+  const normalizedModel = normalizeModelIdForProvider(provider, model || defaultModel)
   const canSave = name.trim().length > 0
     && normalizedModel.length > 0
     && (!needsCredential || credentialSecret.trim().length > 0)
@@ -853,7 +858,7 @@ function ModelDetail({
             <ModelDropdown
               models={providerModels}
               selected={model}
-              placeholder="Select a model"
+              placeholder={defaultModel || "Select a model"}
               open={modelPickerOpen}
               onOpenChange={setModelPickerOpen}
               query={modelQuery}

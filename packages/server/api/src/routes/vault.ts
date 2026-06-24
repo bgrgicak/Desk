@@ -1,5 +1,6 @@
 import {
   ConflictError,
+  ForbiddenError,
   UnauthorizedError,
   ValidationError,
 } from "@roomy-ai/shared";
@@ -107,18 +108,18 @@ export async function updateSecret(
 // ── Sandbox-side handlers ────────────────────────────────────────────────
 
 export function sandboxList(
-  vault: VaultStore,
-  userId: string,
-): { secrets: SecretSummary[] } {
-  return { secrets: vault.list(userId) };
+  _vault: VaultStore,
+  _userId: string,
+): never {
+  throw new ForbiddenError("Sandbox secret access requires an explicit secret grant");
 }
 
 export function sandboxGet(
-  vault: VaultStore,
-  userId: string,
-  title: string,
-): SecretEntry | null {
-  return vault.get(userId, title);
+  _vault: VaultStore,
+  _userId: string,
+  _title: string,
+): never {
+  throw new ForbiddenError("Sandbox secret access requires an explicit secret grant");
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────

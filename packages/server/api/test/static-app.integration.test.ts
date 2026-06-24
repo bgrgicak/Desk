@@ -207,6 +207,26 @@ describe("static-serve when ROOMY_SERVE_APP=1", () => {
     expect(res.contentType).toMatch(/text\/html/);
     expect(res.body).toContain("roomy-app-spa");
   });
+
+  it("path traversal cannot read sibling directories whose names share the distRoot prefix", async () => {
+    process.env.ROOMY_SERVE_APP = "1";
+    process.env.ROOMY_APP_DIST = distRoot;
+    const sibling = `${distRoot}-sibling`;
+    await fs.mkdir(sibling, { recursive: true });
+    await fs.writeFile(path.join(sibling, "secret.txt"), "sibling secret", "utf-8");
+    const server = await startServer();
+
+    const res = await fetchRaw(
+      getServerPort(server),
+      `/%2e%2e%2f${encodeURIComponent(path.basename(sibling))}/secret.txt`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.contentType).toMatch(/text\/html/);
+    expect(res.body).toContain("roomy-app-spa");
+    expect(res.body).not.toContain("sibling secret");
+
+    await fs.rm(sibling, { recursive: true, force: true });
+  });
 });
 
 describe("default mode (ROOMY_SERVE_APP unset) — no behaviour change", () => {

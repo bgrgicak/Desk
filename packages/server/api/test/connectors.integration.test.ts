@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Pool, runMigrations, insertSeedFixture } from "@roomy-ai/db";
 import { ensureLayout } from "@roomy-ai/storage";
+import { LOCAL_FILESYSTEM_PROVIDER_ID } from "@roomy-ai/shared";
 import { createRunManager } from "@roomy-ai/scheduler";
 import { createApp } from "../src/app.js";
 import { clearSessions } from "../src/auth/sessions.js";
@@ -269,5 +270,59 @@ describe("connector connection routes", () => {
       scopes: ["repo", 7],
     });
     expect(invalidArray.status).toBe(400);
+  });
+
+  it("rejects local filesystem host paths unless an operator allowlist admits them", async () => {
+    const previousAllowedRoots = process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+    const source = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-localfs-rejected-"));
+    delete process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+    try {
+      const blocked = await request("POST", "/me/connections", token, {
+        providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+        displayName: "Unapproved local folder",
+        metadata: {
+          localFilesystem: {
+            directories: [{ id: "dir_docs", hostPath: source, homeName: "Docs" }],
+          },
+        },
+      });
+
+      expect(blocked.status).toBe(400);
+    } finally {
+      if (previousAllowedRoots === undefined) delete process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+      else process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = previousAllowedRoots;
+      await fs.rm(source, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts allowlisted local filesystem roots and defaults them to read-only", async () => {
+    const previousAllowedRoots = process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+    const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-localfs-allowed-root-"));
+    const source = path.join(allowedRoot, "Docs");
+    await fs.mkdir(source);
+    const realSource = await fs.realpath(source);
+    process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = allowedRoot;
+    try {
+      const created = await request("POST", "/me/connections", token, {
+        providerId: LOCAL_FILESYSTEM_PROVIDER_ID,
+        displayName: "Approved local folder",
+        metadata: {
+          localFilesystem: {
+            directories: [{ id: "dir_docs", hostPath: source, homeName: "AllowedDocs" }],
+          },
+        },
+      });
+
+      expect(created.status).toBe(201);
+      expect(created.body.connection.metadata.localFilesystem.directories[0]).toMatchObject({
+        hostPath: realSource,
+        homeName: "AllowedDocs",
+        access: "read_only",
+      });
+    } finally {
+      if (previousAllowedRoots === undefined) delete process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS;
+      else process.env.ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS = previousAllowedRoots;
+      await fs.rm(allowedRoot, { recursive: true, force: true });
+    }
   });
 });

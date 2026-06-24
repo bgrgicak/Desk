@@ -61,6 +61,7 @@ test("storing a ChatGPT key persists and echoes back masked", async ({
   const longKey = "sk-test-1234567890abcdef".padEnd(40, "x");
   await input.fill(longKey);
   await dialog.getByRole("button", { name: /^Add model$/i }).click();
+  await expect(dialog.locator("div.group", { hasText: agentName }).first()).toBeVisible({ timeout: 5_000 });
 
   // Server confirms — masking format is `prefix...suffix`.
   await expect.poll(async () => {

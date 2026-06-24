@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -1509,6 +1509,32 @@ describe("scheduleSummary", () => {
         [chatId],
       )).rows;
       expect(new Date(rows[0].execute_at as string).getTime() - Date.now()).toBeGreaterThan(20 * 60 * 1000);
+    });
+
+    it("does not resolve provider keys for model metadata unless raw sandbox credential env is enabled", async () => {
+      const previousRawEnv = process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+      const previousDriver = process.env.ROOMY_SANDBOX_DRIVER;
+      delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+      process.env.ROOMY_SANDBOX_DRIVER = "fake";
+      const resolveProviderKeys = vi.fn(async () => ({ OPENAI_API_KEY: "sk-should-not-resolve" }));
+      const mgr = createRunManager({
+        pool,
+        execRunFn: async () => ({ exitCode: 0 }),
+        resolveProviderKeys,
+      });
+      await clearChatTranscript();
+      await insertUserMessageBody("small transcript");
+
+      try {
+        await mgr.scheduleSummary(chatId);
+
+        expect(resolveProviderKeys).not.toHaveBeenCalled();
+      } finally {
+        if (previousRawEnv === undefined) delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+        else process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = previousRawEnv;
+        if (previousDriver === undefined) delete process.env.ROOMY_SANDBOX_DRIVER;
+        else process.env.ROOMY_SANDBOX_DRIVER = previousDriver;
+      }
     });
   });
 });

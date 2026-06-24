@@ -35,8 +35,29 @@ Users create one in GitHub → **Settings** → **Developer settings** →
 **Personal access tokens** → **Tokens (classic)** with the `repo` scope, plus
 `workflow` if agents should edit GitHub Actions workflow files. Roomy stores that
 token encrypted as `GITHUB_TOKEN`. The token is forwarded to a sandbox as both
-`GITHUB_TOKEN` and `GH_TOKEN` only after the active workspace grants that
-connection.
+`GITHUB_TOKEN` and `GH_TOKEN` only when
+`ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV=1` is set and the active workspace
+grants that connection. Leave the env var unset for hosted or multi-user
+deployments.
+
+### Host-local Codex source
+
+Forwarding host Codex/ChatGPT OAuth into a sandbox is disabled by default.
+For local single-user development, set `ROOMY_ENABLE_HOST_LOCAL_SOURCES=1`;
+the Roomy user must still opt in from Models settings, and the email in
+the host Codex auth file must match the Roomy account email.
+
+### Local filesystem connector roots
+
+Local filesystem connections require an operator allowlist:
+
+```bash
+ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS="$HOME/Projects,$HOME/Documents"
+```
+
+Connection paths are realpathed and must stay under one of those roots.
+New local filesystem directories default to read-only; write access must
+be granted explicitly in the connection and workspace grant.
 
 ## First-time setup
 

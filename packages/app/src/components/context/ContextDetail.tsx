@@ -2,7 +2,6 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { useSelector, useDispatch } from 'react-redux'
-import { getSessionToken } from '@/auth/session'
 import {
   Link2,
   Download,
@@ -804,13 +803,10 @@ export function ContextDetail({ item, onBack, onCompose, onRenameItem, isPinned,
               )
             })()
           ) : kind === 'app' ? (
-            <div className="flex-1 flex flex-col bg-muted/30">
-              <iframe
-                title={item.name}
-                src={`/api/apps/${activeWorkspaceId}/${item.id}/dist/index.html?token=${encodeURIComponent(getSessionToken() ?? '')}`}
-                className="flex-1 w-full border-0 bg-white"
-                sandbox={GENERATED_APP_IFRAME_SANDBOX}
-              />
+            <div className="flex-1 flex items-center justify-center min-h-0">
+              <p className="text-sm text-muted-foreground">
+                Preview not available for this app path
+              </p>
             </div>
           ) : kind === 'pdf' ? (
             <div className="flex-1 flex flex-col bg-muted/30">

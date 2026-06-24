@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { ValidationError, ID_PREFIXES } from "@roomy-ai/shared";
+import { ValidationError, ID_PREFIXES, type LocalFilesystemAccess } from "@roomy-ai/shared";
 
 /**
  * Single source of truth for resolving the Roomy on-disk root.
@@ -181,14 +181,53 @@ export async function chatAttachmentsDir(
 ): Promise<string> {
   validateId(chatId, ID_PREFIXES.chat);
   const dir = path.join(workspaceRoot(home, slug), ".chats", chatId, "attachments");
-  await fs.mkdir(dir, { recursive: true });
-  return dir;
+  return ensureDirectoryInsideWorkspace(home, slug, dir);
 }
 
 /** Returns the absolute path to a chat's agent-artifacts directory. Does not create it. */
 export function chatArtifactsDir(home: string, slug: string, chatId: string): string {
   validateId(chatId, ID_PREFIXES.chat);
   return path.join(workspaceRoot(home, slug), ".chats", chatId, "artifacts");
+}
+
+function isInsidePath(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+async function ensureDirectoryInsideWorkspace(home: string, slug: string, dir: string): Promise<string> {
+  const root = workspaceRoot(home, slug);
+  await fs.mkdir(root, { recursive: true });
+  const realRoot = await fs.realpath(root);
+
+  const rootToDir = path.relative(root, dir);
+  if (!rootToDir || rootToDir === ".." || rootToDir.startsWith(`..${path.sep}`) || path.isAbsolute(rootToDir)) {
+    throw new ValidationError(`Path traversal detected: ${dir}`);
+  }
+
+  let current = root;
+  for (const segment of rootToDir.split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    const stat = await fs.lstat(current).catch(() => null);
+    if (!stat) break;
+    if (stat.isSymbolicLink()) {
+      throw new ValidationError(`Refusing to create directory through symlink: ${current}`);
+    }
+    if (!stat.isDirectory()) {
+      throw new ValidationError(`Path is not a directory: ${current}`);
+    }
+    const realCurrent = await fs.realpath(current).catch(() => null);
+    if (!realCurrent || !isInsidePath(realRoot, realCurrent)) {
+      throw new ValidationError(`Path traversal detected: ${current}`);
+    }
+  }
+
+  await fs.mkdir(dir, { recursive: true });
+  const realDir = await fs.realpath(dir).catch(() => null);
+  if (!realDir || !isInsidePath(realRoot, realDir)) {
+    throw new ValidationError(`Path traversal detected: ${dir}`);
+  }
+  return dir;
 }
 
 /** Returns the temp directory for in-progress uploads. */
@@ -362,6 +401,19 @@ export interface VirtualLibraryMount {
   homeName: string;
   /** Absolute host path the user selected for this mount. */
   sourcePath: string;
+  /** Whether writes through this projection are allowed. Defaults to read_write for legacy callers. */
+  access?: LocalFilesystemAccess;
+}
+
+export interface ResolvedLibraryHostPath {
+  /** Absolute path to the requested filesystem entry. */
+  path: string;
+  /** Absolute root that the final real path must stay inside. */
+  root: string;
+  /** Whether writes through this resolved path are allowed. */
+  access: LocalFilesystemAccess;
+  /** True when the path resolved through a projected host directory. */
+  virtual: boolean;
 }
 
 /**
@@ -381,22 +433,41 @@ export function resolveLibraryHostPath(
   storedPath: string,
   virtualMounts?: readonly VirtualLibraryMount[],
 ): string {
+  return resolveLibraryHostPathDetails(home, slug, storedPath, virtualMounts).path;
+}
+
+export function resolveLibraryHostPathDetails(
+  home: string,
+  slug: string,
+  storedPath: string,
+  virtualMounts?: readonly VirtualLibraryMount[],
+): ResolvedLibraryHostPath {
   for (const mount of virtualMounts ?? []) {
     if (!mount.homeName) continue;
-    if (storedPath === mount.homeName) return mount.sourcePath;
+    const sourceRoot = path.resolve(mount.sourcePath);
+    const access = mount.access ?? "read_write";
+    if (storedPath === mount.homeName) {
+      return { path: sourceRoot, root: sourceRoot, access, virtual: true };
+    }
     if (storedPath.startsWith(mount.homeName + "/")) {
       const sub = storedPath.slice(mount.homeName.length + 1);
-      const resolved = path.resolve(mount.sourcePath, sub);
+      const resolved = path.resolve(sourceRoot, sub);
       if (
-        resolved !== mount.sourcePath
-        && !resolved.startsWith(mount.sourcePath + path.sep)
+        resolved !== sourceRoot
+        && !resolved.startsWith(sourceRoot + path.sep)
       ) {
         throw new ValidationError(`Path traversal detected: ${storedPath}`);
       }
-      return resolved;
+      return { path: resolved, root: sourceRoot, access, virtual: true };
     }
   }
-  return resolveHostPath(home, slug, storedPath);
+  const root = workspaceRoot(home, slug);
+  return {
+    path: resolveHostPath(home, slug, storedPath),
+    root,
+    access: "read_write",
+    virtual: false,
+  };
 }
 
 /**

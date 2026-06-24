@@ -37,7 +37,7 @@ External entrypoint for clients.
 
 Agent-authored Roomy apps are treated as untrusted static frontends. The parent SPA renders them in iframes with scripts enabled but without `allow-same-origin`, giving app JavaScript an opaque browser origin instead of first-party access to Roomy session storage, local storage, cookies, or parent DOM.
 
-The server authenticates app HTML entrypoints with per-app sessions and injects `window.roomy` into those HTML responses. Non-HTML build assets are served as unprivileged subresources because opaque sandbox origins do not send the app-session cookie for module-script loads. Any privileged Roomy operation must go through the parent-mediated `window.roomy` postMessage bridge, where the parent validates the source iframe, bridge key, app scope, and declared capability before making the host API call.
+The server authenticates app HTML entrypoints with per-app sessions and injects `window.roomy` into those HTML responses. Non-HTML build assets are not public: they are served either through the same app-session boundary or through a short-lived, session-bound asset token embedded into the app URL. Any privileged Roomy operation must go through the parent-mediated `window.roomy` postMessage bridge, where the parent validates the source iframe, bridge key, app scope, and declared capability before making the host API call.
 
 ### 3. Control Plane / Orchestrator
 

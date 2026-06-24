@@ -155,13 +155,14 @@ test('Your Day task item renders the latest fragment in its HomeDay card', async
 
   const frame = loggedInPage.frameLocator('iframe[title="chat-forms"]')
   await expect(frame.getByText('Ship this today?')).toBeVisible({ timeout: 15_000 })
-  await frame.getByRole('button', { name: 'Yes' }).click()
-  await expect(frame.getByText('Submitted.')).toBeVisible()
-  await waitForUserTextMessage({
-    page: loggedInPage,
-    serverUrl,
-    token,
-    chatId: chat.id,
-    text: 'Yes',
-  })
+  await Promise.all([
+    waitForUserTextMessage({
+      page: loggedInPage,
+      serverUrl,
+      token,
+      chatId: chat.id,
+      text: 'Yes',
+    }),
+    frame.getByRole('button', { name: 'Yes' }).click(),
+  ])
 })

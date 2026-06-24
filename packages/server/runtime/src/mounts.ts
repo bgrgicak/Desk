@@ -35,6 +35,7 @@ export const SANDBOX_HOME = "/home/agent";
 export const SKILLS_SANDBOX_DIR = `${SANDBOX_HOME}/.agents/skills`;
 export const SKILLS_SANDBOX_MOUNT_DIR = "/opt/roomy-skills";
 export const APPS_SANDBOX_MOUNT_DIR = "/opt/roomy-apps";
+const LOCAL_FILESYSTEM_ALLOWED_ROOTS_ENV = "ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS";
 
 /** Host-side global skills directory. Mounted read-only into each sandbox. */
 export function skillsHostDir(home: string): string {
@@ -219,6 +220,33 @@ function localFilesystemDirectories(metadata: Record<string, unknown>): LocalFil
     : [];
 }
 
+function isInsidePath(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (rel.length > 0 && !rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+async function localFilesystemAllowedRoots(): Promise<string[]> {
+  const raw = process.env[LOCAL_FILESYSTEM_ALLOWED_ROOTS_ENV];
+  if (!raw?.trim()) return [];
+  const roots: string[] = [];
+  for (const entry of raw.split(",")) {
+    const trimmed = entry.trim();
+    if (!trimmed || !path.isAbsolute(trimmed)) continue;
+    const real = await fs.realpath(trimmed).catch(() => null);
+    if (!real) continue;
+    const stat = await fs.stat(real).catch(() => null);
+    if (stat?.isDirectory()) roots.push(real);
+  }
+  return roots;
+}
+
+async function assertLocalFilesystemHostPathAllowed(hostPath: string): Promise<string> {
+  const realHostPath = await fs.realpath(hostPath).catch(() => hostPath);
+  const roots = await localFilesystemAllowedRoots();
+  if (roots.some((root) => isInsidePath(realHostPath, root))) return realHostPath;
+  throw new ConflictError(`Local filesystem source is not allowed by ${LOCAL_FILESYSTEM_ALLOWED_ROOTS_ENV}: ${hostPath}`);
+}
+
 async function readMountMarker(targetPath: string): Promise<{ mountId?: string } | null> {
   try {
     const raw = await fs.readFile(path.join(targetPath, LOCAL_FILESYSTEM_MOUNT_MARKER), "utf8");
@@ -263,12 +291,13 @@ export async function buildWorkspaceMountPlan(
 
   const workspaceRoot = workspaceRootPath(opts.home, opts.workspaceSlug);
   const grants = await queries.connectors.listWorkspaceGrants(pool, opts.workspaceId);
-  const localGrantIds = grants
+  const localGrants = grants
     .filter((grant) => grant.providerId === LOCAL_FILESYSTEM_PROVIDER_ID)
-    .map((grant) => grant.connectionId);
+    .map((grant) => [grant.connectionId, grant] as const);
+  const localGrantByConnectionId = new Map(localGrants);
   const all = await queries.connectors.listConnections(pool, opts.userId, LOCAL_FILESYSTEM_PROVIDER_ID);
   const active = all.filter((connection) => connection.status === "active");
-  const selected = active.filter((connection) => localGrantIds.includes(connection.id));
+  const selected = active.filter((connection) => localGrantByConnectionId.has(connection.id));
 
   const seenHomeNames = new Set<string>();
   for (const connection of selected) {
@@ -284,22 +313,29 @@ export async function buildWorkspaceMountPlan(
       if (!(await targetIsAvailableMountPoint(targetPath, mountId))) {
         throw new ConflictError(`~/${homeName} already exists. Rename or remove it, or choose a different mount name.`);
       }
-      const sourceStat = await fs.stat(directory.hostPath).catch(() => null);
+      const sourcePath = await assertLocalFilesystemHostPathAllowed(directory.hostPath);
+      const sourceStat = await fs.stat(sourcePath).catch(() => null);
       if (!sourceStat?.isDirectory()) {
         throw new ConflictError(`Local filesystem source is not available: ${directory.hostPath}`);
       }
+      const grant = localGrantByConnectionId.get(connection.id);
+      const canWrite = Boolean(
+        connection.capabilities.includes("local_filesystem.write")
+        && grant?.grantedCapabilities.includes("local_filesystem.write"),
+      );
+      const access = canWrite && directory.access === "read_write" ? "read_write" : "read_only";
 
       mountPlan.push({
-        sourcePath: directory.hostPath,
+        sourcePath,
         targetPath: `${SANDBOX_HOME}/${homeName}`,
-        mode: directory.access === "read_only" ? "ro" : "rw",
+        mode: access === "read_only" ? "ro" : "rw",
         category: "external",
         ensureSource: false,
         mountPointId: mountId,
       });
       agentDirectories.push({
         path: `~/${homeName}`,
-        access: directory.access,
+        access,
         ...(directory.description ? { description: directory.description } : {}),
       });
     }

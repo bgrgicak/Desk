@@ -102,6 +102,18 @@ beforeAll(async () => {
     "export const sentinel = 'PR-C-ASSET-PROBE'",
     "utf8",
   );
+  await fs.mkdir(path.join(appRoot, "dist", "fragments", "grid"), { recursive: true });
+  await fs.mkdir(path.join(appRoot, "dist", "assets", "fragments"), { recursive: true });
+  await fs.writeFile(
+    path.join(appRoot, "dist", "fragments", "grid", "index.html"),
+    "<!doctype html><html><head><script type=\"module\" src=\"../../assets/fragments/grid.js\"></script></head><body><div id=\"root\"></div></body></html>",
+    "utf8",
+  );
+  await fs.writeFile(
+    path.join(appRoot, "dist", "assets", "fragments", "grid.js"),
+    "export const sentinel = 'PR-C-FRAGMENT-ASSET-PROBE'",
+    "utf8",
+  );
 
   // And an app under the *other* chat for the cross-app isolation test
   const otherAppRoot = path.join(
@@ -304,14 +316,54 @@ describe("static-app route + capability bridge", () => {
     expect(noCookie.status).toBe(401);
   });
 
-  it("serves non-HTML built assets without cookies for opaque sandbox subresource loads", async () => {
+  it("rejects non-HTML built assets without an app session", async () => {
     const asset = await httpRaw(
       "GET",
       `/apps/chat/${chatId}/${APP_NAME}/dist/assets/index.js`,
     );
+    expect(asset.status).toBe(401);
+    expect(asset.body).not.toContain("PR-C-ASSET-PROBE");
+  });
+
+  it("serves non-HTML built assets through the session-bound asset URL injected into HTML", async () => {
+    const issue = await httpRaw(
+      "POST",
+      `/apps/chat/${chatId}/${APP_NAME}/issue`,
+      { bearer: authToken },
+    );
+    const issued = issue.bodyJson as { url: string };
+    const bootstrap = await httpRaw("GET", issued.url);
+    expect(bootstrap.status).toBe(200);
+
+    const baseMatch = bootstrap.body.match(/<base href="([^"]+)">/);
+    expect(baseMatch, "expected a session-bound asset base URL").toBeTruthy();
+
+    const asset = await httpRaw("GET", `${baseMatch![1]}assets/index.js`);
     expect(asset.status).toBe(200);
     expect(asset.body).toContain("PR-C-ASSET-PROBE");
     expect(asset.headers["content-type"]).toContain("application/javascript");
+  });
+
+  it("serves nested entry assets relative to the session-bound entry directory", async () => {
+    const issue = await httpRaw(
+      "POST",
+      `/apps/chat/${chatId}/${APP_NAME}/issue`,
+      { bearer: authToken },
+    );
+    const issued = issue.bodyJson as { url: string };
+    const fragmentUrl = issued.url.replace(/\/dist\/\?/, "/dist/fragments/grid?");
+    const bootstrap = await httpRaw("GET", fragmentUrl);
+    expect(bootstrap.status).toBe(200);
+
+    const baseMatch = bootstrap.body.match(/<base href="([^"]+)">/);
+    expect(baseMatch, "expected a session-bound fragment asset base URL").toBeTruthy();
+    expect(baseMatch![1]).toContain(`/apps/chat/${chatId}/`);
+    expect(baseMatch![1]).toContain(`/${APP_NAME}/dist/fragments/grid/`);
+
+    const resolved = new URL("../../assets/fragments/grid.js", `http://127.0.0.1:${port}${baseMatch![1]}`);
+    const asset = await httpRaw("GET", resolved.pathname);
+    expect(asset.status).toBe(200);
+    expect(asset.body).toContain("PR-C-FRAGMENT-ASSET-PROBE");
   });
 
   it("isolates cookies across apps — a cookie for chat A's app does not authorize chat B's app", async () => {
@@ -349,6 +401,37 @@ describe("static-app route + capability bridge", () => {
       { headers: { Cookie: cookie } },
     );
     expect([401, 404]).toContain(traversal.status);
+  });
+
+  it("rejects symlinked chat app assets that resolve outside dist/", async () => {
+    const issue = await httpRaw(
+      "POST",
+      `/apps/chat/${chatId}/${APP_NAME}/issue`,
+      { bearer: authToken },
+    );
+    const data = issue.bodyJson as { url: string; cookieName: string };
+    const bootstrap = await httpRaw("GET", data.url);
+    const cookie = pickSetCookie(bootstrap.headers, data.cookieName)!;
+
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "roomy-app-asset-escape-"));
+    await fs.writeFile(path.join(outside, "secret.txt"), "SYMLINK-SECRET", "utf8");
+    const linkPath = path.join(
+      chatArtifactsDir(home, workspaceSlug, chatId),
+      `${APP_NAME}.app`,
+      "dist",
+      "assets",
+      "leak.txt",
+    );
+    await fs.symlink(path.join(outside, "secret.txt"), linkPath);
+
+    const leaked = await httpRaw(
+      "GET",
+      `/apps/chat/${chatId}/${APP_NAME}/dist/assets/leak.txt`,
+      { headers: { Cookie: cookie } },
+    );
+    expect(leaked.status).toBe(404);
+    expect(leaked.body).not.toContain("SYMLINK-SECRET");
+    await fs.rm(outside, { recursive: true, force: true });
   });
 
   it("issue endpoint requires bearer auth (401 without)", async () => {
@@ -418,6 +501,37 @@ describe("static-app route + capability bridge", () => {
     expect(issue.status).toBe(201);
     const issued = issue.bodyJson as { capabilities: string[] };
     expect(issued.capabilities).toEqual(["library.read"]);
+  });
+
+  it("does not grant generated apps self-declared chat write capability", async () => {
+    const chatWriterApp = "chat-writer";
+    const appRoot = path.join(
+      chatArtifactsDir(home, workspaceSlug, chatId),
+      `${chatWriterApp}.app`,
+    );
+    await fs.mkdir(path.join(appRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(appRoot, "roomy.app.json"),
+      JSON.stringify({
+        name: chatWriterApp,
+        capabilities: ["chats.write", "storage.write"],
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(appRoot, "dist", "index.html"),
+      "<!doctype html><html><head></head><body></body></html>",
+      "utf8",
+    );
+
+    const issue = await httpRaw(
+      "POST",
+      `/apps/chat/${chatId}/${chatWriterApp}/issue`,
+      { bearer: authToken },
+    );
+    expect(issue.status).toBe(201);
+    const issued = issue.bodyJson as { capabilities: string[] };
+    expect(issued.capabilities).toEqual(["storage.write"]);
   });
 
   it("rate-limits `/issue` per user", async () => {
@@ -521,12 +635,14 @@ describe("static-app route + capability bridge", () => {
       new RegExp(`<script\\s+nonce="${escapedNonce}"\\s+type="module"\\s+src="\\./assets/index\\.js"`),
     );
 
-    // Asset responses set the same defense headers. Assets are served
-    // unauthenticated (the URL is unguessable, and the iframe's opaque
-    // sandbox origin doesn't send cookies on module-script fetches).
+    const cookie = pickSetCookie(idx.headers, issued.cookieName);
+    expect(cookie).toBeTruthy();
+
+    // Asset responses set the same defense headers.
     const asset = await httpRaw(
       "GET",
       `/apps/chat/${chatId}/${APP_NAME}/dist/assets/index.js`,
+      { headers: { Cookie: cookie! } },
     );
     expect(asset.status).toBe(200);
     expect(asset.headers["x-content-type-options"]).toBe("nosniff");

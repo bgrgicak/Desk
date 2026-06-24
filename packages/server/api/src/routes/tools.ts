@@ -3,7 +3,8 @@ import { NotFoundError, PROVIDER_KEY_VARS, ValidationError } from "@roomy-ai/sha
 import { queries } from "@roomy-ai/db";
 import {
   listModels as runtimeListModels,
-  resolveAvailableLocalSourceEnv,
+  rawSandboxCredentialEnvEnabled,
+  resolveLocalSourceEnv,
   SandboxExecError,
   type ModelRef,
 } from "@roomy-ai/runtime";
@@ -32,45 +33,40 @@ export async function listModels(
     throw new ValidationError("Invalid provider id");
   }
 
-  // Pick any available workspace to reach a warm sandbox. Which one is an
-  // implementation detail for execution only; model listing is still
-  // user-global until the endpoint accepts an explicit workspace context, so
-  // do not pass this workspace into provider-key resolution. Workspace grants
-  // are allow-lists for runs, and using an arbitrary workspace here would make
-  // the model picker depend on whichever workspace happened to sort first.
-  const [firstWorkspace] = await queries.workspaces.list(pool);
-  if (!firstWorkspace) throw new NotFoundError("No sandbox available to query models from");
+  const workspace = await modelListingWorkspace(pool, opts.userId);
 
   let providerKeys: Record<string, string>;
-  try {
-    const resolved = await resolveProviderKeys(pool, vault, opts.userId);
-    providerKeys = Object.fromEntries(
-      PROVIDER_KEY_VARS
-        .map((name) => [name, resolved[name]] as const)
-        .filter(([, value]) => typeof value === "string" && value.length > 0),
-    );
-  } catch {
+  if (opts.userId && rawSandboxCredentialEnvEnabled()) {
+    try {
+      const resolved = await resolveProviderKeys(pool, vault, opts.userId);
+      providerKeys = Object.fromEntries(
+        PROVIDER_KEY_VARS
+          .map((name) => [name, resolved[name]] as const)
+          .filter(([, value]) => typeof value === "string" && value.length > 0),
+      );
+    } catch {
+      providerKeys = {};
+    }
+  } else {
     providerKeys = {};
   }
 
-  // Local sources (Codex, future LM Studio / Ollama) need their env vars
-  // injected for the sandbox to surface their models. For listing we use
-  // "available" (host-detected) instead of "enabled" (user opted in) —
-  // the picker should reveal Codex models as soon as the local sign-in
-  // is detected, even before the user has committed to a Codex agent.
-  // Opt-in is still required at run time (see `runs.ts`).
+  // Local sources carry host credentials, so model listing uses the same
+  // user opt-in and identity binding as runtime execution.
   // Best-effort: if the host file is unreadable, listings degrade to
-  // provider-key-only.
+  // provider-key-only/no-key models.
   let localEnv: Record<string, string> = {};
-  try {
-    localEnv = resolveAvailableLocalSourceEnv();
-  } catch {
-    localEnv = {};
+  if (opts.userId) {
+    try {
+      localEnv = await resolveLocalSourceEnv(pool, opts.userId);
+    } catch {
+      localEnv = {};
+    }
   }
 
   try {
     const listing = resolveModelListingSource(opts.provider, providerKeys, localEnv);
-    const raw = await runtimeListModels(firstWorkspace.id, firstWorkspace.path, {
+    const raw = await runtimeListModels(workspace.id, workspace.path, {
       provider: listing.provider,
       providerKeys: listing.providerKeys,
       env: listing.env,
@@ -110,19 +106,30 @@ export async function previewModels(
     sanitized[name] = value;
   }
 
-  const [firstWorkspace] = await queries.workspaces.list(pool);
-  if (!firstWorkspace) throw new NotFoundError("No sandbox available to query models from");
+  const workspace = await modelListingWorkspace(pool, opts.userId);
+  const hasCandidateKeys = Object.keys(sanitized).length > 0;
+  if (hasCandidateKeys && !rawSandboxCredentialEnvEnabled()) {
+    throw new ValidationError(
+      "Previewing provider-key models requires ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV=1",
+    );
+  }
 
   let localEnv: Record<string, string> = {};
-  try {
-    localEnv = resolveAvailableLocalSourceEnv();
-  } catch {
-    localEnv = {};
+  if (opts.userId) {
+    try {
+      localEnv = await resolveLocalSourceEnv(pool, opts.userId);
+    } catch {
+      localEnv = {};
+    }
   }
 
   try {
-    const listing = resolveModelListingSource(opts.provider, sanitized, localEnv);
-    const raw = await runtimeListModels(firstWorkspace.id, firstWorkspace.path, {
+    const listing = resolveModelListingSource(
+      opts.provider,
+      rawSandboxCredentialEnvEnabled() ? sanitized : {},
+      localEnv,
+    );
+    const raw = await runtimeListModels(workspace.id, workspace.path, {
       provider: listing.provider,
       providerKeys: listing.providerKeys,
       env: listing.env,
@@ -137,6 +144,18 @@ export async function previewModels(
     }
     throw err;
   }
+}
+
+async function modelListingWorkspace(
+  pool: Pool,
+  userId?: string,
+): Promise<{ id: string; path: string }> {
+  const workspaces = userId
+    ? await queries.workspaces.listByUser(pool, userId)
+    : await queries.workspaces.list(pool);
+  const [workspace] = workspaces;
+  if (!workspace) throw new NotFoundError("No sandbox available to query models from");
+  return workspace;
 }
 
 function resolveModelListingSource(

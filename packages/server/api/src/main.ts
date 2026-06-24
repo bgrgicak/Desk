@@ -25,6 +25,7 @@ import {
   detectEngine,
   productionReflectWorkspace,
   pruneDriftedContainers,
+  rawSandboxCredentialEnvEnabled,
   refreshSandboxConnections,
   resolveLocalSourceEnv,
   stopRunningSandboxes,
@@ -345,7 +346,9 @@ async function main(): Promise<void> {
         // the digest the daemon is restarted with matches what the next
         // message would compute and we don't trip a redundant restart.
         buildSandboxEnv: async (uid, wsId) => {
-          const providerKeys = await resolveProviderKeys(pool, vault, uid, wsId);
+          const providerKeys = rawSandboxCredentialEnvEnabled()
+            ? await resolveProviderKeys(pool, vault, uid, wsId)
+            : {};
           const extraEnv = await resolveLocalSourceEnv(pool, uid);
           return buildDaemonEnv({ providerKeys, extraEnv });
         },

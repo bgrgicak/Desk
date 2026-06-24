@@ -1,4 +1,6 @@
 import { Readable } from "node:stream";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { queries } from "@roomy-ai/db";
 import { ConflictError, LOCAL_FILESYSTEM_PROVIDER_ID, NotFoundError, ValidationError, type LocalFilesystemConnectionMetadata, type WsEvent } from "@roomy-ai/shared";
 import {
@@ -38,7 +40,10 @@ function normalizePinnedLibraryPath(rawPath: string): string {
   return normalized;
 }
 
-function localFilesystemVirtualMounts(metadata: Record<string, unknown>): VirtualLibraryMount[] {
+function localFilesystemVirtualMounts(
+  metadata: Record<string, unknown>,
+  opts: { canWrite: boolean },
+): VirtualLibraryMount[] {
   const parsed = metadata as Partial<LocalFilesystemConnectionMetadata>;
   const directories = parsed.localFilesystem?.directories;
   if (!Array.isArray(directories)) return [];
@@ -47,8 +52,13 @@ function localFilesystemVirtualMounts(metadata: Record<string, unknown>): Virtua
       dir
       && typeof dir.hostPath === "string"
       && typeof dir.homeName === "string"
+      && (dir.access === "read_only" || dir.access === "read_write")
     ))
-    .map((dir) => ({ homeName: dir.homeName, sourcePath: dir.hostPath }));
+    .map((dir) => ({
+      homeName: dir.homeName,
+      sourcePath: dir.hostPath,
+      access: opts.canWrite && dir.access === "read_write" ? "read_write" : "read_only",
+    }));
 }
 
 async function connectedLocalFilesystemMounts(
@@ -60,13 +70,59 @@ async function connectedLocalFilesystemMounts(
     queries.connectors.listConnections(ctx.pool, userId, LOCAL_FILESYSTEM_PROVIDER_ID),
     queries.connectors.listWorkspaceGrants(ctx.pool, workspaceId),
   ]);
-  const localGrantIds = grants
+  const localGrants = grants
     .filter((grant) => grant.providerId === LOCAL_FILESYSTEM_PROVIDER_ID)
-    .map((grant) => grant.connectionId);
+    .map((grant) => [grant.connectionId, grant] as const);
+  const localGrantByConnectionId = new Map(localGrants);
   const active = connections.filter((connection) => connection.status === "active");
-  const selected = active.filter((connection) => localGrantIds.includes(connection.id));
-  return selected
-    .flatMap((connection) => localFilesystemVirtualMounts(connection.metadata));
+  const selected = active.filter((connection) => localGrantByConnectionId.has(connection.id));
+  const mounts: VirtualLibraryMount[] = [];
+  for (const connection of selected) {
+    const grant = localGrantByConnectionId.get(connection.id);
+    const canWrite = Boolean(
+      connection.capabilities.includes("local_filesystem.write")
+      && grant?.grantedCapabilities.includes("local_filesystem.write"),
+    );
+    for (const mount of localFilesystemVirtualMounts(connection.metadata, { canWrite })) {
+      mounts.push({
+        ...mount,
+        sourcePath: await allowedLocalFilesystemHostPath(mount.sourcePath),
+      });
+    }
+  }
+  return mounts;
+}
+
+const LOCAL_FILESYSTEM_ALLOWED_ROOTS_ENV = "ROOMY_LOCAL_FILESYSTEM_ALLOWED_ROOTS";
+
+function isInsidePath(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (rel.length > 0 && !rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+async function localFilesystemAllowedRoots(): Promise<string[]> {
+  const raw = process.env[LOCAL_FILESYSTEM_ALLOWED_ROOTS_ENV];
+  if (!raw?.trim()) return [];
+  const roots: string[] = [];
+  for (const entry of raw.split(",")) {
+    const trimmed = entry.trim();
+    if (!trimmed || !path.isAbsolute(trimmed)) continue;
+    const real = await fs.realpath(trimmed).catch(() => null);
+    if (!real) continue;
+    const stat = await fs.stat(real).catch(() => null);
+    if (stat?.isDirectory()) roots.push(real);
+  }
+  return roots;
+}
+
+async function allowedLocalFilesystemHostPath(hostPath: string): Promise<string> {
+  const realHostPath = await fs.realpath(hostPath).catch(() => null);
+  if (!realHostPath) {
+    throw new NotFoundError(`Local filesystem source is not available: ${hostPath}`);
+  }
+  const roots = await localFilesystemAllowedRoots();
+  if (roots.some((root) => isInsidePath(realHostPath, root))) return realHostPath;
+  throw new ConflictError(`Local filesystem source is not allowed by ${LOCAL_FILESYSTEM_ALLOWED_ROOTS_ENV}: ${hostPath}`);
 }
 
 /**

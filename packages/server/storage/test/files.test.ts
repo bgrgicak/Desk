@@ -2,13 +2,14 @@ import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Readable } from "node:stream";
-import { NotFoundError, ValidationError } from "@roomy-ai/shared";
+import { ForbiddenError, NotFoundError, ValidationError } from "@roomy-ai/shared";
 import {
   uploadArtifact,
   readFile,
   downloadFile,
   deleteFile,
   moveFile,
+  overwriteFile,
   pinLibraryFileToChat,
   relativeSymlinkTarget,
   removeChatAttachment,
@@ -70,6 +71,23 @@ describe("uploadArtifact (FS-backed, no DB)", () => {
     expect(file.path).toContain(`.chats/${ctx.chatId}/attachments/`);
   });
 
+  it("refuses to create attachment directories through symlinked chat parents", async () => {
+    const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+    const outside = await fs.mkdtemp(path.join(ctx.home, "outside-attachments-"));
+    const maliciousChatId = "chat_symlinked_attachment_parent";
+    const chatRoot = path.join(root, ".chats", maliciousChatId);
+    await fs.mkdir(path.dirname(chatRoot), { recursive: true });
+    await fs.symlink(outside, chatRoot);
+
+    await expect(
+      chatAttachmentsDir(ctx.home, ctx.workspaceSlug, maliciousChatId),
+    ).rejects.toThrow(ValidationError);
+    await expect(fs.access(path.join(outside, "attachments"))).rejects.toThrow();
+
+    await fs.unlink(chatRoot);
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
   it("rejects user uploads whose name starts with a dot (reserved for agent artifacts)", async () => {
     await expect(
       uploadArtifact(ctx, {
@@ -80,6 +98,23 @@ describe("uploadArtifact (FS-backed, no DB)", () => {
         stream: makeStream("nope"),
       }),
     ).rejects.toThrow(ValidationError);
+  });
+
+  it("rejects upload filenames with path separators before writing", async () => {
+    const workspaceRoot = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+    const escapePath = path.join(workspaceRoot, "escape.txt");
+
+    await expect(
+      uploadArtifact(ctx, {
+        workspaceId: ctx.workspaceId,
+        workspaceSlug: ctx.workspaceSlug,
+        name: "nested/../../escape.txt",
+        mime: "text/plain",
+        stream: makeStream("escape"),
+      }),
+    ).rejects.toThrow(ValidationError);
+
+    await expect(fs.access(escapePath)).rejects.toThrow();
   });
 
   it("avoids collisions by suffixing -1, -2, ...", async () => {
@@ -175,6 +210,42 @@ describe("readFile / downloadFile / statFile", () => {
 
   it("throws NotFoundError for an unknown path", async () => {
     await expect(readFile(ctx, ctx.workspaceSlug,"does-not-exist.txt")).rejects.toThrow(NotFoundError);
+  });
+
+  it("rejects workspace symlinks that resolve outside the workspace root", async () => {
+    const outside = await fs.mkdtemp(path.join(ctx.home, "outside-"));
+    await fs.writeFile(path.join(outside, "secret.txt"), "outside secret", "utf-8");
+    const root = workspaceRootPath(ctx.home, ctx.workspaceSlug);
+    await fs.symlink(outside, path.join(root, "outside-link"));
+
+    await expect(readFile(ctx, ctx.workspaceSlug, "outside-link/secret.txt")).rejects.toThrow(NotFoundError);
+    await expect(statFile(ctx, ctx.workspaceSlug, "outside-link/secret.txt")).rejects.toThrow(NotFoundError);
+  });
+
+  it("rejects virtual mount symlinks that resolve outside the mounted root", async () => {
+    const mount = await fs.mkdtemp(path.join(ctx.home, "mount-"));
+    const outside = await fs.mkdtemp(path.join(ctx.home, "mount-outside-"));
+    await fs.writeFile(path.join(outside, "secret.txt"), "outside secret", "utf-8");
+    await fs.symlink(outside, path.join(mount, "escape"));
+
+    await expect(
+      readFile(ctx, ctx.workspaceSlug, "Mounted/escape/secret.txt", [
+        { homeName: "Mounted", sourcePath: mount, access: "read_write" },
+      ]),
+    ).rejects.toThrow(NotFoundError);
+  });
+
+  it("rejects writes through read-only virtual mounts", async () => {
+    const mount = await fs.mkdtemp(path.join(ctx.home, "readonly-mount-"));
+    await fs.writeFile(path.join(mount, "note.txt"), "original", "utf-8");
+
+    await expect(
+      overwriteFile(ctx, ctx.workspaceSlug, "Readonly/note.txt", makeStream("changed"), [
+        { homeName: "Readonly", sourcePath: mount, access: "read_only" },
+      ]),
+    ).rejects.toThrow(ForbiddenError);
+
+    expect(await fs.readFile(path.join(mount, "note.txt"), "utf-8")).toBe("original");
   });
 });
 

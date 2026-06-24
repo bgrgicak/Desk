@@ -458,6 +458,36 @@ describe("runWorkspaceReflection", () => {
 });
 
 describe("runDailyReflection", () => {
+  it("does not resolve provider keys unless raw sandbox credential env is enabled", async () => {
+    const previous = process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    let resolvedKeys = false;
+    const calls: WorkspaceReflectionInput[] = [];
+
+    try {
+      await runDailyReflection({
+        pool,
+        home,
+        date: REFLECTION_DATE,
+        resolveProviderKeys: async () => {
+          resolvedKeys = true;
+          return { OPENAI_API_KEY: "sk-should-not-resolve" };
+        },
+        reflectWorkspace: async (input) => {
+          calls.push(input);
+          return { journal: `# Journal\n\n${input.workspaceSlug}` };
+        },
+      });
+
+      expect(resolvedKeys).toBe(false);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].providerKeys).toEqual({});
+    } finally {
+      if (previous === undefined) delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+      else process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = previous;
+    }
+  });
+
   it("runs only workspace-owned agents and does not write global user memory", async () => {
     const workspaceCalls: WorkspaceReflectionInput[] = [];
 

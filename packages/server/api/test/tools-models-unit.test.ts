@@ -10,6 +10,7 @@ vi.mock("@roomy-ai/db", () => ({
   queries: {
     workspaces: {
       list: vi.fn(),
+      listByUser: vi.fn(),
     },
   },
 }));
@@ -20,7 +21,12 @@ vi.mock("../src/providerKeys.js", () => ({
 
 vi.mock("@roomy-ai/runtime", () => ({
   listModels: vi.fn(),
+  rawSandboxCredentialEnvEnabled: vi.fn(() => {
+    const value = process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    return value === "1" || value?.toLowerCase() === "true";
+  }),
   resolveLocalSourceEnv: vi.fn(async () => ({})),
+  resolveAvailableLocalSourceEnv: vi.fn(() => ({})),
   SandboxExecError: class SandboxExecError extends Error {
     exitCode: number;
     stderr: string;
@@ -34,7 +40,11 @@ vi.mock("@roomy-ai/runtime", () => ({
 
 import { queries } from "@roomy-ai/db";
 import { resolveProviderKeys } from "../src/providerKeys.js";
-import { listModels as runtimeListModels } from "@roomy-ai/runtime";
+import {
+  listModels as runtimeListModels,
+  resolveAvailableLocalSourceEnv,
+  resolveLocalSourceEnv,
+} from "@roomy-ai/runtime";
 import { listModels, expandOpenAiBySource } from "../src/routes/tools.js";
 
 const fakePool = {} as never;
@@ -62,17 +72,80 @@ const BOTH_OPENAI_CHANNELS = [
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(queries.workspaces.list).mockResolvedValue([fakeWorkspace] as never);
+  vi.mocked(queries.workspaces.listByUser).mockResolvedValue([fakeWorkspace] as never);
+  vi.mocked(resolveProviderKeys).mockResolvedValue({});
+  vi.mocked(resolveLocalSourceEnv).mockResolvedValue({});
+  vi.mocked(resolveAvailableLocalSourceEnv).mockReturnValue({});
 });
 
 describe("listModels — no workspace", () => {
   it("throws NotFoundError when no workspace is available", async () => {
     vi.mocked(queries.workspaces.list).mockResolvedValue([]);
+    vi.mocked(queries.workspaces.listByUser).mockResolvedValue([]);
 
     await expect(listModels(fakePool, undefined, {})).rejects.toThrow("No sandbox available");
   });
 });
 
+describe("listModels — workspace and local-source boundaries", () => {
+  it("runs model listing in a workspace owned by the requesting user", async () => {
+    const otherWorkspace = { ...fakeWorkspace, id: "wks_other", path: "other", user_id: "usr_other" };
+    const ownedWorkspace = { ...fakeWorkspace, id: "wks_owned", path: "owned", user_id: "usr_1" };
+    vi.mocked(queries.workspaces.list).mockResolvedValue([otherWorkspace] as never);
+    vi.mocked(queries.workspaces.listByUser).mockResolvedValue([ownedWorkspace] as never);
+    vi.mocked(runtimeListModels).mockResolvedValue(FREE_MODELS);
+
+    await listModels(fakePool, undefined, { userId: "usr_1" });
+
+    expect(queries.workspaces.listByUser).toHaveBeenCalledWith(fakePool, "usr_1");
+    expect(runtimeListModels).toHaveBeenCalledWith(ownedWorkspace.id, ownedWorkspace.path, {
+      provider: undefined,
+      providerKeys: {},
+      env: {},
+    });
+  });
+
+  it("does not inject globally detected local-source env into a user's model-list sandbox", async () => {
+    vi.mocked(resolveAvailableLocalSourceEnv).mockReturnValue({
+      PI_AUTH_JSON_BASE64: "host-codex-auth",
+    });
+    vi.mocked(resolveLocalSourceEnv).mockResolvedValue({});
+    vi.mocked(runtimeListModels).mockResolvedValue(FREE_MODELS);
+
+    await listModels(fakePool, undefined, { userId: "usr_1" });
+
+    expect(resolveLocalSourceEnv).toHaveBeenCalledWith(fakePool, "usr_1");
+    expect(runtimeListModels).toHaveBeenCalledWith(fakeWorkspace.id, fakeWorkspace.path, {
+      provider: undefined,
+      providerKeys: {},
+      env: {},
+    });
+  });
+});
+
 describe("listModels — decryption failure fallback", () => {
+  it("does not decrypt provider keys unless raw sandbox credential env is enabled", async () => {
+    const previous = process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    vi.mocked(runtimeListModels).mockResolvedValue(FREE_MODELS);
+
+    try {
+      const models = await listModels(fakePool, undefined, { userId: "usr_1" });
+
+      expect(models.length).toBeGreaterThan(0);
+      expect(resolveProviderKeys).not.toHaveBeenCalled();
+      expect(runtimeListModels).toHaveBeenCalledWith(fakeWorkspace.id, fakeWorkspace.path, {
+        provider: undefined,
+        providerKeys: {},
+        env: {},
+      });
+    } finally {
+      if (previous === undefined) delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+      else process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = previous;
+    }
+  });
+
   it("returns models even when resolveProviderKeys throws", async () => {
     vi.mocked(queries.workspaces.list).mockResolvedValue([fakeWorkspace] as never);
     vi.mocked(resolveProviderKeys).mockRejectedValue(new Error("Decryption failed: bad tag"));
@@ -126,26 +199,31 @@ describe("expandOpenAiBySource — pi's openai-codex/* → Roomy's codex/* relab
 
 describe("listModels — happy path", () => {
   it("returns all models when no provider filter is given", async () => {
+    const previous = process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+    process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = "1";
     vi.mocked(queries.workspaces.list).mockResolvedValue([fakeWorkspace] as never);
     vi.mocked(resolveProviderKeys).mockResolvedValue({ OPENAI_API_KEY: "sk-test", GITHUB_TOKEN: "github_pat_test" });
     vi.mocked(runtimeListModels).mockResolvedValue(ALL_MODELS);
 
-    const models = await listModels(fakePool, undefined, {});
-    expect(models.length).toBeGreaterThan(0);
-    expect(models.some((m) => m.provider === "openai")).toBe(true);
-    expect(runtimeListModels).toHaveBeenCalledWith(fakeWorkspace.id, fakeWorkspace.path, {
-      provider: undefined,
-      providerKeys: { OPENAI_API_KEY: "sk-test" },
-      env: {},
-    });
+    try {
+      const models = await listModels(fakePool, undefined, { userId: "usr_1" });
+      expect(models.length).toBeGreaterThan(0);
+      expect(models.some((m) => m.provider === "openai")).toBe(true);
+      expect(runtimeListModels).toHaveBeenCalledWith(fakeWorkspace.id, fakeWorkspace.path, {
+        provider: undefined,
+        providerKeys: { OPENAI_API_KEY: "sk-test" },
+        env: {},
+      });
+    } finally {
+      if (previous === undefined) delete process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV;
+      else process.env.ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV = previous;
+    }
   });
 
   it("re-IDs pi's openai-codex/* as 'codex/*' when only Codex auth is active", async () => {
     vi.mocked(queries.workspaces.list).mockResolvedValue([fakeWorkspace] as never);
     vi.mocked(resolveProviderKeys).mockResolvedValue({});
-    const { resolveLocalSourceEnv } = await import("@roomy-ai/runtime");
-    vi.mocked(resolveLocalSourceEnv as unknown as (..._args: unknown[]) => Promise<Record<string, string>>)
-      .mockResolvedValue({ PI_AUTH_JSON_BASE64: "abc" });
+    vi.mocked(resolveLocalSourceEnv).mockResolvedValue({ PI_AUTH_JSON_BASE64: "abc" });
     // Mirrors pi's real output with only the OAuth blob present: only the
     // openai-codex channel is listed.
     vi.mocked(runtimeListModels).mockResolvedValue(CODEX_ONLY_MODELS);
@@ -163,9 +241,7 @@ describe("listModels — happy path", () => {
   it("emits both openai/* and codex/* when pi lists both channels", async () => {
     vi.mocked(queries.workspaces.list).mockResolvedValue([fakeWorkspace] as never);
     vi.mocked(resolveProviderKeys).mockResolvedValue({ OPENAI_API_KEY: "sk-test" });
-    const { resolveLocalSourceEnv } = await import("@roomy-ai/runtime");
-    vi.mocked(resolveLocalSourceEnv as unknown as (..._args: unknown[]) => Promise<Record<string, string>>)
-      .mockResolvedValue({ PI_AUTH_JSON_BASE64: "abc" });
+    vi.mocked(resolveLocalSourceEnv).mockResolvedValue({ PI_AUTH_JSON_BASE64: "abc" });
     vi.mocked(runtimeListModels).mockResolvedValue(BOTH_OPENAI_CHANNELS);
 
     const models = await listModels(fakePool, undefined, { userId: "usr_1" });

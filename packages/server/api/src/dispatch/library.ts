@@ -3,7 +3,11 @@ import { ConflictError, ValidationError } from "@roomy-ai/shared";
 import * as libraryRoutes from "../routes/library.js";
 import { parseBody, sendJson } from "../http/io.js";
 import { parseMultipartFileStream } from "../http/multipart.js";
-import { requireReadablePathForRoute } from "../workspace-scope-fs.js";
+import {
+  requireExistingLibraryPathForRoute,
+  requireLibraryDestinationForRoute,
+  requireReadablePathForRoute,
+} from "../workspace-scope-fs.js";
 import {
   requireLibraryPathInWorkspace,
   requireWorkspaceId,
@@ -104,6 +108,8 @@ export async function dispatchLibrary(
     }
     requireLibraryPathInWorkspace(body.from, wsId);
     requireLibraryPathInWorkspace(body.to, wsId);
+    await requireExistingLibraryPathForRoute(pool, storage, body.from, wsId);
+    await requireLibraryDestinationForRoute(pool, storage, body.to, wsId);
     const result = await libraryRoutes.move(storage, wsId, body.from, body.to, emit);
     sendJson(res, 200, result);
     return true;
@@ -114,6 +120,8 @@ export async function dispatchLibrary(
     if (typeof body.path !== "string" || body.path === "") {
       throw new ValidationError("Body must include { path: string }");
     }
+    requireLibraryPathInWorkspace(body.path, wsId);
+    await requireLibraryDestinationForRoute(pool, storage, body.path, wsId);
     const result = await libraryRoutes.createFolder(storage, wsId, body.path, emit);
     sendJson(res, 201, result);
     return true;
@@ -213,6 +221,7 @@ export async function dispatchLibrary(
     if (!p) throw new ValidationError("Missing path query parameter");
     const wsId = await requireWorkspaceId(pool, userId, query);
     requireLibraryPathInWorkspace(p, wsId);
+    await requireExistingLibraryPathForRoute(pool, storage, p, wsId);
     await libraryRoutes.remove(storage, wsId, p, emit);
     sendJson(res, 200, { ok: true });
     return true;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { readFile } from 'node:fs/promises'
 import { appPreviewRefForContextItem } from './ContextDetail'
 import { rightPanelClassName, shouldOpenRightPanelsByDefault } from '@/components/shared/rightPanelLayout'
 
@@ -37,6 +38,13 @@ describe('appPreviewRefForContextItem', () => {
         type: 'file',
       }),
     ).toBeNull()
+  })
+
+  it('does not build legacy app iframe URLs with the Roomy bearer token', async () => {
+    const source = await readFile(new URL('./ContextDetail.tsx', import.meta.url), 'utf8')
+
+    expect(source).not.toContain('getSessionToken()')
+    expect(source).not.toContain('?token=')
   })
 })
 

@@ -309,8 +309,11 @@ dev, model-provider values seed from the repo's `.env` once per user (gated by
 provider keys are global user settings. Non-model sandbox credentials such as
 `GITHUB_TOKEN` are only forwarded to a workspace when that workspace has a
 `workspace_connector_grants` row for the saved connection. A granted
-`GITHUB_TOKEN` is forwarded into sandboxes as `GITHUB_TOKEN`/`GH_TOKEN`, and
-pi runs prepare non-interactive HTTPS git auth via `GIT_ASKPASS`.
+`GITHUB_TOKEN` is forwarded into sandboxes as `GITHUB_TOKEN`/`GH_TOKEN` only
+when `ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV=1`; otherwise Roomy keeps it in
+the vault and uses provider-aware setup paths instead of raw env injection.
+When raw env injection is enabled, pi runs prepare non-interactive HTTPS git
+auth via `GIT_ASKPASS`.
 For GitHub, Workspace Settings → Connections currently guides users to create a
 classic personal access token with the `repo` scope, plus `workflow` when agents
 should edit GitHub Actions workflow files.
@@ -457,9 +460,11 @@ Removed in M6. Execution state and scheduling both live on the
 
 ### GET /tools/models
 
-Returns AI models that are ready to use — every entry is a provider pi
-has authenticated inside the sandbox via a host-forwarded API key. Models are
-server-wide (governed by the keys in `/etc/roomy-server/env`), not agent-scoped.
+Returns AI models that are ready to use for the authenticated user. The server
+runs `pi --list-models` inside one of that user's workspaces and only forwards
+raw provider API keys when `ROOMY_ALLOW_RAW_SANDBOX_CREDENTIAL_ENV=1`. Codex
+and other local sources are exposed through `GET /me/providers/local` opt-in and
+host policy checks, not through globally detected host credentials.
 
 Foundation of host-initiated sandboxed tool calling described in
 [ARCHITECTURE.md §7](./ARCHITECTURE.md). Internally this execs `pi --list-models`

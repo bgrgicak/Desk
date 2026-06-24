@@ -1,15 +1,14 @@
 /**
  * Settings → Connections → Local sources.
  *
- * Local sources are model providers Roomy auto-detects on the host (Codex
- * today; LM Studio, Ollama, … later). The user opt-ins via /me/providers/local
- * and Roomy forwards the source's env vars (PI_AUTH_JSON_BASE64 for Codex,
- * base URLs for HTTP servers) into every sandbox exec.
+ * Local sources are model providers Roomy can auto-detect on the host (Codex
+ * today; LM Studio, Ollama, ... later). Host detection is deployment-gated; by
+ * default Roomy should fail closed even when a Codex auth file is readable.
  *
  * This spec drives the API end of the contract. The picker/detail UI is
  * covered separately by component tests; here we verify the wire format
- * tolerates a Codex auth file going missing/being restored, and that
- * opt-in is durable.
+ * keeps the opt-in toggle durable without making the host source available
+ * unless the server has explicitly enabled host-local-source admission.
  */
 import * as fsp from "node:fs/promises";
 import { test, expect } from "../fixtures";
@@ -48,7 +47,7 @@ test.describe("local sources — Codex", () => {
     await fsp.rm(codexAuthPath, { force: true });
   });
 
-  test("end-to-end: detect, enable, list, disable", async ({
+  test("end-to-end: host Codex source fails closed by policy", async ({
     serverUrl,
     token,
     codexAuthPath,
@@ -56,46 +55,32 @@ test.describe("local sources — Codex", () => {
     await fsp.writeFile(codexAuthPath, writeAuthFile({ email: "alice@example.com", plan: "pro" }));
     const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
 
-    // GET surfaces the source.
+    // GET does not surface host identity by default, even when the auth file exists.
     const detected = await fetch(`${serverUrl}/me/providers/local`, { headers })
-      .then((r) => r.json()) as { sources: Array<{ kind: string; available: boolean; enabled: boolean; detail?: Record<string, unknown> }> };
+      .then((r) => r.json()) as { sources: Array<{ kind: string; available: boolean; enabled: boolean; reason?: string; detail?: Record<string, unknown> }> };
     const codex = detected.sources.find((s) => s.kind === "codex")!;
-    expect(codex.available).toBe(true);
+    expect(codex.available).toBe(false);
     expect(codex.enabled).toBe(false);
-    expect(codex.detail?.email).toBe("alice@example.com");
-    expect(codex.detail?.plan).toBe("pro");
-    expect(typeof codex.detail?.expiresAt).toBe("number");
+    expect(codex.reason).toBe("disabled_by_policy");
+    expect(codex.detail).toBeUndefined();
 
-    // PUT enables.
+    // PUT still records the user's opt-in, but the host source remains unavailable.
     const enabled = await fetch(`${serverUrl}/me/providers/local/codex`, {
       method: "PUT",
       headers,
       body: JSON.stringify({ enabled: true }),
-    }).then((r) => r.json()) as { enabled: boolean };
+    }).then((r) => r.json()) as { enabled: boolean; available: boolean; reason?: string };
     expect(enabled.enabled).toBe(true);
+    expect(enabled.available).toBe(false);
+    expect(enabled.reason).toBe("disabled_by_policy");
 
     // GET roundtrips.
     const after = await fetch(`${serverUrl}/me/providers/local`, { headers })
-      .then((r) => r.json()) as { sources: Array<{ kind: string; enabled: boolean }> };
-    expect(after.sources.find((s) => s.kind === "codex")!.enabled).toBe(true);
-
-    // Removing the host file flips available without losing opt-in — the
-    // user said "use Codex when it's there", so we keep enabled=true.
-    await fsp.rm(codexAuthPath, { force: true });
-    const stillEnabled = await fetch(`${serverUrl}/me/providers/local`, { headers })
       .then((r) => r.json()) as { sources: Array<{ kind: string; available: boolean; enabled: boolean; reason?: string }> };
-    const after2 = stillEnabled.sources.find((s) => s.kind === "codex")!;
+    const after2 = after.sources.find((s) => s.kind === "codex")!;
     expect(after2.available).toBe(false);
     expect(after2.enabled).toBe(true);
-    expect(after2.reason).toBe("missing");
-
-    // Restoring the file makes the source usable again immediately.
-    await fsp.writeFile(codexAuthPath, writeAuthFile());
-    const restored = await fetch(`${serverUrl}/me/providers/local`, { headers })
-      .then((r) => r.json()) as { sources: Array<{ kind: string; available: boolean; enabled: boolean }> };
-    const after3 = restored.sources.find((s) => s.kind === "codex")!;
-    expect(after3.available).toBe(true);
-    expect(after3.enabled).toBe(true);
+    expect(after2.reason).toBe("disabled_by_policy");
 
     // PUT disables.
     const disabled = await fetch(`${serverUrl}/me/providers/local/codex`, {

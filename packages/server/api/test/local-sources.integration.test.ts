@@ -34,6 +34,7 @@ let port: number;
 let home: string;
 let dbPath: string;
 let codexAuthPath: string;
+let previousHostLocalSources: string | undefined;
 
 function jwt(claims: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
@@ -75,6 +76,8 @@ beforeAll(async () => {
   // Per-test fake — never touch the developer's real ~/.codex/auth.json.
   codexAuthPath = path.join(home, "codex-auth.json");
   process.env.ROOMY_CODEX_AUTH_PATH = codexAuthPath;
+  previousHostLocalSources = process.env.ROOMY_ENABLE_HOST_LOCAL_SOURCES;
+  process.env.ROOMY_ENABLE_HOST_LOCAL_SOURCES = "1";
 
   const storage = { pool, home };
   const runManager = createRunManager({
@@ -99,6 +102,8 @@ afterAll(async () => {
   if (home) await fs.rm(home, { recursive: true, force: true });
   if (dbPath) await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
   delete process.env.ROOMY_CODEX_AUTH_PATH;
+  if (previousHostLocalSources === undefined) delete process.env.ROOMY_ENABLE_HOST_LOCAL_SOURCES;
+  else process.env.ROOMY_ENABLE_HOST_LOCAL_SOURCES = previousHostLocalSources;
 });
 
 beforeEach(async () => {
@@ -219,7 +224,10 @@ describe("resolveLocalSourceEnv", () => {
   });
 
   it("returns PI_AUTH_JSON_BASE64 when Codex is opted in and the host file is good", async () => {
-    await fs.writeFile(codexAuthPath, JSON.stringify(buildAuthFile({ refresh: "rt-bridge" })));
+    await fs.writeFile(codexAuthPath, JSON.stringify(buildAuthFile({
+      email: "ls-test@roomy.local",
+      refresh: "rt-bridge",
+    })));
     await request("PUT", "/me/providers/local/codex", token, { enabled: true });
     const env = await resolveLocalSourceEnv(pool, userId);
     expect(typeof env.PI_AUTH_JSON_BASE64).toBe("string");
@@ -228,6 +236,18 @@ describe("resolveLocalSourceEnv", () => {
     expect(blob["openai-codex"].type).toBe("oauth");
     expect(blob["openai-codex"].refresh).toBe("rt-bridge");
     expect(blob["openai-codex"].accountId).toBe("acct-test");
+  });
+
+  it("does not inject host Codex auth when the Codex email is bound to another identity", async () => {
+    await fs.writeFile(codexAuthPath, JSON.stringify(buildAuthFile({
+      email: "someone-else@example.com",
+      refresh: "rt-other-user",
+    })));
+    await request("PUT", "/me/providers/local/codex", token, { enabled: true });
+
+    const env = await resolveLocalSourceEnv(pool, userId);
+
+    expect(env).toEqual({});
   });
 
   it("returns an empty map when opted in but the host file is missing", async () => {

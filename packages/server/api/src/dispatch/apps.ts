@@ -105,7 +105,7 @@ export async function dispatchApps(
       sendJson(res, 200, { ok: true });
       return true;
     }
-    if (method === "GET" && segments.length >= 5 && segments[4] === "dist") {
+    if (method === "GET" && segments.length >= 5) {
       const handled = await appsRoutes.handleStaticAppRequest(
         pool,
         storage,
@@ -138,7 +138,7 @@ export async function dispatchApps(
       sendJson(res, 201, result);
       return true;
     }
-    if (method === "GET" && segments.length >= 5 && segments[4] === "dist") {
+    if (method === "GET" && segments.length >= 5) {
       const handled = await appsRoutes.handleStaticGlobalAppRequest(
         pool,
         storage,

@@ -6,7 +6,7 @@ import type { Pool } from "@roomy-ai/db";
 import { queries } from "@roomy-ai/db";
 import { generateId } from "@roomy-ai/shared";
 import { workspaceJournalDir, workspaceJournalPath, workspaceMemoryDir } from "@roomy-ai/storage";
-import { resolveLocalSourceEnv } from "@roomy-ai/runtime";
+import { rawSandboxCredentialEnvEnabled, resolveLocalSourceEnv } from "@roomy-ai/runtime";
 import { resolveModelForRun } from "./runs-helpers.js";
 import { withModule } from "@roomy-ai/shared/logger";
 const log = withModule("scheduler/reflection");
@@ -305,7 +305,7 @@ export async function runDailyReflection(opts: RunDailyReflectionOptions): Promi
 
   for (const user of users) {
     const userId = user.id;
-    const providerKeys = opts.resolveProviderKeys
+    const providerKeys = opts.resolveProviderKeys && rawSandboxCredentialEnvEnabled()
       ? await opts.resolveProviderKeys(userId)
       : {};
     const extraEnv = await resolveLocalSourceEnv(opts.pool, userId);

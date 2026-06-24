@@ -1,5 +1,5 @@
 import { type Pool, queries } from "@roomy-ai/db";
-import { estimateMessagesTokens, listModels, resolveLocalSourceEnv } from "@roomy-ai/runtime";
+import { estimateMessagesTokens, listModels, rawSandboxCredentialEnvEnabled, resolveLocalSourceEnv } from "@roomy-ai/runtime";
 import { generateId } from "@roomy-ai/shared";
 import {
   envPositiveInt,
@@ -114,7 +114,9 @@ export function createSummaryScheduler(deps: SummarySchedulerDeps): SummarySched
       }
       try {
         const userId = row?.user_id as string | undefined;
-        const providerKeys = userId ? await resolveProviderKeys(userId, workspaceId) : {};
+        const providerKeys = userId && rawSandboxCredentialEnvEnabled()
+          ? await resolveProviderKeys(userId, workspaceId)
+          : {};
         const extraEnv = userId ? await resolveLocalSourceEnv(pool, userId) : {};
         const models = await listModels(workspaceId, workspaceSlug, {
           providerKeys,

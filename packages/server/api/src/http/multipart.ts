@@ -1,7 +1,7 @@
 import { type IncomingMessage } from "node:http";
 import { type Readable } from "node:stream";
 import Busboy from "busboy";
-import { ValidationError } from "@roomy-ai/shared";
+import { MAX_UPLOAD_BYTES, ValidationError } from "@roomy-ai/shared";
 import { readRawBody } from "./io.js";
 
 /**
@@ -13,7 +13,7 @@ export async function parseMultipart(req: IncomingMessage): Promise<FormData> {
   if (!contentType.toLowerCase().startsWith("multipart/form-data")) {
     throw new ValidationError("Expected multipart/form-data body");
   }
-  const body = await readRawBody(req);
+  const body = await readRawBody(req, { limitBytes: MAX_UPLOAD_BYTES });
   const r = new Request("http://localhost/", {
     method: "POST",
     headers: { "content-type": contentType },
