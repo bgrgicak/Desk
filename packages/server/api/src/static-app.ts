@@ -46,6 +46,12 @@ function mimeFor(path: string): string {
   return MIME_BY_EXT[extname(path).toLowerCase()] ?? "application/octet-stream";
 }
 
+function cacheControlFor(reqPath: string): string {
+  return reqPath.startsWith("/assets/")
+    ? "public, max-age=31536000, immutable"
+    : "no-cache";
+}
+
 export function resolveAppDist(): string | null {
   const envDist = process.env.ROOMY_APP_DIST;
   if (envDist && envDist.length > 0) return resolve(envDist);
@@ -101,6 +107,7 @@ export async function serveStaticOrIndex(
       res.writeHead(200, {
         "Content-Type": mimeFor(target),
         "Content-Length": String(s.size),
+        "Cache-Control": cacheControlFor(candidate),
       });
       createReadStream(target).pipe(res);
       return;
@@ -118,6 +125,7 @@ async function sendIndex(res: ServerResponse, distRoot: string): Promise<void> {
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
       "Content-Length": String(s.size),
+      "Cache-Control": "no-cache",
     });
     createReadStream(indexPath).pipe(res);
   } catch {

@@ -56,7 +56,7 @@ function fetchRaw(
   port: number,
   reqPath: string,
   init: { token?: string; method?: string } = {},
-): Promise<{ status: number; contentType: string; body: string }> {
+): Promise<{ status: number; contentType: string; cacheControl: string; body: string }> {
   const { token, method = "GET" } = init;
   return new Promise((resolve, reject) => {
     const headers: Record<string, string> = {};
@@ -70,6 +70,7 @@ function fetchRaw(
           resolve({
             status: res.statusCode ?? 0,
             contentType: String(res.headers["content-type"] ?? ""),
+            cacheControl: String(res.headers["cache-control"] ?? ""),
             body: Buffer.concat(chunks).toString(),
           });
         });
@@ -108,6 +109,10 @@ beforeAll(async () => {
   await fs.writeFile(
     path.join(distRoot, "assets", "main.js"),
     'console.log("roomy-app-bundle");',
+  );
+  await fs.writeFile(
+    path.join(distRoot, "sw.js"),
+    "self.addEventListener('fetch', () => {});",
   );
   // PWA assets — the manifest needs the application/manifest+json
   // content-type or some browsers refuse the install prompt.
@@ -151,7 +156,22 @@ describe("static-serve when ROOMY_SERVE_APP=1", () => {
     const res = await fetchRaw(getServerPort(server), "/assets/main.js");
     expect(res.status).toBe(200);
     expect(res.contentType).toMatch(/javascript/);
+    expect(res.cacheControl).toMatch(/max-age=31536000/);
+    expect(res.cacheControl).toMatch(/immutable/);
     expect(res.body).toContain("roomy-app-bundle");
+  });
+
+  it("serves the app shell and service worker with revalidation cache headers", async () => {
+    process.env.ROOMY_SERVE_APP = "1";
+    process.env.ROOMY_APP_DIST = distRoot;
+    const server = await startServer();
+    const port = getServerPort(server);
+
+    for (const reqPath of ["/", "/index.html", "/sw.js", "/manifest.webmanifest"]) {
+      const res = await fetchRaw(port, reqPath);
+      expect(res.status, reqPath).toBe(200);
+      expect(res.cacheControl, reqPath).toBe("no-cache");
+    }
   });
 
   it("GET /chats/some-id falls back to index.html for SPA client routing", async () => {

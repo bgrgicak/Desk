@@ -3,7 +3,7 @@ import {
   fetchBaseQuery,
   type BaseQueryFn,
 } from "@reduxjs/toolkit/query/react";
-import { getSessionToken } from "@/auth/session";
+import { clearSessionToken, getSessionToken } from "@/auth/session";
 import type {
   AttachmentRef,
   ConnectorConnection,
@@ -78,9 +78,8 @@ function bumpChatActivityInList(draft: ServerChat[], chatId: string, updatedAt: 
  * If an authed call returns 401 the stored token is dead. Clear it and
  * reload so the App outer-render check sees no token and renders the
  * LoginScreen — without a reload the React tree stays wedged on the stale
- * token (the check runs once at mount and doesn't subscribe to
- * sessionStorage). The one-shot guard keeps a 401-storm from looping
- * the page.
+ * token (the check runs once at mount and doesn't subscribe to session
+ * storage). The one-shot guard keeps a 401-storm from looping the page.
  *
  * 502/503 responses indicate the backend is restarting (e.g. tsx hot-reload).
  * Retry up to RETRY_ATTEMPTS times so in-flight requests survive a restart
@@ -121,11 +120,7 @@ const baseQuery: BaseQueryFn<
     "status" in result.error &&
     result.error.status === 401
   ) {
-    try {
-      sessionStorage.removeItem("roomy.session.token");
-    } catch {
-      /* ignore */
-    }
+    clearSessionToken();
     if (!reloadingFor401 && typeof window !== "undefined") {
       reloadingFor401 = true;
       window.location.reload();
