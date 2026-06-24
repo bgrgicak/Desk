@@ -3,7 +3,7 @@ import { createAction } from "@reduxjs/toolkit";
 import { api } from "../api";
 import { pushArtifactUpdate, bumpFileChangeCounter, bumpWorkspaceChangeCounter, selectCurrentUserId } from "../slices/derivedSlice";
 import type { RootState } from "../store";
-import { getSessionToken } from "@/auth/session";
+import { clearSessionToken, getSessionToken } from "@/auth/session";
 import type { AgentEvent, AgentLogEntry, ListMessagesResponse, MessagesFilter, ServerChat, ServerMessage, WsEvent } from "../types";
 import { isInternalChatMessage, maybeShowChatBrowserNotification } from "@/lib/account-notifications";
 
@@ -657,11 +657,7 @@ export const wsMiddleware: Middleware = (storeApi) => {
       socket = null;
       if (ev.code === 1008 || ev.code === 4401) {
         // server rejected token — force relogin
-        try {
-          sessionStorage.removeItem("roomy.session.token");
-        } catch {
-          /* ignore */
-        }
+        clearSessionToken();
         window.location.reload();
         return;
       }

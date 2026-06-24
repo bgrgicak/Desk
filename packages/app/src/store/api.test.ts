@@ -32,6 +32,51 @@ describe('message query builders', () => {
   })
 })
 
+describe('auth recovery', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it('clears the stored bearer token when an authenticated request returns 401', async () => {
+    const store = configureStore({
+      reducer: { [api.reducerPath]: api.reducer },
+      middleware: (getDefault) => getDefault().concat(api.middleware),
+    })
+    const storage = new Map<string, string>()
+    const localStorageMock = {
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => { storage.set(key, value) }),
+      removeItem: vi.fn((key: string) => { storage.delete(key) }),
+    }
+    storage.set('roomy.session.token', 'ses_stale')
+    const reload = vi.fn()
+
+    const NativeRequest = globalThis.Request
+    class AbsoluteRequest extends NativeRequest {
+      constructor(input: RequestInfo | URL, init?: RequestInit) {
+        super(typeof input === 'string' && input.startsWith('/') ? `http://localhost${input}` : input, init)
+      }
+    }
+    vi.stubGlobal('Request', AbsoluteRequest)
+    vi.stubGlobal('localStorage', localStorageMock)
+    vi.stubGlobal('sessionStorage', {
+      removeItem: vi.fn(),
+    })
+    vi.stubGlobal('window', { location: { reload } })
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
+      JSON.stringify({ code: 'UNAUTHORIZED', message: 'Unauthorized' }),
+      { status: 401, headers: { 'Content-Type': 'application/json' } },
+    ))
+
+    await store.dispatch(api.endpoints.getMe.initiate())
+
+    expect(localStorageMock.removeItem).toHaveBeenCalledWith('roomy.session.token')
+    expect(localStorageMock.getItem('roomy.session.token')).toBeNull()
+    expect(reload).toHaveBeenCalledOnce()
+  })
+})
+
 describe('postChatMessage cache activity', () => {
   afterEach(() => {
     vi.restoreAllMocks()

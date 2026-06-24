@@ -1,8 +1,68 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { configureStore } from '@reduxjs/toolkit'
-import { __flushWsBatchForTest, applyEventToCache, logEntryFromWsPayload, wsMiddleware } from './middleware'
+import { __flushWsBatchForTest, applyEventToCache, logEntryFromWsPayload, wsConnect, wsMiddleware } from './middleware'
 import { bumpFileChangeCounter, bumpWorkspaceChangeCounter } from '../slices/derivedSlice'
 import { api } from '../api'
+
+describe('ws auth recovery', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it('clears the stored bearer token when the server closes for auth failure', () => {
+    const storage = new Map<string, string>([['roomy.session.token', 'ses_stale']])
+    const localStorageMock = {
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => { storage.set(key, value) }),
+      removeItem: vi.fn((key: string) => { storage.delete(key) }),
+    }
+    const reload = vi.fn()
+
+    class FakeWebSocket {
+      static instances: FakeWebSocket[] = []
+      readonly url: string
+      readyState = 1
+      private listeners = new Map<string, Array<(event: unknown) => void>>()
+
+      constructor(url: string) {
+        this.url = url
+        FakeWebSocket.instances.push(this)
+      }
+
+      addEventListener(type: string, listener: (event: unknown) => void): void {
+        const existing = this.listeners.get(type) ?? []
+        existing.push(listener)
+        this.listeners.set(type, existing)
+      }
+
+      close(): void {
+        /* test double */
+      }
+
+      emit(type: string, event: unknown): void {
+        for (const listener of this.listeners.get(type) ?? []) listener(event)
+      }
+    }
+
+    vi.stubGlobal('localStorage', localStorageMock)
+    vi.stubGlobal('window', { location: { protocol: 'https:', host: 'my.roomy.test', reload } })
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    const store = configureStore({
+      reducer: { [api.reducerPath]: api.reducer },
+      middleware: (getDefault) => getDefault().concat(api.middleware, wsMiddleware),
+    })
+
+    store.dispatch(wsConnect())
+    expect(FakeWebSocket.instances[0]?.url).toBe('wss://my.roomy.test/ws?token=ses_stale')
+
+    FakeWebSocket.instances[0]?.emit('close', { code: 4401 })
+
+    expect(localStorageMock.removeItem).toHaveBeenCalledWith('roomy.session.token')
+    expect(localStorageMock.getItem('roomy.session.token')).toBeNull()
+    expect(reload).toHaveBeenCalledOnce()
+  })
+})
 
 describe('applyEventToCache', () => {
   describe('message.log_appended parsing', () => {
