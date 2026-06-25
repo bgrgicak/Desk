@@ -1,6 +1,6 @@
 {
   "name": "@roomy-ai/db",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
@@ -34,7 +34,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@roomy-ai/shared": "0.2.6",
+    "@roomy-ai/shared": "0.2.7",
     "hash-wasm": "^4.11.0"
   },
   "devDependencies": {

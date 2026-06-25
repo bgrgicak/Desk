@@ -1,6 +1,6 @@
 {
   "name": "@roomy-ai/app-scaffold",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "type": "module",
   "description": "Template for an agent-authored Roomy app. Cloned by `roomy-agent app create` into a chat artifact directory.",
   "scripts": {
@@ -12,7 +12,7 @@
     "verify": "node scripts/verify.mjs"
   },
   "dependencies": {
-    "@roomy-ai/ui": "0.2.6",
+    "@roomy-ai/ui": "0.2.7",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.14.1"
