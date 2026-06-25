@@ -1,6 +1,6 @@
 {
   "name": "@roomy-ai/runtime",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
@@ -47,9 +47,9 @@
     }
   },
   "dependencies": {
-    "@roomy-ai/shared": "0.2.7",
-    "@roomy-ai/db": "0.2.7",
-    "@roomy-ai/storage": "0.2.7"
+    "@roomy-ai/shared": "0.2.8",
+    "@roomy-ai/db": "0.2.8",
+    "@roomy-ai/storage": "0.2.8"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

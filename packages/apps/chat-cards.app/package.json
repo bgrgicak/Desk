@@ -1,6 +1,6 @@
 {
   "name": "@roomy-ai/chat-cards-app",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "type": "module",
   "description": "Built-in chat-cards Roomy app. Fragments for displaying 1..N cards (title / description / image / link, with optional onClick + per-card actions) in a grid or vertical list.",
   "scripts": {
@@ -11,7 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@roomy-ai/ui": "0.2.7",
+    "@roomy-ai/ui": "0.2.8",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.14.1"
